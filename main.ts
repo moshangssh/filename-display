@@ -1,85 +1,125 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFolder, TFile } from 'obsidian';
 
 // Remember to rename these classes and interfaces!
 
 interface MyPluginSettings {
-	mySetting: string;
+	activeFolder: string;
+	enablePlugin: boolean; // 添加开关选项
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+	activeFolder: '',
+	enablePlugin: true
 }
 
 export default class MyPlugin extends Plugin {
 	settings: MyPluginSettings;
+	private styleElement: HTMLStyleElement;
 
 	async onload() {
 		await this.loadSettings();
+		
+		// 创建并添加样式元素
+		this.styleElement = document.createElement('style');
+		document.head.appendChild(this.styleElement);
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+		// 添加设置选项
+		this.addSettingTab(new FileNameDisplaySettingTab(this.app, this));
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+		// 监听文件变化
+		this.registerEvent(
+			this.app.workspace.on('file-open', () => this.updateFileDisplay())
+		);
+		this.registerEvent(
+			this.app.vault.on('rename', () => this.updateFileDisplay())
+		);
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-			}
-		});
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+		// 初始更新显示
+		this.updateFileDisplay();
 	}
 
 	onunload() {
+		// 清理样式
+		this.styleElement.remove();
+	}
 
+	private getAllFiles(folder: TFolder): TFile[] {
+		let files: TFile[] = [];
+		
+		// 递归获取所有文件
+		const recurseFolder = (folder: TFolder) => {
+			for (const child of folder.children) {
+				if (child instanceof TFile) {
+					files.push(child);
+				} else if (child instanceof TFolder) {
+					recurseFolder(child);
+				}
+			}
+		};
+
+		recurseFolder(folder);
+		return files;
+	}
+
+	private getUpdatedFileName(originalName: string): string | null {
+		// 移除文件扩展名
+		const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
+		
+		// 检查是否匹配 xxx_YYYY_MM_DD_ 格式
+		const match = nameWithoutExt.match(/^(.+?)_\d{4}_\d{2}_\d{2}_(.+)$/);
+		
+		// 如果匹配返回新名称，否则返回null
+		return match ? match[2] : null; // 返回名称部分
+	}
+
+	async updateFileDisplay() {
+		if (!this.settings.enablePlugin) {
+			this.styleElement.textContent = '';
+			return;
+		}
+
+		const folder = this.app.vault.getAbstractFileByPath(this.settings.activeFolder);
+		if (!(folder instanceof TFolder)) {
+			return;
+		}
+
+		let cssRules = [];
+		const files = this.getAllFiles(folder);
+
+		for (const file of files) {
+			const originalName = file.basename;
+			const newName = this.getUpdatedFileName(originalName);
+			
+			if (newName !== null) {
+				const escapedPath = CSS.escape(file.path);
+				cssRules.push(`
+					[data-path="${escapedPath}"] .nav-file-title-content {
+						position: relative !important;
+						color: transparent !important;
+					}
+					[data-path="${escapedPath}"] .nav-file-title-content::before {
+						content: "${newName}" !important;
+						position: absolute !important;
+						left: 0 !important;
+						color: var(--nav-item-color) !important;
+					}
+				`);
+			}
+		}
+
+		if (cssRules.length === 0) {
+			this.styleElement.textContent = '';
+			return;
+		}
+
+		// 添加基础样式
+		cssRules.unshift(`
+			.nav-file-title-content {
+				position: relative !important;
+			}
+		`);
+
+		this.styleElement.textContent = cssRules.join('\n');
 	}
 
 	async loadSettings() {
@@ -88,26 +128,11 @@ export default class MyPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+		this.updateFileDisplay();
 	}
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
-class SampleSettingTab extends PluginSettingTab {
+class FileNameDisplaySettingTab extends PluginSettingTab {
 	plugin: MyPlugin;
 
 	constructor(app: App, plugin: MyPlugin) {
@@ -117,18 +142,28 @@ class SampleSettingTab extends PluginSettingTab {
 
 	display(): void {
 		const {containerEl} = this;
-
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
+			.setName('启用插件')
+			.setDesc('开启或关闭文件名显示修改')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enablePlugin)
 				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
+					this.plugin.settings.enablePlugin = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('选择生效文件夹')
+			.setDesc('选择需要修改显示名称的文件夹（包含子文件夹）')
+			.addText(text => text
+				.setPlaceholder('输入文件夹路径，例如: AIGC')
+				.setValue(this.plugin.settings.activeFolder)
+				.onChange(async (value) => {
+					this.plugin.settings.activeFolder = value;
 					await this.plugin.saveSettings();
 				}));
 	}
 }
+

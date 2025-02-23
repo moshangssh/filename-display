@@ -6,3 +6,20 @@ available in the app when your plugin is enabled.
 If your plugin does not need CSS, delete this file.
 
 */
+
+/* 确保修改后的文件名样式与原始样式保持一致 */
+[data-path] .nav-file-title::after {
+    color: var(--nav-item-color);
+    font-size: var(--nav-item-size);
+    font-weight: var(--nav-item-weight);
+}
+
+.nav-file-title-content {
+    position: relative;
+}
+
+.nav-file-title-content::before {
+    position: absolute;
+    left: 0;
+    color: var(--nav-item-color);
+}
