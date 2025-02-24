@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFolder, TFile } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFolder, TFile, normalizePath } from 'obsidian';
 
 // Remember to rename these classes and interfaces!
 
@@ -81,7 +81,9 @@ export default class MyPlugin extends Plugin {
 			return;
 		}
 
-		const folder = this.app.vault.getAbstractFileByPath(this.settings.activeFolder);
+		// 规范化路径
+		const normalizedPath = normalizePath(this.settings.activeFolder);
+		const folder = this.app.vault.getAbstractFileByPath(normalizedPath);
 		if (!(folder instanceof TFolder)) {
 			return;
 		}
@@ -164,7 +166,8 @@ class FileNameDisplaySettingTab extends PluginSettingTab {
 				.setPlaceholder('输入文件夹路径，例如: AIGC')
 				.setValue(this.plugin.settings.activeFolder)
 				.onChange(async (value) => {
-					this.plugin.settings.activeFolder = value;
+					// 保存设置前规范化路径
+					this.plugin.settings.activeFolder = normalizePath(value);
 					await this.plugin.saveSettings();
 				}));
 	}
