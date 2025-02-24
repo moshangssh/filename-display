@@ -1,9 +1,9 @@
 {
-	"id": "filename-display-plugin",
-	"name": "filename display",
-	"version": "1.0.0",
+	"id": "title-extractor",
+	"name": "TitleExtractor",
+	"version": "1.1.2",
 	"minAppVersion": "0.15.0",
-	"description": "Modify the file name display to facilitate recognizing and managing notes.",
+	"description": "Auto-extract titles from structured filenames and sync display names for a cleaner, more efficient Obsidian.",
 	"author": "xdd",
 	"authorUrl": "https://obsidian.md",
 	"fundingUrl": "https://obsidian.md/pricing",
