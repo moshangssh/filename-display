@@ -41,6 +41,9 @@ export default class MyPlugin extends Plugin {
 	onunload() {
 		// 清理样式
 		this.styleElement.remove();
+		
+		// 调用父类的 onunload 以确保事件监听器被正确注销
+		super.onunload();
 	}
 
 	private getAllFiles(folder: TFolder): TFile[] {
