@@ -68,7 +68,6 @@ export default class MyPlugin extends Plugin {
 	}
 
 	async updateFileDisplay() {
-		// 移除旧样式
 		if (this.styleId) {
 			document.getElementById(this.styleId)?.remove();
 		}
@@ -94,15 +93,36 @@ export default class MyPlugin extends Plugin {
 			if (newName !== null) {
 				const escapedPath = CSS.escape(file.path);
 				cssRules.push(`
+					/* 文件树导航栏 */
 					[data-path="${escapedPath}"] .nav-file-title-content {
-						position: relative !important;
 						color: transparent !important;
 					}
 					[data-path="${escapedPath}"] .nav-file-title-content::before {
 						content: "${newName}" !important;
-						position: absolute !important;
-						left: 0 !important;
-						color: var(--nav-item-color) !important;
+					}
+					
+					/* 编辑器标签页标题 */
+					.workspace-tab-header[data-path="${escapedPath}"] .workspace-tab-header-inner-title {
+						color: transparent !important;
+					}
+					.workspace-tab-header[data-path="${escapedPath}"] .workspace-tab-header-inner-title::before {
+						content: "${newName}" !important;
+					}
+					
+					/* 文件标题栏 */
+					.view-header[data-path="${escapedPath}"] .view-header-title {
+						color: transparent !important;
+					}
+					.view-header[data-path="${escapedPath}"] .view-header-title::before {
+						content: "${newName}" !important;
+					}
+					
+					/* 搜索结果和其他位置 */
+					.tree-item[data-path="${escapedPath}"] .tree-item-inner {
+						color: transparent !important;
+					}
+					.tree-item[data-path="${escapedPath}"] .tree-item-inner::before {
+						content: "${newName}" !important;
 					}
 				`);
 			}
@@ -111,13 +131,6 @@ export default class MyPlugin extends Plugin {
 		if (cssRules.length === 0) {
 			return;
 		}
-
-		// 添加基础样式
-		cssRules.unshift(`
-			.nav-file-title-content {
-				position: relative !important;
-			}
-		`);
 
 		// 创建并添加新样式
 		const styleEl = document.createElement('style');
