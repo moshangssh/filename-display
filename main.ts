@@ -14,15 +14,11 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 
 export default class MyPlugin extends Plugin {
 	settings: MyPluginSettings;
-	private styleElement: HTMLStyleElement;
+	private styleId: string | null = null; // 用于跟踪当前样式
 
 	async onload() {
 		await this.loadSettings();
 		
-		// 创建并添加样式元素
-		this.styleElement = document.createElement('style');
-		document.head.appendChild(this.styleElement);
-
 		// 添加设置选项
 		this.addSettingTab(new FileNameDisplaySettingTab(this.app, this));
 
@@ -39,10 +35,6 @@ export default class MyPlugin extends Plugin {
 	}
 
 	onunload() {
-		// 清理样式
-		this.styleElement.remove();
-		
-		// 调用父类的 onunload 以确保事件监听器被正确注销
 		super.onunload();
 	}
 
@@ -76,8 +68,12 @@ export default class MyPlugin extends Plugin {
 	}
 
 	async updateFileDisplay() {
+		// 移除旧样式
+		if (this.styleId) {
+			document.getElementById(this.styleId)?.remove();
+		}
+
 		if (!this.settings.enablePlugin) {
-			this.styleElement.textContent = '';
 			return;
 		}
 
@@ -113,7 +109,6 @@ export default class MyPlugin extends Plugin {
 		}
 
 		if (cssRules.length === 0) {
-			this.styleElement.textContent = '';
 			return;
 		}
 
@@ -124,7 +119,12 @@ export default class MyPlugin extends Plugin {
 			}
 		`);
 
-		this.styleElement.textContent = cssRules.join('\n');
+		// 创建并添加新样式
+		const styleEl = document.createElement('style');
+		this.styleId = `plugin-custom-style-${Date.now()}`;
+		styleEl.id = this.styleId;
+		styleEl.textContent = cssRules.join('\n');
+		document.head.appendChild(styleEl);
 	}
 
 	async loadSettings() {
