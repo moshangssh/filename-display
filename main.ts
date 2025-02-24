@@ -11,13 +11,17 @@ interface MyPluginSettings {
 	// 新增配置项
 	fileNamePattern: string;  // 文件名匹配模式
 	captureGroup: number;     // 要显示的捕获组索引
+	maxCacheSize: number;    // 最大缓存大小(MB)
+	batchSize: number;        // 文件遍历批次大小
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
 	activeFolder: '',
 	enablePlugin: true,
 	fileNamePattern: '^(.+?)_\\d{4}_\\d{2}_\\d{2}_(.+)$', // 默认保持原来的格式
-	captureGroup: 2  // 默认显示第二个捕获组
+	captureGroup: 2,     // 默认显示第二个捕获组
+	maxCacheSize: 100,   // 默认100MB
+	batchSize: 1000      // 每批处理1000个文件
 }
 
 interface FileCacheItem {
@@ -32,6 +36,40 @@ export default class MyPlugin extends Plugin {
 	private fileCache: Map<string, FileCacheItem> = new Map();
 	private readonly CACHE_EXPIRE_TIME = 5 * 60 * 1000; // 5分钟过期
 	private readonly CACHE_CLEANUP_INTERVAL = 10 * 60 * 1000; // 10分钟清理一次
+	
+	// 添加性能监控计数器
+	private updateCount = 0;
+	private lastUpdateTime = Date.now();
+	
+	// 添加防抖函数
+	private debouncedUpdateFileDisplay = this.debounce(() => {
+		this.updateFileDisplay();
+		
+		// 性能监控
+		this.updateCount++;
+		const now = Date.now();
+		if (now - this.lastUpdateTime > 60000) { // 每分钟记录一次
+			console.log(`File display updates in last minute: ${this.updateCount}`);
+			this.updateCount = 0;
+			this.lastUpdateTime = now;
+		}
+	}, 500);
+
+	// 实现防抖函数
+	private debounce(func: Function, wait: number) {
+		let timeout: NodeJS.Timeout;
+		return (...args: any[]) => {
+			const later = () => {
+				clearTimeout(timeout);
+				func.apply(this, args);
+			};
+			clearTimeout(timeout);
+			timeout = setTimeout(later, wait);
+		};
+	}
+
+	// 添加名称映射缓存
+	private nameMapping: Map<string, string> = new Map();
 
 	async onload() {
 		await this.loadSettings();
@@ -39,27 +77,31 @@ export default class MyPlugin extends Plugin {
 		// 添加设置选项
 		this.addSettingTab(new FileNameDisplaySettingTab(this.app, this));
 
-		// 监听文件变化
+		// 修改事件监听,使用防抖
 		this.registerEvent(
-			this.app.workspace.on('file-open', () => this.updateFileDisplay())
+			this.app.workspace.on('file-open', () => {
+				this.debouncedUpdateFileDisplay();
+			})
 		);
+
 		this.registerEvent(
 			this.app.vault.on('rename', () => {
 				this.clearFolderCache();
-				this.updateFileDisplay();
+				this.debouncedUpdateFileDisplay();
 			})
 		);
-		// 添加 create 和 delete 事件监听
+
 		this.registerEvent(
 			this.app.vault.on('create', () => {
 				this.clearFolderCache();
-				this.updateFileDisplay();
+				this.debouncedUpdateFileDisplay();
 			})
 		);
+
 		this.registerEvent(
 			this.app.vault.on('delete', () => {
 				this.clearFolderCache();
-				this.updateFileDisplay();
+				this.debouncedUpdateFileDisplay();
 			})
 		);
 
@@ -78,6 +120,26 @@ export default class MyPlugin extends Plugin {
 			window.setInterval(() => this.cleanupCache(), this.CACHE_CLEANUP_INTERVAL)
 		);
 
+		// 添加链接点击事件处理
+		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
+			const target = evt.target as HTMLElement;
+			if (target.matches('.internal-link, .cm-hmd-internal-link')) {
+				// 阻止默认行为
+				evt.preventDefault();
+				
+				// 获取链接文本
+				const linkText = target.textContent;
+				if (!linkText) return;
+				
+				// 查找原始文件名
+				const originalName = this.findOriginalFileName(linkText);
+				if (originalName) {
+					// 打开正确的文件
+					this.openFileByName(originalName);
+				}
+			}
+		});
+
 		// 初始更新显示
 		this.updateFileDisplay();
 	}
@@ -90,7 +152,61 @@ export default class MyPlugin extends Plugin {
 		super.onunload();
 	}
 
-	private getAllFiles(folder: TFolder): TFile[] {
+	private cacheStats = {
+		totalSize: 0,
+		itemCount: 0,
+		lastCleanup: Date.now()
+	};
+	
+	private weakFileRefs = new WeakMap<TFile, number>();
+	
+	// 改进的缓存清理方法
+	private cleanupCache() {
+		try {
+			const now = Date.now();
+			let cleanupCount = 0;
+			let freedSize = 0;
+			
+			// 时间和大小双重检查
+			for (const [path, cacheItem] of this.fileCache) {
+				const isExpired = now - cacheItem.timestamp > this.CACHE_EXPIRE_TIME;
+				const itemSize = this.estimateItemSize(cacheItem);
+				
+				if (isExpired || this.cacheStats.totalSize + itemSize > this.settings.maxCacheSize * 1024 * 1024) {
+					this.fileCache.delete(path);
+					this.cacheStats.totalSize -= itemSize;
+					this.cacheStats.itemCount--;
+					cleanupCount++;
+					freedSize += itemSize;
+				}
+			}
+			
+			if (cleanupCount > 0) {
+				console.log(`[Filename Display] Cache cleanup: removed ${cleanupCount} items, freed ${(freedSize/1024/1024).toFixed(2)}MB`);
+			}
+			
+			this.cacheStats.lastCleanup = now;
+		} catch (error) {
+			console.error('[Filename Display] Cache cleanup failed:', error);
+		}
+	}
+	
+	// 估算缓存项大小
+	private estimateItemSize(item: FileCacheItem): number {
+		// 基础结构大小
+		let size = 40; // Map entry overhead
+		
+		// 文件引用大小
+		size += item.files.length * 32; // 每个TFile引用约32字节
+		
+		// 时间戳大小
+		size += 8;
+		
+		return size;
+	}
+	
+	// 改进的文件遍历方法
+	private async getAllFiles(folder: TFolder): Promise<TFile[]> {
 		try {
 			const now = Date.now();
 			const cacheItem = this.fileCache.get(folder.path);
@@ -98,34 +214,54 @@ export default class MyPlugin extends Plugin {
 			if (cacheItem && (now - cacheItem.timestamp) < this.CACHE_EXPIRE_TIME) {
 				return cacheItem.files;
 			}
-
-			let files: TFile[] = [];
 			
-			const recurseFolder = (folder: TFolder) => {
-				try {
-					for (const child of folder.children) {
-						if (child instanceof TFile) {
-							files.push(child);
-						} else if (child instanceof TFolder) {
-							recurseFolder(child);
-						}
+			const files: TFile[] = [];
+			
+			// 使用迭代器进行分批处理
+			const processFiles = async (folder: TFolder) => {
+				let batch: TFile[] = [];
+				
+				const processBatch = async () => {
+					if (batch.length > 0) {
+						files.push(...batch);
+						batch = [];
+						// 让出主线程
+						await new Promise(resolve => setTimeout(resolve, 0));
 					}
-				} catch (error) {
-					console.error(`遍历文件夹失败: ${folder.path}`, error);
-					// 继续处理其他文件夹
+				};
+				
+				for (const child of folder.children) {
+					if (child instanceof TFile) {
+						batch.push(child);
+						this.weakFileRefs.set(child, now);
+						
+						if (batch.length >= this.settings.batchSize) {
+							await processBatch();
+						}
+					} else if (child instanceof TFolder) {
+						await processBatch(); // 处理当前批次
+						await processFiles(child);
+					}
 				}
+				
+				await processBatch(); // 处理剩余文件
 			};
-
-			recurseFolder(folder);
+			
+			await processFiles(folder);
+			
+			// 更新缓存和统计
+			const itemSize = this.estimateItemSize({files, timestamp: now});
+			this.cacheStats.totalSize += itemSize;
+			this.cacheStats.itemCount++;
 			
 			this.fileCache.set(folder.path, {
-				files: files,
+				files,
 				timestamp: now
 			});
-
+			
 			return files;
 		} catch (error) {
-			console.error('获取文件列表失败:', error);
+			console.error('[Filename Display] Failed to get files:', error);
 			return [];
 		}
 	}
@@ -139,17 +275,30 @@ export default class MyPlugin extends Plugin {
 			const regex = new RegExp(this.settings.fileNamePattern);
 			const match = nameWithoutExt.match(regex);
 			
-			// 如果匹配成功且指定的捕获组存在
-			if (match && match[this.settings.captureGroup]) {
-				return match[this.settings.captureGroup];
+			// 验证捕获组索引是否有效
+			if (match && this.settings.captureGroup >= 0 && this.settings.captureGroup < match.length) {
+				const result = match[this.settings.captureGroup];
+				// 确保结果不为空
+				return result?.trim() || this.getFallbackName(nameWithoutExt);
 			}
 			
-			return null;
+			// 如果匹配失败或捕获组无效，使用回退名称
+			return this.getFallbackName(nameWithoutExt);
 		} catch (error) {
-			// 正则表达式无效时返回null
-			console.error('Invalid regex pattern:', error);
-			return null;
+			// 记录错误并使用回退名称
+			console.error('文件名处理错误:', error);
+			return this.getFallbackName(originalName);
 		}
+	}
+
+	// 新增回退显示方法
+	private getFallbackName(originalName: string): string {
+		// 如果原始名称过长，截取合适长度
+		const MAX_LENGTH = 30;
+		if (originalName.length > MAX_LENGTH) {
+			return originalName.substring(0, MAX_LENGTH - 3) + '...';
+		}
+		return originalName;
 	}
 
 	private generateCssRule(file: TFile, newName: string): string {
@@ -159,34 +308,34 @@ export default class MyPlugin extends Plugin {
 		return `
 			/* 文件树导航栏 */
 			[data-path="${escapedPath}"] .nav-file-title-content {
-				color: transparent !important;
+				color: transparent;
 			}
 			[data-path="${escapedPath}"] .nav-file-title-content::before {
-				content: "${escapedName}" !important;
+				content: "${escapedName}";
 			}
 			
 			/* 编辑器标签页标题 */
 			.workspace-tab-header[data-path="${escapedPath}"] .workspace-tab-header-inner-title {
-				color: transparent !important;
+				color: transparent;
 			}
 			.workspace-tab-header[data-path="${escapedPath}"] .workspace-tab-header-inner-title::before {
-				content: "${escapedName}" !important;
+				content: "${escapedName}";
 			}
 			
 			/* 文件标题栏 */
 			.view-header[data-path="${escapedPath}"] .view-header-title {
-				color: transparent !important;
+				color: transparent;
 			}
 			.view-header[data-path="${escapedPath}"] .view-header-title::before {
-				content: "${escapedName}" !important;
+				content: "${escapedName}";
 			}
 			
 			/* 搜索结果和其他位置 */
 			.tree-item[data-path="${escapedPath}"] .tree-item-inner {
-				color: transparent !important;
+				color: transparent;
 			}
 			.tree-item[data-path="${escapedPath}"] .tree-item-inner::before {
-				content: "${escapedName}" !important;
+				content: "${escapedName}";
 			}
 		`;
 	}
@@ -220,8 +369,11 @@ export default class MyPlugin extends Plugin {
 			}
 
 			// 获取所有文件并生成新的CSS规则Map
-			const files = this.getAllFiles(folder);
+			const files = await this.getAllFiles(folder);
 			const newRulesMap = new Map<string, string>();
+			
+			// 清除旧映射
+			this.nameMapping.clear();
 			
 			for (const file of files) {
 				try {
@@ -229,6 +381,10 @@ export default class MyPlugin extends Plugin {
 					const newName = this.getUpdatedFileName(originalName);
 					
 					if (newName !== null) {
+						// 添加双向映射
+						this.nameMapping.set(newName, originalName);
+						this.nameMapping.set(originalName, originalName);
+						
 						const cssRule = this.generateCssRule(file, newName);
 						newRulesMap.set(file.path, cssRule);
 					}
@@ -285,38 +441,60 @@ export default class MyPlugin extends Plugin {
 	private getEditorExtension() {
 		const plugin = this;
 
-		// 定义状态字段
-		const linkField = StateField.define<DecorationSet>({
+		// 添加状态字段来缓存链接位置
+		const linkCache = StateField.define<DecorationSet>({
 			create() {
-				const builder = new RangeSetBuilder<Decoration>();
-				return builder.finish();
+				return Decoration.none;
 			},
 			update(oldState, tr) {
-				const builder = new RangeSetBuilder<Decoration>();
-				
 				if (!plugin.settings.enablePlugin) {
 					return Decoration.none;
 				}
 
-				const doc = tr.state.doc;
-				const linkRegex = /\[\[(.*?)\]\]/g;
+				// 只在文档变化或首次加载时更新
+				if (!tr.docChanged && oldState.size) {
+					return oldState;
+				}
 
+				const builder = new RangeSetBuilder<Decoration>();
+				const doc = tr.state.doc;
+
+				// 遍历文档查找链接
+				let inCodeBlock = false;
 				for (let i = 1; i <= doc.lines; i++) {
 					const line = doc.line(i);
 					const text = line.text;
+
+					// 检查是否在代码块内
+					if (text.startsWith("```")) {
+						inCodeBlock = !inCodeBlock;
+						continue;
+					}
+
+					// 跳过代码块内容
+					if (inCodeBlock) continue;
+
+					// 使用正则匹配所有可能的链接格式
+					const linkRegex = /\[\[([^\]]+)\]\]|\[([^\]]+)\]\(([^\)]+)\)/g;
 					let match;
 
 					while ((match = linkRegex.exec(text)) !== null) {
-						const originalName = match[1];
-						const newName = plugin.getUpdatedFileName(originalName);
-						
-						if (newName) {
-							const from = line.from + match.index + 2;
-							const to = from + originalName.length;
+						try {
+							const linkText = match[1] || match[2];
+							const from = line.from + match.index + (match[1] ? 2 : 1);
+							const to = from + linkText.length;
+
+							// 获取新的显示名称
+							const newName = plugin.getUpdatedFileName(linkText);
 							
-							builder.add(from, to, Decoration.replace({
-								widget: new LinkWidget(newName, originalName)
-							}));
+							if (newName && newName !== linkText) {
+								// 创建链接装饰器
+								builder.add(from, to, Decoration.replace({
+									widget: new EnhancedLinkWidget(newName, linkText)
+								}));
+							}
+						} catch (error) {
+							console.error("处理链接失败:", error);
 						}
 					}
 				}
@@ -326,23 +504,73 @@ export default class MyPlugin extends Plugin {
 			provide: field => EditorView.decorations.from(field)
 		});
 
-		// 简化的 ViewPlugin - 只处理视图相关的操作
-		class LinkViewPlugin implements PluginValue {
-			constructor(view: EditorView) {}
-
-			update(update: ViewUpdate) {
-				if (update.docChanged || update.viewportChanged) {
-					// 可以在这里添加其他视图相关的操作
-				}
+		// 优化的链接部件
+		class EnhancedLinkWidget extends WidgetType {
+			constructor(readonly displayText: string, readonly originalText: string) {
+				super();
 			}
 
-			destroy() {}
+			toDOM() {
+				const container = document.createElement('span');
+				container.className = 'enhanced-link-widget';
+				
+				// 显示新名称
+				const display = document.createElement('span');
+				display.textContent = this.displayText;
+				display.className = 'link-display cm-hmd-internal-link';
+				container.appendChild(display);
+
+				// 添加原始名称提示
+				const tooltip = document.createElement('span');
+				tooltip.textContent = this.originalText;
+				tooltip.className = 'link-tooltip';
+				container.appendChild(tooltip);
+
+				// 保存原始文本用于复制等操作
+				container.dataset.originalText = this.originalText;
+
+				return container;
+			}
+
+			eq(other: EnhancedLinkWidget): boolean {
+				return other.displayText === this.displayText && 
+					   other.originalText === this.originalText;
+			}
+
+			ignoreEvent(): boolean {
+				return false;
+			}
 		}
 
-		return [
-			linkField,
-			ViewPlugin.fromClass(LinkViewPlugin)
-		];
+		// 添加相应的CSS样式
+		const linkStyles = EditorView.baseTheme({
+			'.enhanced-link-widget': {
+				position: 'relative',
+				display: 'inline-block'
+			},
+			'.link-display': {
+				color: 'var(--text-accent)',
+				textDecoration: 'underline',
+				cursor: 'pointer'
+			},
+			'.link-tooltip': {
+				display: 'none',
+				position: 'absolute',
+				bottom: '100%',
+				left: '50%',
+				transform: 'translateX(-50%)',
+				padding: '4px 8px',
+				backgroundColor: 'var(--background-modifier-hover)',
+				borderRadius: '4px',
+				fontSize: '12px',
+				zIndex: '100'
+			},
+			'.enhanced-link-widget:hover .link-tooltip': {
+				display: 'block'
+			}
+		});
+
+		return [linkCache, linkStyles];
 	}
 
 	// 处理阅读视图中的链接
@@ -379,13 +607,38 @@ export default class MyPlugin extends Plugin {
 		}
 	}
 
-	// 清理过期缓存
-	private cleanupCache() {
-		const now = Date.now();
-		for (const [path, cacheItem] of this.fileCache) {
-			if (now - cacheItem.timestamp > this.CACHE_EXPIRE_TIME) {
-				this.fileCache.delete(path);
+	public getCacheStats() {
+		return {
+			itemCount: this.cacheStats.itemCount,
+			totalSize: this.cacheStats.totalSize
+		};
+	}
+
+	// 查找原始文件名
+	private findOriginalFileName(displayName: string): string | null {
+		return this.nameMapping.get(displayName) || null;
+	}
+
+	// 打开文件
+	private async openFileByName(fileName: string) {
+		try {
+			// 在活动文件夹中查找文件
+			const folder = this.app.vault.getAbstractFileByPath(this.settings.activeFolder);
+			if (!(folder instanceof TFolder)) return;
+			
+			const files = await this.getAllFiles(folder);
+			const targetFile = files.find(f => f.basename === fileName);
+			
+			if (targetFile) {
+				// 在新叶子中打开文件
+				const leaf = this.app.workspace.getLeaf(true);
+				await leaf.openFile(targetFile);
+			} else {
+				new Notice(`未找到文件: ${fileName}`);
 			}
+		} catch (error) {
+			console.error('打开文件失败:', error);
+			new Notice('打开文件失败');
 		}
 	}
 }
@@ -474,6 +727,14 @@ class FileNameDisplaySettingTab extends PluginSettingTab {
 					try {
 						// 验证正则表达式的有效性
 						new RegExp(value);
+						
+						// 测试是否包含至少一个捕获组
+						const testMatch = "test_2024_01_01_title".match(new RegExp(value));
+						if (!testMatch || testMatch.length <= this.plugin.settings.captureGroup) {
+							new Notice('警告: 正则表达式可能无法捕获指定的组');
+							return;
+						}
+						
 						this.plugin.settings.fileNamePattern = value;
 						await this.plugin.saveSettings();
 					} catch (error) {
@@ -496,6 +757,41 @@ class FileNameDisplaySettingTab extends PluginSettingTab {
 						new Notice('请输入有效的捕获组索引（大于等于0的整数）');
 					}
 				}));
+
+		new Setting(containerEl)
+			.setName('最大缓存大小')
+			.setDesc('设置文件缓存的最大大小(MB)')
+			.addText(text => text
+				.setPlaceholder('100')
+				.setValue(String(this.plugin.settings.maxCacheSize))
+				.onChange(async (value) => {
+					const size = parseInt(value);
+					if (!isNaN(size) && size > 0) {
+						this.plugin.settings.maxCacheSize = size;
+						await this.plugin.saveSettings();
+					}
+				}));
+				
+		new Setting(containerEl)
+			.setName('批处理大小')
+			.setDesc('每批处理的文件数量(影响性能)')
+			.addText(text => text
+				.setPlaceholder('1000')
+				.setValue(String(this.plugin.settings.batchSize))
+				.onChange(async (value) => {
+					const size = parseInt(value);
+					if (!isNaN(size) && size > 0) {
+						this.plugin.settings.batchSize = size;
+						await this.plugin.saveSettings();
+					}
+				}));
+				
+		// 添加缓存统计信息显示
+		const stats = this.plugin.getCacheStats();
+		const statsEl = containerEl.createEl('div', {
+			cls: 'setting-item-description',
+			text: `缓存统计: ${stats.itemCount} 项, ${(stats.totalSize/1024/1024).toFixed(2)}MB`
+		});
 
 		// 添加示例说明
 		containerEl.createEl('div', {

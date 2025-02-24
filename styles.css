@@ -44,3 +44,47 @@ If your plugin does not need CSS, delete this file.
     left: 0;
     color: var(--text-normal);
 }
+
+/* 添加新的链接样式 */
+.enhanced-link-widget {
+    display: inline-block;
+    position: relative;
+}
+
+.link-display {
+    color: var(--text-accent);
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.link-tooltip {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 4px 8px;
+    background-color: var(--background-modifier-hover);
+    border-radius: 4px;
+    font-size: 12px;
+    z-index: 100;
+    white-space: nowrap;
+}
+
+.enhanced-link-widget:hover .link-tooltip {
+    display: block;
+}
+
+/* 优化内部链接样式 */
+.internal-link,
+.cm-hmd-internal-link {
+    cursor: pointer;
+    text-decoration: underline;
+    color: var(--text-accent);
+}
+
+.internal-link:hover,
+.cm-hmd-internal-link:hover {
+    text-decoration: none;
+    color: var(--text-accent-hover);
+}
