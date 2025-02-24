@@ -17,7 +17,8 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 
 export default class MyPlugin extends Plugin {
 	settings: MyPluginSettings;
-	private styleId: string | null = null; // 用于跟踪当前样式
+	private styleEl: HTMLStyleElement | null = null;
+	private cssRulesCache: Map<string, string> = new Map();
 
 	async onload() {
 		await this.loadSettings();
@@ -31,6 +32,13 @@ export default class MyPlugin extends Plugin {
 		);
 		this.registerEvent(
 			this.app.vault.on('rename', () => this.updateFileDisplay())
+		);
+		// 添加 create 和 delete 事件监听
+		this.registerEvent(
+			this.app.vault.on('create', () => this.updateFileDisplay())
+		);
+		this.registerEvent(
+			this.app.vault.on('delete', () => this.updateFileDisplay())
 		);
 
 		// 添加编辑器处理
@@ -48,6 +56,9 @@ export default class MyPlugin extends Plugin {
 	}
 
 	onunload() {
+		if (this.styleEl) {
+			this.styleEl.remove();
+		}
 		super.onunload();
 	}
 
@@ -81,11 +92,10 @@ export default class MyPlugin extends Plugin {
 	}
 
 	async updateFileDisplay() {
-		if (this.styleId) {
-			document.getElementById(this.styleId)?.remove();
-		}
-
 		if (!this.settings.enablePlugin) {
+			if (this.styleEl) {
+				this.styleEl.textContent = '';
+			}
 			return;
 		}
 
@@ -96,22 +106,24 @@ export default class MyPlugin extends Plugin {
 			return;
 		}
 
-		let cssRules = [];
+		// 获取所有文件并生成新的CSS规则Map
 		const files = this.getAllFiles(folder);
-
+		const newRulesMap = new Map<string, string>();
+		
 		for (const file of files) {
 			const originalName = file.basename;
 			const newName = this.getUpdatedFileName(originalName);
 			
 			if (newName !== null) {
 				const escapedPath = CSS.escape(file.path);
-				cssRules.push(`
+				const escapedName = CSS.escape(newName);
+				const cssRule = `
 					/* 文件树导航栏 */
 					[data-path="${escapedPath}"] .nav-file-title-content {
 						color: transparent !important;
 					}
 					[data-path="${escapedPath}"] .nav-file-title-content::before {
-						content: "${newName}" !important;
+						content: "${escapedName}" !important;
 					}
 					
 					/* 编辑器标签页标题 */
@@ -119,7 +131,7 @@ export default class MyPlugin extends Plugin {
 						color: transparent !important;
 					}
 					.workspace-tab-header[data-path="${escapedPath}"] .workspace-tab-header-inner-title::before {
-						content: "${newName}" !important;
+						content: "${escapedName}" !important;
 					}
 					
 					/* 文件标题栏 */
@@ -127,7 +139,7 @@ export default class MyPlugin extends Plugin {
 						color: transparent !important;
 					}
 					.view-header[data-path="${escapedPath}"] .view-header-title::before {
-						content: "${newName}" !important;
+						content: "${escapedName}" !important;
 					}
 					
 					/* 搜索结果和其他位置 */
@@ -135,22 +147,44 @@ export default class MyPlugin extends Plugin {
 						color: transparent !important;
 					}
 					.tree-item[data-path="${escapedPath}"] .tree-item-inner::before {
-						content: "${newName}" !important;
+						content: "${escapedName}" !important;
 					}
-				`);
+				`;
+				newRulesMap.set(escapedPath, cssRule);
 			}
 		}
 
-		if (cssRules.length === 0) {
-			return;
+		// 创建或更新style元素
+		if (!this.styleEl) {
+			this.styleEl = document.createElement('style');
+			document.head.appendChild(this.styleEl);
 		}
 
-		// 创建并添加新样式
-		const styleEl = document.createElement('style');
-		this.styleId = `plugin-custom-style-${Date.now()}`;
-		styleEl.id = this.styleId;
-		styleEl.textContent = cssRules.join('\n');
-		document.head.appendChild(styleEl);
+		// 比较并只更新变化的规则
+		let cssContent = '';
+		let hasChanges = false;
+
+		// 检查新规则
+		newRulesMap.forEach((rule, path) => {
+			const oldRule = this.cssRulesCache.get(path);
+			if (oldRule !== rule) {
+				hasChanges = true;
+			}
+		});
+
+		// 检查删除的规则
+		this.cssRulesCache.forEach((_, path) => {
+			if (!newRulesMap.has(path)) {
+				hasChanges = true;
+			}
+		});
+
+		// 只在规则发生变化时更新样式表
+		if (hasChanges) {
+			cssContent = Array.from(newRulesMap.values()).join('\n');
+			this.styleEl.textContent = cssContent;
+			this.cssRulesCache = newRulesMap;
+		}
 	}
 
 	async loadSettings() {
