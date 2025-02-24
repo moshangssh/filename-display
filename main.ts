@@ -13,6 +13,8 @@ interface MyPluginSettings {
 	captureGroup: number;     // 要显示的捕获组索引
 	maxCacheSize: number;    // 最大缓存大小(MB)
 	batchSize: number;        // 文件遍历批次大小
+	// 添加新的设置项
+	showOriginalNameOnHover: boolean;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
@@ -21,7 +23,9 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	fileNamePattern: '^(.+?)_\\d{4}_\\d{2}_\\d{2}_(.+)$', // 默认保持原来的格式
 	captureGroup: 2,     // 默认显示第二个捕获组
 	maxCacheSize: 100,   // 默认100MB
-	batchSize: 1000      // 每批处理1000个文件
+	batchSize: 1000,      // 每批处理1000个文件
+	// 设置默认值为 true
+	showOriginalNameOnHover: true
 }
 
 interface FileCacheItem {
@@ -490,7 +494,7 @@ export default class MyPlugin extends Plugin {
 							if (newName && newName !== linkText) {
 								// 创建链接装饰器
 								builder.add(from, to, Decoration.replace({
-									widget: new EnhancedLinkWidget(newName, linkText)
+									widget: new EnhancedLinkWidget(newName, linkText, plugin.settings)
 								}));
 							}
 						} catch (error) {
@@ -506,7 +510,7 @@ export default class MyPlugin extends Plugin {
 
 		// 优化的链接部件
 		class EnhancedLinkWidget extends WidgetType {
-			constructor(readonly displayText: string, readonly originalText: string) {
+			constructor(readonly displayText: string, readonly originalText: string, readonly settings: MyPluginSettings) {
 				super();
 			}
 
@@ -520,11 +524,13 @@ export default class MyPlugin extends Plugin {
 				display.className = 'link-display cm-hmd-internal-link';
 				container.appendChild(display);
 
-				// 添加原始名称提示
-				const tooltip = document.createElement('span');
-				tooltip.textContent = this.originalText;
-				tooltip.className = 'link-tooltip';
-				container.appendChild(tooltip);
+				// 根据设置决定是否添加提示
+				if (this.settings.showOriginalNameOnHover) {
+					const tooltip = document.createElement('span');
+					tooltip.textContent = this.originalText;
+					tooltip.className = 'link-tooltip';
+					container.appendChild(tooltip);
+				}
 
 				// 保存原始文本用于复制等操作
 				container.dataset.originalText = this.originalText;
@@ -534,7 +540,8 @@ export default class MyPlugin extends Plugin {
 
 			eq(other: EnhancedLinkWidget): boolean {
 				return other.displayText === this.displayText && 
-					   other.originalText === this.originalText;
+					   other.originalText === this.originalText &&
+					   other.settings.showOriginalNameOnHover === this.settings.showOriginalNameOnHover;
 			}
 
 			ignoreEvent(): boolean {
@@ -640,6 +647,19 @@ export default class MyPlugin extends Plugin {
 			console.error('打开文件失败:', error);
 			new Notice('打开文件失败');
 		}
+	}
+
+	// 在 MyPlugin 类中添加一个方法来刷新编辑器视图
+	public refreshEditorDecorations() {
+		// 获取所有编辑器视图
+		this.app.workspace.iterateAllLeaves(leaf => {
+			if (leaf.view instanceof MarkdownView && leaf.view.editor) {
+				// 触发编辑器内容更新
+				const editor = leaf.view.editor;
+				const doc = editor.getValue();
+				editor.setValue(doc);
+			}
+		});
 	}
 }
 
@@ -812,6 +832,19 @@ class FileNameDisplaySettingTab extends PluginSettingTab {
 				cls: 'setting-item-description'
 			});
 		});
+
+		// 添加新的设置项
+		new Setting(containerEl)
+			.setName('显示原始文件名提示')
+			.setDesc('当鼠标悬停在链接上时显示原始文件名')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.showOriginalNameOnHover)
+				.onChange(async (value) => {
+					this.plugin.settings.showOriginalNameOnHover = value;
+					await this.plugin.saveSettings();
+					// 立即刷新编辑器装饰器
+					this.plugin.refreshEditorDecorations();
+				}));
 	}
 }
 
