@@ -169,7 +169,6 @@ export default class MyPlugin extends Plugin {
 		// 定义状态字段
 		const linkField = StateField.define<DecorationSet>({
 			create() {
-				// 在创建时就初始化装饰器
 				const builder = new RangeSetBuilder<Decoration>();
 				return builder.finish();
 			},
@@ -205,24 +204,20 @@ export default class MyPlugin extends Plugin {
 
 				return builder.finish();
 			},
-			// 提供装饰器给编辑器
 			provide: field => EditorView.decorations.from(field)
 		});
 
-		// 创建插件类
+		// 简化的 ViewPlugin - 只处理视图相关的操作
 		class LinkViewPlugin implements PluginValue {
-			constructor(view: EditorView) {
-				// 不在构造函数中修改状态
-			}
+			constructor(view: EditorView) {}
 
 			update(update: ViewUpdate) {
-				// 只在需要时触发重新计算装饰器
 				if (update.docChanged || update.viewportChanged) {
-					update.view.setState(update.state);
+					// 可以在这里添加其他视图相关的操作
 				}
 			}
 
-			destroy() { }
+			destroy() {}
 		}
 
 		return [
