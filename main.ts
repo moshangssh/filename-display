@@ -1,4 +1,7 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFolder, TFile, normalizePath } from 'obsidian';
+import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate, PluginValue } from '@codemirror/view';
+import { StateField, StateEffect, RangeSetBuilder } from '@codemirror/state';
+import { WidgetType } from '@codemirror/view';
 
 // Remember to rename these classes and interfaces!
 
@@ -29,6 +32,16 @@ export default class MyPlugin extends Plugin {
 		this.registerEvent(
 			this.app.vault.on('rename', () => this.updateFileDisplay())
 		);
+
+		// 添加编辑器处理
+		this.registerEditorExtension([
+			this.getEditorExtension()
+		]);
+
+		// 添加Markdown后处理器
+		this.registerMarkdownPostProcessor((el, ctx) => {
+			this.processMarkdownLinks(el);
+		});
 
 		// 初始更新显示
 		this.updateFileDisplay();
@@ -147,6 +160,111 @@ export default class MyPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 		this.updateFileDisplay();
+	}
+
+	// 处理编辑器中的显示
+	private getEditorExtension() {
+		const plugin = this;
+
+		// 定义状态字段
+		const linkField = StateField.define<DecorationSet>({
+			create() {
+				// 在创建时就初始化装饰器
+				const builder = new RangeSetBuilder<Decoration>();
+				return builder.finish();
+			},
+			update(oldState, tr) {
+				const builder = new RangeSetBuilder<Decoration>();
+				
+				if (!plugin.settings.enablePlugin) {
+					return Decoration.none;
+				}
+
+				const doc = tr.state.doc;
+				const linkRegex = /\[\[(.*?)\]\]/g;
+
+				for (let i = 1; i <= doc.lines; i++) {
+					const line = doc.line(i);
+					const text = line.text;
+					let match;
+
+					while ((match = linkRegex.exec(text)) !== null) {
+						const originalName = match[1];
+						const newName = plugin.getUpdatedFileName(originalName);
+						
+						if (newName) {
+							const from = line.from + match.index + 2;
+							const to = from + originalName.length;
+							
+							builder.add(from, to, Decoration.replace({
+								widget: new LinkWidget(newName, originalName)
+							}));
+						}
+					}
+				}
+
+				return builder.finish();
+			},
+			// 提供装饰器给编辑器
+			provide: field => EditorView.decorations.from(field)
+		});
+
+		// 创建插件类
+		class LinkViewPlugin implements PluginValue {
+			constructor(view: EditorView) {
+				// 不在构造函数中修改状态
+			}
+
+			update(update: ViewUpdate) {
+				// 只在需要时触发重新计算装饰器
+				if (update.docChanged || update.viewportChanged) {
+					update.view.setState(update.state);
+				}
+			}
+
+			destroy() { }
+		}
+
+		return [
+			linkField,
+			ViewPlugin.fromClass(LinkViewPlugin)
+		];
+	}
+
+	// 处理阅读视图中的链接
+	private processMarkdownLinks(el: HTMLElement) {
+		if (!this.settings.enablePlugin) return;
+
+		const links = Array.from(el.querySelectorAll('a.internal-link'));
+		for (const link of links) {
+			const originalName = link.getAttribute('data-href');
+			if (!originalName) continue;
+
+			const newName = this.getUpdatedFileName(originalName);
+			if (newName) {
+				link.textContent = newName;
+			}
+		}
+	}
+}
+
+// 自定义链接部件
+class LinkWidget extends WidgetType {
+	constructor(readonly displayText: string, readonly originalText: string) {
+		super();
+	}
+
+	toDOM() {
+		const span = document.createElement('span');
+		span.textContent = this.displayText;
+		span.className = 'cm-link';
+		// 保存原始文本用于复制等操作
+		span.setAttribute('data-original-text', this.originalText);
+		return span;
+	}
+
+	ignoreEvent() {
+		return false;
 	}
 }
 
