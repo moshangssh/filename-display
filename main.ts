@@ -200,10 +200,23 @@ export default class MyPlugin extends Plugin {
 				return;
 			}
 
+			// 检查文件夹路径是否为空
+			if (!this.settings.activeFolder) {
+				return;
+			}
+
 			const normalizedPath = normalizePath(this.settings.activeFolder);
 			const folder = this.app.vault.getAbstractFileByPath(normalizedPath);
+			
+			// 改进错误处理
+			if (!folder) {
+				console.log(`文件夹不存在: ${normalizedPath}`);
+				return;
+			}
+			
 			if (!(folder instanceof TFolder)) {
-				throw new Error(`无效的文件夹路径: ${normalizedPath}`);
+				console.log(`路径不是文件夹: ${normalizedPath}`);
+				return;
 			}
 
 			// 获取所有文件并生成新的CSS规则Map
@@ -254,7 +267,8 @@ export default class MyPlugin extends Plugin {
 			}
 		} catch (error) {
 			console.error('更新文件显示失败:', error);
-			new Notice(`更新文件显示失败: ${error.message}`);
+			// 使用更友好的错误提示
+			new Notice(`更新文件显示失败: 请检查文件夹路径是否正确`);
 		}
 	}
 
@@ -422,12 +436,32 @@ class FileNameDisplaySettingTab extends PluginSettingTab {
 			.setName('选择生效文件夹')
 			.setDesc('选择需要修改显示名称的文件夹（包含子文件夹）')
 			.addText(text => text
-				.setPlaceholder('输入文件夹路径，例如: AIGC')
+				.setPlaceholder('输入文件夹路径，例如: folder 或 folder/subfolder')
 				.setValue(this.plugin.settings.activeFolder)
 				.onChange(async (value) => {
-					// 保存设置前规范化路径
-					this.plugin.settings.activeFolder = normalizePath(value);
-					await this.plugin.saveSettings();
+					try {
+						// 规范化路径
+						const normalizedPath = normalizePath(value.trim());
+						
+						// 验证文件夹是否存在
+						const folder = this.app.vault.getAbstractFileByPath(normalizedPath);
+						
+						if (!folder && value) {
+							new Notice('文件夹不存在');
+							return;
+						}
+						
+						if (folder && !(folder instanceof TFolder)) {
+							new Notice('请输入有效的文件夹路径');
+							return;
+						}
+						
+						this.plugin.settings.activeFolder = normalizedPath;
+						await this.plugin.saveSettings();
+					} catch (error) {
+						console.error('保存设置失败:', error);
+						new Notice('保存设置失败');
+					}
 				}));
 
 		new Setting(containerEl)
