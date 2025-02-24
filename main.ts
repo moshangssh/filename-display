@@ -7,18 +7,31 @@ import { WidgetType } from '@codemirror/view';
 
 interface MyPluginSettings {
 	activeFolder: string;
-	enablePlugin: boolean; // 添加开关选项
+	enablePlugin: boolean;
+	// 新增配置项
+	fileNamePattern: string;  // 文件名匹配模式
+	captureGroup: number;     // 要显示的捕获组索引
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
 	activeFolder: '',
-	enablePlugin: true
+	enablePlugin: true,
+	fileNamePattern: '^(.+?)_\\d{4}_\\d{2}_\\d{2}_(.+)$', // 默认保持原来的格式
+	captureGroup: 2  // 默认显示第二个捕获组
+}
+
+interface FileCacheItem {
+	files: TFile[];
+	timestamp: number;
 }
 
 export default class MyPlugin extends Plugin {
 	settings: MyPluginSettings;
 	private styleEl: HTMLStyleElement | null = null;
 	private cssRulesCache: Map<string, string> = new Map();
+	private fileCache: Map<string, FileCacheItem> = new Map();
+	private readonly CACHE_EXPIRE_TIME = 5 * 60 * 1000; // 5分钟过期
+	private readonly CACHE_CLEANUP_INTERVAL = 10 * 60 * 1000; // 10分钟清理一次
 
 	async onload() {
 		await this.loadSettings();
@@ -31,14 +44,23 @@ export default class MyPlugin extends Plugin {
 			this.app.workspace.on('file-open', () => this.updateFileDisplay())
 		);
 		this.registerEvent(
-			this.app.vault.on('rename', () => this.updateFileDisplay())
+			this.app.vault.on('rename', () => {
+				this.clearFolderCache();
+				this.updateFileDisplay();
+			})
 		);
 		// 添加 create 和 delete 事件监听
 		this.registerEvent(
-			this.app.vault.on('create', () => this.updateFileDisplay())
+			this.app.vault.on('create', () => {
+				this.clearFolderCache();
+				this.updateFileDisplay();
+			})
 		);
 		this.registerEvent(
-			this.app.vault.on('delete', () => this.updateFileDisplay())
+			this.app.vault.on('delete', () => {
+				this.clearFolderCache();
+				this.updateFileDisplay();
+			})
 		);
 
 		// 添加编辑器处理
@@ -51,6 +73,11 @@ export default class MyPlugin extends Plugin {
 			this.processMarkdownLinks(el);
 		});
 
+		// 添加定期清理缓存的定时器
+		this.registerInterval(
+			window.setInterval(() => this.cleanupCache(), this.CACHE_CLEANUP_INTERVAL)
+		);
+
 		// 初始更新显示
 		this.updateFileDisplay();
 	}
@@ -59,131 +86,175 @@ export default class MyPlugin extends Plugin {
 		if (this.styleEl) {
 			this.styleEl.remove();
 		}
+		this.fileCache.clear();
 		super.onunload();
 	}
 
 	private getAllFiles(folder: TFolder): TFile[] {
-		let files: TFile[] = [];
-		
-		// 递归获取所有文件
-		const recurseFolder = (folder: TFolder) => {
-			for (const child of folder.children) {
-				if (child instanceof TFile) {
-					files.push(child);
-				} else if (child instanceof TFolder) {
-					recurseFolder(child);
-				}
+		try {
+			const now = Date.now();
+			const cacheItem = this.fileCache.get(folder.path);
+			
+			if (cacheItem && (now - cacheItem.timestamp) < this.CACHE_EXPIRE_TIME) {
+				return cacheItem.files;
 			}
-		};
 
-		recurseFolder(folder);
-		return files;
+			let files: TFile[] = [];
+			
+			const recurseFolder = (folder: TFolder) => {
+				try {
+					for (const child of folder.children) {
+						if (child instanceof TFile) {
+							files.push(child);
+						} else if (child instanceof TFolder) {
+							recurseFolder(child);
+						}
+					}
+				} catch (error) {
+					console.error(`遍历文件夹失败: ${folder.path}`, error);
+					// 继续处理其他文件夹
+				}
+			};
+
+			recurseFolder(folder);
+			
+			this.fileCache.set(folder.path, {
+				files: files,
+				timestamp: now
+			});
+
+			return files;
+		} catch (error) {
+			console.error('获取文件列表失败:', error);
+			return [];
+		}
 	}
 
 	private getUpdatedFileName(originalName: string): string | null {
-		// 移除文件扩展名
-		const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
+		try {
+			// 移除文件扩展名
+			const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
+			
+			// 使用配置的正则表达式进行匹配
+			const regex = new RegExp(this.settings.fileNamePattern);
+			const match = nameWithoutExt.match(regex);
+			
+			// 如果匹配成功且指定的捕获组存在
+			if (match && match[this.settings.captureGroup]) {
+				return match[this.settings.captureGroup];
+			}
+			
+			return null;
+		} catch (error) {
+			// 正则表达式无效时返回null
+			console.error('Invalid regex pattern:', error);
+			return null;
+		}
+	}
+
+	private generateCssRule(file: TFile, newName: string): string {
+		const escapedPath = CSS.escape(file.path);
+		const escapedName = CSS.escape(newName);
 		
-		// 检查是否匹配 xxx_YYYY_MM_DD_ 格式
-		const match = nameWithoutExt.match(/^(.+?)_\d{4}_\d{2}_\d{2}_(.+)$/);
-		
-		// 如果匹配返回新名称，否则返回null
-		return match ? match[2] : null; // 返回名称部分
+		return `
+			/* 文件树导航栏 */
+			[data-path="${escapedPath}"] .nav-file-title-content {
+				color: transparent !important;
+			}
+			[data-path="${escapedPath}"] .nav-file-title-content::before {
+				content: "${escapedName}" !important;
+			}
+			
+			/* 编辑器标签页标题 */
+			.workspace-tab-header[data-path="${escapedPath}"] .workspace-tab-header-inner-title {
+				color: transparent !important;
+			}
+			.workspace-tab-header[data-path="${escapedPath}"] .workspace-tab-header-inner-title::before {
+				content: "${escapedName}" !important;
+			}
+			
+			/* 文件标题栏 */
+			.view-header[data-path="${escapedPath}"] .view-header-title {
+				color: transparent !important;
+			}
+			.view-header[data-path="${escapedPath}"] .view-header-title::before {
+				content: "${escapedName}" !important;
+			}
+			
+			/* 搜索结果和其他位置 */
+			.tree-item[data-path="${escapedPath}"] .tree-item-inner {
+				color: transparent !important;
+			}
+			.tree-item[data-path="${escapedPath}"] .tree-item-inner::before {
+				content: "${escapedName}" !important;
+			}
+		`;
 	}
 
 	async updateFileDisplay() {
-		if (!this.settings.enablePlugin) {
-			if (this.styleEl) {
-				this.styleEl.textContent = '';
+		try {
+			if (!this.settings.enablePlugin) {
+				if (this.styleEl) {
+					this.styleEl.textContent = '';
+				}
+				return;
 			}
-			return;
-		}
 
-		// 规范化路径
-		const normalizedPath = normalizePath(this.settings.activeFolder);
-		const folder = this.app.vault.getAbstractFileByPath(normalizedPath);
-		if (!(folder instanceof TFolder)) {
-			return;
-		}
+			const normalizedPath = normalizePath(this.settings.activeFolder);
+			const folder = this.app.vault.getAbstractFileByPath(normalizedPath);
+			if (!(folder instanceof TFolder)) {
+				throw new Error(`无效的文件夹路径: ${normalizedPath}`);
+			}
 
-		// 获取所有文件并生成新的CSS规则Map
-		const files = this.getAllFiles(folder);
-		const newRulesMap = new Map<string, string>();
-		
-		for (const file of files) {
-			const originalName = file.basename;
-			const newName = this.getUpdatedFileName(originalName);
+			// 获取所有文件并生成新的CSS规则Map
+			const files = this.getAllFiles(folder);
+			const newRulesMap = new Map<string, string>();
 			
-			if (newName !== null) {
-				const escapedPath = CSS.escape(file.path);
-				const escapedName = CSS.escape(newName);
-				const cssRule = `
-					/* 文件树导航栏 */
-					[data-path="${escapedPath}"] .nav-file-title-content {
-						color: transparent !important;
-					}
-					[data-path="${escapedPath}"] .nav-file-title-content::before {
-						content: "${escapedName}" !important;
-					}
+			for (const file of files) {
+				try {
+					const originalName = file.basename;
+					const newName = this.getUpdatedFileName(originalName);
 					
-					/* 编辑器标签页标题 */
-					.workspace-tab-header[data-path="${escapedPath}"] .workspace-tab-header-inner-title {
-						color: transparent !important;
+					if (newName !== null) {
+						const cssRule = this.generateCssRule(file, newName);
+						newRulesMap.set(file.path, cssRule);
 					}
-					.workspace-tab-header[data-path="${escapedPath}"] .workspace-tab-header-inner-title::before {
-						content: "${escapedName}" !important;
-					}
-					
-					/* 文件标题栏 */
-					.view-header[data-path="${escapedPath}"] .view-header-title {
-						color: transparent !important;
-					}
-					.view-header[data-path="${escapedPath}"] .view-header-title::before {
-						content: "${escapedName}" !important;
-					}
-					
-					/* 搜索结果和其他位置 */
-					.tree-item[data-path="${escapedPath}"] .tree-item-inner {
-						color: transparent !important;
-					}
-					.tree-item[data-path="${escapedPath}"] .tree-item-inner::before {
-						content: "${escapedName}" !important;
-					}
-				`;
-				newRulesMap.set(escapedPath, cssRule);
+				} catch (error) {
+					console.error(`处理文件失败: ${file.path}`, error);
+					// 继续处理其他文件
+				}
 			}
-		}
 
-		// 创建或更新style元素
-		if (!this.styleEl) {
-			this.styleEl = document.createElement('style');
-			document.head.appendChild(this.styleEl);
-		}
+			// 创建或更新style元素
+			try {
+				if (!this.styleEl) {
+					this.styleEl = document.createElement('style');
+					document.head.appendChild(this.styleEl);
+				}
 
-		// 比较并只更新变化的规则
-		let cssContent = '';
-		let hasChanges = false;
+				// 比较并只更新变化的规则
+				let hasChanges = false;
 
-		// 检查新规则
-		newRulesMap.forEach((rule, path) => {
-			const oldRule = this.cssRulesCache.get(path);
-			if (oldRule !== rule) {
-				hasChanges = true;
+				// 检查新规则和删除的规则
+				newRulesMap.forEach((rule, path) => {
+					if (this.cssRulesCache.get(path) !== rule) hasChanges = true;
+				});
+				this.cssRulesCache.forEach((_, path) => {
+					if (!newRulesMap.has(path)) hasChanges = true;
+				});
+
+				if (hasChanges) {
+					const cssContent = Array.from(newRulesMap.values()).join('\n');
+					this.styleEl.textContent = cssContent;
+					this.cssRulesCache = newRulesMap;
+				}
+			} catch (error) {
+				console.error('更新样式表失败:', error);
+				new Notice('更新文件显示样式失败，请检查控制台获取详细信息');
 			}
-		});
-
-		// 检查删除的规则
-		this.cssRulesCache.forEach((_, path) => {
-			if (!newRulesMap.has(path)) {
-				hasChanges = true;
-			}
-		});
-
-		// 只在规则发生变化时更新样式表
-		if (hasChanges) {
-			cssContent = Array.from(newRulesMap.values()).join('\n');
-			this.styleEl.textContent = cssContent;
-			this.cssRulesCache = newRulesMap;
+		} catch (error) {
+			console.error('更新文件显示失败:', error);
+			new Notice(`更新文件显示失败: ${error.message}`);
 		}
 	}
 
@@ -264,14 +335,42 @@ export default class MyPlugin extends Plugin {
 	private processMarkdownLinks(el: HTMLElement) {
 		if (!this.settings.enablePlugin) return;
 
-		const links = Array.from(el.querySelectorAll('a.internal-link'));
-		for (const link of links) {
-			const originalName = link.getAttribute('data-href');
-			if (!originalName) continue;
+		try {
+			const links = Array.from(el.querySelectorAll('a.internal-link'));
+			for (const link of links) {
+				try {
+					const originalName = link.getAttribute('data-href');
+					if (!originalName) continue;
 
-			const newName = this.getUpdatedFileName(originalName);
-			if (newName) {
-				link.textContent = newName;
+					const newName = this.getUpdatedFileName(originalName);
+					if (newName) {
+						link.textContent = newName;
+					}
+				} catch (error) {
+					console.error(`处理链接失败: ${link.getAttribute('data-href')}`, error);
+					// 继续处理其他链接
+				}
+			}
+		} catch (error) {
+			console.error('处理Markdown链接失败:', error);
+		}
+	}
+
+	// 清理指定文件夹的缓存
+	private clearFolderCache() {
+		const activeFolder = this.settings.activeFolder;
+		if (activeFolder) {
+			const normalizedPath = normalizePath(activeFolder);
+			this.fileCache.delete(normalizedPath);
+		}
+	}
+
+	// 清理过期缓存
+	private cleanupCache() {
+		const now = Date.now();
+		for (const [path, cacheItem] of this.fileCache) {
+			if (now - cacheItem.timestamp > this.CACHE_EXPIRE_TIME) {
+				this.fileCache.delete(path);
 			}
 		}
 	}
@@ -330,6 +429,59 @@ class FileNameDisplaySettingTab extends PluginSettingTab {
 					this.plugin.settings.activeFolder = normalizePath(value);
 					await this.plugin.saveSettings();
 				}));
+
+		new Setting(containerEl)
+			.setName('文件名匹配模式')
+			.setDesc('输入正则表达式来匹配文件名。使用捕获组()来指定要提取的部分。')
+			.addText(text => text
+				.setPlaceholder('^(.+?)_\\d{4}_\\d{2}_\\d{2}_(.+)$')
+				.setValue(this.plugin.settings.fileNamePattern)
+				.onChange(async (value) => {
+					try {
+						// 验证正则表达式的有效性
+						new RegExp(value);
+						this.plugin.settings.fileNamePattern = value;
+						await this.plugin.saveSettings();
+					} catch (error) {
+						new Notice('无效的正则表达式');
+					}
+				}));
+
+		new Setting(containerEl)
+			.setName('显示捕获组')
+			.setDesc('选择要显示的正则表达式捕获组的索引（0为完整匹配，1为第一个捕获组，以此类推）')
+			.addText(text => text
+				.setPlaceholder('2')
+				.setValue(String(this.plugin.settings.captureGroup))
+				.onChange(async (value) => {
+					const groupIndex = parseInt(value);
+					if (!isNaN(groupIndex) && groupIndex >= 0) {
+						this.plugin.settings.captureGroup = groupIndex;
+						await this.plugin.saveSettings();
+					} else {
+						new Notice('请输入有效的捕获组索引（大于等于0的整数）');
+					}
+				}));
+
+		// 添加示例说明
+		containerEl.createEl('div', {
+			text: '示例模式:',
+			cls: 'setting-item-description'
+		});
+
+		const examples = [
+			'^(.+?)_\\d{4}_\\d{2}_\\d{2}_(.+)$ - 匹配 xxx_2024_01_01_标题 格式',
+			'^\\d{8}-(.+)$ - 匹配 20240101-标题 格式',
+			'^(.+?)-\\d{4}(.+)$ - 匹配 前缀-2024标题 格式'
+		];
+
+		const ul = containerEl.createEl('ul');
+		examples.forEach(example => {
+			ul.createEl('li', {
+				text: example,
+				cls: 'setting-item-description'
+			});
+		});
 	}
 }
 
