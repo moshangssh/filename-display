@@ -4,7 +4,6 @@ import { MyPluginSettings } from '../../types/interfaces';
 export interface CrawlOptions {
     maxDepth: number;
     excludeFolders: string[];
-    fileExtensions: string[];
 }
 
 export class FileCrawler {
@@ -17,7 +16,6 @@ export class FileCrawler {
         this.options = {
             maxDepth: -1,
             excludeFolders: [],
-            fileExtensions: ['.md'],
             ...options
         };
     }
@@ -65,12 +63,7 @@ export class FileCrawler {
     }
 
     private shouldProcessFile(file: TFile): boolean {
-        if (!this.options.fileExtensions?.length) {
-            return true;
-        }
-        return this.options.fileExtensions.some(ext => 
-            file.extension.toLowerCase() === ext.toLowerCase().replace('.', '')
-        );
+        return true;
     }
 }
 

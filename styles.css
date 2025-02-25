@@ -7,7 +7,7 @@ If your plugin does not need CSS, delete this file.
 
 */
 
-/* 基础样式设置 */
+/* 删除未使用的基础样式 */
 .nav-file-title-content,
 .workspace-tab-header-inner-title,
 .view-header-title,
@@ -15,37 +15,7 @@ If your plugin does not need CSS, delete this file.
     position: relative;
 }
 
-/* 文件树导航栏基础样式 */
-[data-path] .nav-file-title-content::before {
-    position: absolute;
-    left: 0;
-    color: var(--nav-item-color);
-    font-size: var(--nav-item-size);
-    font-weight: var(--nav-item-weight);
-}
-
-/* 编辑器标签页标题基础样式 */
-.workspace-tab-header-inner-title::before {
-    position: absolute;
-    left: 0;
-    color: var(--tab-text-color);
-}
-
-/* 文件标题栏基础样式 */
-.view-header-title::before {
-    position: absolute;
-    left: 0;
-    color: var(--header-title-color);
-}
-
-/* 搜索结果和其他位置基础样式 */
-.tree-item-inner::before {
-    position: absolute;
-    left: 0;
-    color: var(--text-normal);
-}
-
-/* 添加新的链接样式 */
+/* 保留必要的链接样式 */
 .enhanced-link-widget {
     display: inline-block;
     position: relative;

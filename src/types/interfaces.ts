@@ -39,26 +39,3 @@ export interface StyleManager {
     clearStyles(): void;
 }
 
-export interface FileProcessorConfig {
-    maxBatchSize: number;
-    processingDelay: number;
-    retryAttempts: number;
-    retryDelay: number;
-}
-
-export interface ProcessingResult {
-    success: boolean;
-    error?: Error;
-    processedCount: number;
-    skippedCount: number;
-    duration: number;
-}
-
-export interface FileProcessingStats {
-    totalProcessed: number;
-    totalSkipped: number;
-    averageProcessingTime: number;
-    lastProcessingTime: number;
-    errors: Error[];
-}
-

@@ -20,9 +20,10 @@ export class DefaultFileProcessor implements FileProcessor {
             
             if (match && ValidationHelper.isValidCaptureGroup(this.settings.fileNamePattern, this.settings.captureGroup)) {
                 const result = match[this.settings.captureGroup];
-                if (result?.trim()) {
-                    this.updateNameMapping(originalName, result.trim());
-                    return result.trim();
+                if (result) {
+                    const displayName = result.trim();
+                    this.updateNameMapping(nameWithoutExt, displayName);
+                    return displayName;
                 }
             }
             
@@ -56,12 +57,14 @@ export class DefaultFileProcessor implements FileProcessor {
 
     processFiles(files: TFile[]): Map<string, string> {
         const processedNames = new Map<string, string>();
+        
         for (const file of files) {
             const newName = this.getUpdatedFileName(file.basename);
             if (newName) {
                 processedNames.set(file.path, newName);
             }
         }
+        
         return processedNames;
     }
 } 

@@ -1,9 +1,9 @@
 import { Plugin, TFile, TFolder } from 'obsidian';
 import { DebounceService } from '../services/debounce-service';
-import { PerformanceMonitor } from '../services/performance-monitor';
 import { ValidationHelper } from '../utils/validation';
 import { MyPluginSettings } from '../types/interfaces';
 import { FileNameDisplayPlugin } from './plugin';
+import { PerformanceMonitor } from '../utils/performance-decorator';
 
 export class EventHandler {
     private debounceService: DebounceService;
@@ -20,33 +20,26 @@ export class EventHandler {
     }
 
     private initializeEventListeners(): void {
-        // 文件打开事件
-        this.plugin.registerEvent(
-            this.plugin.app.workspace.on('file-open', () => {
-                this.handleFileEvent('file-open');
-            })
-        );
+        type WorkspaceEvent = 'file-open';
+        type VaultEvent = 'rename' | 'create' | 'delete';
+        
+        const events: Array<{
+            source: typeof this.plugin.app.workspace | typeof this.plugin.app.vault;
+            event: WorkspaceEvent | VaultEvent;
+        }> = [
+            { source: this.plugin.app.workspace, event: 'file-open' },
+            { source: this.plugin.app.vault, event: 'rename' },
+            { source: this.plugin.app.vault, event: 'create' },
+            { source: this.plugin.app.vault, event: 'delete' }
+        ];
 
-        // 文件重命名事件
-        this.plugin.registerEvent(
-            this.plugin.app.vault.on('rename', () => {
-                this.handleFileEvent('rename');
-            })
-        );
-
-        // 文件创建事件
-        this.plugin.registerEvent(
-            this.plugin.app.vault.on('create', () => {
-                this.handleFileEvent('create');
-            })
-        );
-
-        // 文件删除事件
-        this.plugin.registerEvent(
-            this.plugin.app.vault.on('delete', () => {
-                this.handleFileEvent('delete');
-            })
-        );
+        events.forEach(({ source, event }) => {
+            this.plugin.registerEvent(
+                source.on(event as any, () => {
+                    this.handleFileEvent(event);
+                })
+            );
+        });
 
         // 链接点击事件
         this.plugin.registerDomEvent(document, 'click', (evt: MouseEvent) => {

@@ -3,7 +3,6 @@ import { FileCacheItem, CacheStats, CacheManager } from '../types/interfaces';
 
 export class DefaultCacheManager implements CacheManager {
     private fileCache: Map<string, FileCacheItem> = new Map();
-    private weakFileRefs = new WeakMap<TFile, number>();
     private readonly CACHE_EXPIRE_TIME = 5 * 60 * 1000;
     
     private cacheStats: CacheStats = {
