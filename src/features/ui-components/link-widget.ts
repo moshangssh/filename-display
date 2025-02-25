@@ -17,6 +17,7 @@ export class LinkWidget extends WidgetType {
         const display = document.createElement('span');
         display.textContent = this.displayText;
         display.className = 'link-display cm-hmd-internal-link';
+        display.style.textDecoration = 'none';
         container.appendChild(display);
 
         if (this.settings.showOriginalNameOnHover) {

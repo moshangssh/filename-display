@@ -23,7 +23,7 @@ If your plugin does not need CSS, delete this file.
 
 .link-display {
     color: var(--text-accent);
-    text-decoration: underline;
+    text-decoration: none;
     cursor: pointer;
 }
 
@@ -49,7 +49,7 @@ If your plugin does not need CSS, delete this file.
 .internal-link,
 .cm-hmd-internal-link {
     cursor: pointer;
-    text-decoration: underline;
+    text-decoration: none;
     color: var(--text-accent);
 }
 
