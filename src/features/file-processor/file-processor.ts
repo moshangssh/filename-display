@@ -12,25 +12,22 @@ export class DefaultFileProcessor implements FileProcessor {
             const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
             
             if (!ValidationHelper.isValidRegex(this.settings.fileNamePattern)) {
-                return this.getFallbackName(nameWithoutExt);
+                return null;
             }
 
             const regex = new RegExp(this.settings.fileNamePattern);
             const match = nameWithoutExt.match(regex);
             
-            if (match && ValidationHelper.isValidCaptureGroup(this.settings.fileNamePattern, this.settings.captureGroup)) {
-                const result = match[this.settings.captureGroup];
-                if (result) {
-                    const displayName = result.trim();
-                    this.updateNameMapping(nameWithoutExt, displayName);
-                    return displayName;
-                }
+            if (match && match[this.settings.captureGroup]) {
+                const displayName = match[this.settings.captureGroup].trim();
+                this.updateNameMapping(nameWithoutExt, displayName);
+                return displayName;
             }
             
-            return this.getFallbackName(nameWithoutExt);
+            return null;
         } catch (error) {
-            console.error('文件名处理错误:', error);
-            return this.getFallbackName(originalName);
+            console.error("处理文件名失败:", error);
+            return null;
         }
     }
 

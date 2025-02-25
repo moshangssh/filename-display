@@ -66,18 +66,20 @@ export class EventHandler {
         const target = evt.target as HTMLElement;
         if (!target.matches('.internal-link, .cm-hmd-internal-link')) return;
 
-        evt.preventDefault();
+        // 只在需要时阻止默认行为
         const linkText = target.textContent;
         if (!linkText) return;
 
-        // 使用公共方法获取原始文件名
-        const originalName = this.plugin.getOriginalFileName(linkText) || linkText;
-        
-        // 使用 Obsidian API 打开链接
+        // 获取原始文件名
+        const originalName = this.plugin.getOriginalFileName(linkText);
+        if (!originalName) return; // 如果没有映射，让Obsidian默认处理
+
+        // 阻止默认行为并使用自定义处理
+        evt.preventDefault();
         this.plugin.app.workspace.openLinkText(
             originalName,
-            '', // 源文件路径,这里可以为空
-            evt.ctrlKey || evt.metaKey // 是否在新窗口打开
+            '', 
+            evt.ctrlKey || evt.metaKey
         );
     }
 

@@ -33,19 +33,21 @@ export class CodeMirrorExtension {
                     const line = doc.line(i);
                     const text = line.text;
 
-                    if (text.startsWith("```")) {
+                    if (text.trim().startsWith("```")) {
                         inCodeBlock = !inCodeBlock;
                         continue;
                     }
 
                     if (inCodeBlock) continue;
 
-                    const linkRegex = /\[\[([^\]]+)\]\]|\[([^\]]+)\]\(([^\)]+)\)/g;
+                    const linkRegex = /\[\[([^\]|#]+)(?:\|[^\]]+)?(?:#[^\]]+)?\]\]|\[([^\]]+)\]\(([^\)]+)\)/g;
                     let match;
 
                     while ((match = linkRegex.exec(text)) !== null) {
                         try {
                             const linkText = match[1] || match[2];
+                            if (!linkText) continue;
+                            
                             const from = line.from + match.index + (match[1] ? 2 : 1);
                             const to = from + linkText.length;
 

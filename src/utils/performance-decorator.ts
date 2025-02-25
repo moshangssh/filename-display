@@ -13,7 +13,7 @@ export function measurePerformance(options: {
                 const duration = performance.now() - start;
                 
                 if (duration > threshold) {
-                    console[logLevel](`${propertyKey} 执行时间过长: ${duration.toFixed(2)}ms`);
+                    console[logLevel](`${propertyKey} 执行时间: ${duration.toFixed(2)}ms`);
                 }
                 
                 return result;
@@ -37,7 +37,7 @@ export class PerformanceMonitor {
         const now = Date.now();
         
         if (now - this.lastUpdateTime > this.MONITOR_INTERVAL) {
-            console.log(`文件显示更新次数(每分钟): ${this.updateCount}`);
+            console.debug(`文件显示更新频率: ${this.updateCount}/分钟`);
             this.updateCount = 0;
             this.lastUpdateTime = now;
         }

@@ -58,3 +58,41 @@ If your plugin does not need CSS, delete this file.
     text-decoration: none;
     color: var(--text-accent-hover);
 }
+
+/* 文件名显示代码块样式 */
+.filename-display-container {
+    padding: 10px;
+    border-radius: 5px;
+    background-color: var(--background-secondary);
+}
+
+.filename-display-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 10px;
+}
+
+.filename-display-table th,
+.filename-display-table td {
+    padding: 6px 10px;
+    border: 1px solid var(--background-modifier-border);
+    text-align: left;
+}
+
+.filename-display-table th {
+    background-color: var(--background-secondary-alt);
+    font-weight: bold;
+}
+
+.filename-display-info {
+    font-size: 0.85em;
+    color: var(--text-muted);
+    margin-top: 8px;
+}
+
+.filename-display-error {
+    color: var(--text-error);
+    padding: 8px;
+    border-left: 3px solid var(--text-error);
+    background-color: var(--background-modifier-error);
+}

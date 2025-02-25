@@ -22,8 +22,62 @@ export class FileCrawler {
 
     async getAllFiles(folder: TFolder): Promise<TFile[]> {
         const files: TFile[] = [];
-        await this.processFilesInBatches(folder, files, 0);
+        
+        // 使用异步处理，避免阻塞UI
+        await this.processFilesWithDelay(folder, files, 0);
+        
         return files;
+    }
+
+    private async processFilesWithDelay(folder: TFolder, files: TFile[], depth: number): Promise<void> {
+        if (this.options.maxDepth !== -1 && depth > this.options.maxDepth) {
+            return;
+        }
+
+        if (this.options.excludeFolders?.includes(folder.path)) {
+            return;
+        }
+
+        // 先处理当前文件夹中的文件，优先显示
+        const currentFiles = folder.children.filter(child => 
+            child instanceof TFile && child.extension === 'md'
+        ) as TFile[];
+        
+        if (currentFiles.length > 0) {
+            // 小批量添加文件，每批后让出UI线程
+            const batchSize = Math.min(50, this.settings.batchSize);
+            for (let i = 0; i < currentFiles.length; i += batchSize) {
+                const batch = currentFiles.slice(i, i + batchSize);
+                files.push(...batch);
+                
+                // 每批处理后让出UI线程
+                if (i + batchSize < currentFiles.length) {
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
+                
+                // 如果已达到总批处理大小限制，提前返回
+                if (files.length >= this.settings.batchSize) {
+                    return;
+                }
+            }
+        }
+        
+        // 然后处理子文件夹
+        const subFolders = folder.children.filter(child => 
+            child instanceof TFolder
+        ) as TFolder[];
+        
+        for (const subFolder of subFolders) {
+            // 每处理一个子文件夹前让出UI线程
+            await new Promise(resolve => setTimeout(resolve, 0));
+            
+            // 如果已达到总批处理大小限制，提前返回
+            if (files.length >= this.settings.batchSize) {
+                return;
+            }
+            
+            await this.processFilesWithDelay(subFolder, files, depth + 1);
+        }
     }
 
     private async processFilesInBatches(folder: TFolder, files: TFile[], depth: number): Promise<void> {

@@ -9,7 +9,8 @@ import { CodeMirrorExtension } from '../features/editor-integration/code-mirror-
 import { ValidationHelper } from '../utils/validation';
 import { PathHelper } from '../utils/path-helper';
 import { FileNameDisplaySettingTab } from '../features/ui-components/setting-tab';
-import { FileCrawler } from '../features/file-processor/file-crawler';
+import { FileCrawler } from '../features/file-processor';
+import { CodeBlockProcessor } from '../features/markdown-processor/code-block-processor';
 
 export const DEFAULT_SETTINGS: MyPluginSettings = {
     activeFolder: '',
@@ -36,6 +37,7 @@ export class FileNameDisplayPlugin extends Plugin {
     private eventHandler: EventHandler;
     private codeMirrorExt: CodeMirrorExtension;
     private fileCrawler: FileCrawler;
+    private codeBlockProcessor: CodeBlockProcessor;
 
     async onload() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -56,6 +58,7 @@ export class FileNameDisplayPlugin extends Plugin {
         this.eventHandler = new EventHandler(this, this.settings, () => this.updateFileDisplay());
         this.codeMirrorExt = new CodeMirrorExtension(this.settings, name => this.fileProcessor.getUpdatedFileName(name));
         this.fileCrawler = new FileCrawler(this.settings);
+        this.codeBlockProcessor = new CodeBlockProcessor(this);
     }
 
     private registerComponents(): void {
@@ -105,6 +108,10 @@ export class FileNameDisplayPlugin extends Plugin {
 
     public getOriginalFileName(displayName: string): string | null {
         return this.fileProcessor.findOriginalFileName(displayName);
+    }
+
+    public getUpdatedFileName(originalName: string): string | null {
+        return this.fileProcessor.getUpdatedFileName(originalName);
     }
 
     // ... 其他必要的方法
