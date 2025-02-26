@@ -88,7 +88,7 @@ export const linkWidgetStyles = EditorView.baseTheme({
     },
     '.link-display': {
         color: 'var(--text-accent)',
-        textDecoration: 'underline',
+        textDecoration: 'none',
         cursor: 'pointer'
     },
     '.link-tooltip': {

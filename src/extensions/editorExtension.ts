@@ -120,7 +120,7 @@ export function createEditorExtension(plugin: any) {
         },
         '.link-display': {
             color: 'var(--text-accent)',
-            textDecoration: 'underline',
+            textDecoration: 'none',
             cursor: 'pointer'
         },
         '.link-tooltip': {
