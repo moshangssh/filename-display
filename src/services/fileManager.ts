@@ -56,8 +56,11 @@ export class FileManager {
             
             const files: TFile[] = [];
             
+            // 过滤出 TFile 类型的文件
+            const validFiles = folder.children.filter(child => child instanceof TFile);
+            
             // 使用迭代器进行分批处理
-            await this.processFolder(folder, files);
+            await this.processFiles(validFiles, this.config.batchSize);
             
             // 更新缓存
             this.cacheManager.setCachedFiles(folder.path, files);
@@ -73,31 +76,22 @@ export class FileManager {
      * 递归处理文件夹
      * 使用批处理机制避免UI阻塞
      */
-    private async processFolder(folder: TFolder, files: TFile[]): Promise<void> {
+    private async processFiles(files: TFile[], batchSize: number): Promise<void> {
         let batch: TFile[] = [];
-        
         const processBatch = async () => {
             if (batch.length > 0) {
                 files.push(...batch);
                 batch = [];
-                // 让出主线程
                 await new Promise(resolve => setTimeout(resolve, 0));
             }
         };
-        
-        for (const child of folder.children) {
-            if (child instanceof TFile) {
-                batch.push(child);
-                
-                if (batch.length >= this.config.batchSize) {
-                    await processBatch();
-                }
-            } else if (child instanceof TFolder) {
-                await processBatch(); // 处理当前批次
-                await this.processFolder(child, files);
+
+        for (const file of files) {
+            batch.push(file);
+            if (batch.length >= batchSize) {
+                await processBatch();
             }
         }
-        
         await processBatch(); // 处理剩余文件
     }
     
@@ -153,7 +147,7 @@ export class FileManager {
         const activeFolder = this.config.activeFolder;
         if (activeFolder) {
             const normalizedPath = normalizePath(activeFolder);
-            this.cacheManager.clearPathCache(normalizedPath);
+            this.cacheManager.clearCache(normalizedPath);
         }
     }
     

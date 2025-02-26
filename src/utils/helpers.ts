@@ -10,17 +10,9 @@ const LOG_PREFIX = '[文件名显示]';
  * @param message 日志消息
  * @param data 可选的额外数据
  */
-export function logDebug(message: string, data?: any): void {
-    console.log(`${LOG_PREFIX} ${message}`, data || '');
-}
-
-/**
- * 记录错误日志
- * @param message 错误消息
- * @param error 错误对象
- */
-export function logError(message: string, error?: any): void {
-    console.error(`${LOG_PREFIX} ${message}`, error || '');
+export function log(message: string, data?: any, isError: boolean = false): void {
+    const prefix = isError ? '错误' : '调试';
+    console[isError ? 'error' : 'log'](`${LOG_PREFIX} [${prefix}] ${message}`, data || '');
 }
 
 /**
@@ -45,7 +37,7 @@ export function safeRegExMatch(pattern: string, input: string): RegExpMatchArray
         const regex = new RegExp(pattern);
         return input.match(regex);
     } catch (error) {
-        logError(`正则表达式错误: ${pattern}`, error);
+        log('正则表达式错误', error, true);
         return null;
     }
 }
@@ -97,7 +89,7 @@ export function extractDisplayName(
         
         return getFallbackName(fileName);
     } catch (error) {
-        logError('文件名处理错误', error);
+        log('文件名处理错误', error, true);
         return getFallbackName(fileName);
     }
 }
@@ -148,12 +140,12 @@ export function measurePerformance(
             if (entries.length > 0) {
                 const duration = entries[0].duration;
                 if (logResult) {
-                    logDebug(`性能: ${startMark} 到 ${endMark} = ${duration.toFixed(2)}ms`);
+                    log(`性能: ${startMark} 到 ${endMark} = ${duration.toFixed(2)}ms`);
                 }
                 return duration;
             }
         } catch (error) {
-            logError('性能测量失败', error);
+            log('性能测量失败', error, true);
         }
     }
     return undefined;
@@ -210,7 +202,7 @@ export function normalizeAndValidatePath(path: string): string | null {
     try {
         return normalizePath(path);
     } catch (error) {
-        logError(`路径规范化失败: ${path}`, error);
+        log('路径规范化失败', error, true);
         return null;
     }
 }
@@ -253,7 +245,7 @@ export function createDebouncedFunction<T extends (...args: any[]) => any>(
             const timeSinceLastExecution = now - lastExecutionTime;
             
             if (timeSinceLastExecution > 60000) { // 每分钟记录一次
-                logDebug(`${name} 在过去的分钟内被调用了 ${callCount} 次`);
+                log(`${name} 在过去的分钟内被调用了 ${callCount} 次`);
                 callCount = 0;
                 lastExecutionTime = now;
             }

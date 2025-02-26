@@ -109,13 +109,17 @@ export class CacheManager {
      * 清理指定路径的缓存
      * @param path 文件夹路径
      */
-    public clearPathCache(path: string): void {
-        const cacheItem = this.fileCache.get(path);
-        if (cacheItem) {
-            const itemSize = this.estimateItemSize(cacheItem);
-            this.cacheStats.totalSize -= itemSize;
-            this.cacheStats.itemCount--;
-            this.fileCache.delete(path);
+    public clearCache(path?: string): void {
+        if (path) {
+            const cacheItem = this.fileCache.get(path);
+            if (cacheItem) {
+                const itemSize = this.estimateItemSize(cacheItem);
+                this.cacheStats.totalSize -= itemSize;
+                this.cacheStats.itemCount--;
+                this.fileCache.delete(path);
+            }
+        } else {
+            this.clearAllCache(); // 清空所有缓存
         }
     }
     
