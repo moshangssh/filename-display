@@ -165,22 +165,33 @@ export default class FileDisplayPlugin extends Plugin {
 			// 清除旧映射
 			this.displayManager.clearNameMapping();
 			
-			// 处理每个文件
-			for (const file of files) {
+			// 批量处理文件以减少重排
+			const updates = files.map(file => {
 				try {
 					const originalName = file.basename;
 					const newName = this.displayManager.getUpdatedFileName(originalName);
 					
 					if (newName !== null) {
-						// 更新映射和CSS规则
 						this.displayManager.updateNameMapping(originalName, newName);
-						const cssRule = this.displayManager.generateCssRule(file, newName);
-						cssRules.set(file.path, cssRule);
+						return {
+							file,
+							newName
+						};
 					}
+					return null;
 				} catch (error) {
 					console.error(`处理文件失败: ${file.path}`, error);
+					return null;
 				}
-			}
+			}).filter(Boolean);
+
+			// 批量更新CSS规则
+			updates.forEach(update => {
+				if (update) {
+					const cssRule = this.displayManager.generateCssRule(update.file, update.newName);
+					cssRules.set(update.file.path, cssRule);
+				}
+			});
 
 			// 更新样式表
 			this.displayManager.updateStyleSheet(cssRules);
@@ -188,9 +199,9 @@ export default class FileDisplayPlugin extends Plugin {
 			// 性能监控
 			this.updateCount++;
 			const now = Date.now();
-			if (now - this.lastUpdateTime > 60000) {
-				console.log(`文件显示更新计数 (最近一分钟): ${this.updateCount}`);
-				this.updateCount = 0;
+			if (this.updateCount % 10 === 0) {
+				const avgTime = (now - this.lastUpdateTime) / 10;
+				console.log(`平均更新时间: ${avgTime}ms`);
 				this.lastUpdateTime = now;
 			}
 		} catch (error) {

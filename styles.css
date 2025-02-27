@@ -88,3 +88,68 @@ If your plugin does not need CSS, delete this file.
     text-decoration: none;
     color: var(--text-accent-hover);
 }
+
+/* 基础性能优化 */
+* {
+    /* 启用GPU加速 */
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    perspective: 1000;
+    /* 优化重排重绘 */
+    will-change: transform;
+}
+
+/* 文件树性能优化 */
+.nav-file-title-content,
+.workspace-tab-header-inner-title,
+.view-header-title,
+.tree-item-inner {
+    /* 优化层叠上下文 */
+    isolation: isolate;
+    /* 优化合成层 */
+    transform: translateZ(0);
+    will-change: transform;
+    /* 优化动画性能 */
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 链接组件优化 */
+.enhanced-link-widget {
+    /* 创建新的层叠上下文 */
+    isolation: isolate;
+    /* 优化hover效果性能 */
+    will-change: transform;
+    transform: translateZ(0);
+}
+
+.link-tooltip {
+    /* 优化tooltip显示性能 */
+    transform: translateZ(0);
+    will-change: transform, opacity;
+    transition: opacity 0.2s ease-in-out;
+}
+
+/* 优化滚动性能 */
+.nav-files-container {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    overscroll-behavior: contain;
+}
+
+/* 优化动画性能 */
+@media (prefers-reduced-motion: no-preference) {
+    .nav-file-title-content::before,
+    .workspace-tab-header-inner-title::before,
+    .view-header-title::before,
+    .tree-item-inner::before {
+        transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+}
+
+/* 针对低性能设备的优化 */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        transition: none !important;
+        animation: none !important;
+    }
+}

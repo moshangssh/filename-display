@@ -16,36 +16,39 @@ export function generateCssRule(file: TFile, newName: string): string {
     const escapedName = CSS.escape(newName);
     
     return `
-        /* 文件树导航栏 */
-        [data-path="${escapedPath}"] .nav-file-title-content {
+        [data-path="${escapedPath}"] {
+            --display-name: "${escapedName}";
+        }
+    `;
+}
+
+/**
+ * 生成基础CSS规则
+ * 只需在插件初始化时添加一次
+ */
+export function generateBaseCssRules(): string {
+    return `
+        /* 通用样式 */
+        [data-path] .nav-file-title-content,
+        [data-path] .workspace-tab-header-inner-title,
+        [data-path] .view-header-title,
+        [data-path] .tree-item-inner {
             color: transparent;
+            position: relative;
         }
-        [data-path="${escapedPath}"] .nav-file-title-content::before {
-            content: "${escapedName}";
-        }
-        
-        /* 编辑器标签页标题 */
-        .workspace-tab-header[data-path="${escapedPath}"] .workspace-tab-header-inner-title {
-            color: transparent;
-        }
-        .workspace-tab-header[data-path="${escapedPath}"] .workspace-tab-header-inner-title::before {
-            content: "${escapedName}";
-        }
-        
-        /* 文件标题栏 */
-        .view-header[data-path="${escapedPath}"] .view-header-title {
-            color: transparent;
-        }
-        .view-header[data-path="${escapedPath}"] .view-header-title::before {
-            content: "${escapedName}";
-        }
-        
-        /* 搜索结果和其他位置 */
-        .tree-item[data-path="${escapedPath}"] .tree-item-inner {
-            color: transparent;
-        }
-        .tree-item[data-path="${escapedPath}"] .tree-item-inner::before {
-            content: "${escapedName}";
+
+        /* 使用CSS变量实现内容替换 */
+        [data-path] .nav-file-title-content::before,
+        [data-path] .workspace-tab-header-inner-title::before,
+        [data-path] .view-header-title::before,
+        [data-path] .tree-item-inner::before {
+            content: var(--display-name);
+            position: absolute;
+            left: 0;
+            color: var(--text-normal);
+            /* 添加GPU加速 */
+            transform: translateZ(0);
+            will-change: transform;
         }
     `;
 }
@@ -63,11 +66,12 @@ export function updateStyleElement(
 ): HTMLStyleElement {
     if (!styleEl) {
         styleEl = document.createElement('style');
+        styleEl.textContent = generateBaseCssRules();
         document.head.appendChild(styleEl);
     }
     
     const cssContent = Array.from(cssRules.values()).join('\n');
-    styleEl.textContent = cssContent;
+    styleEl.textContent = generateBaseCssRules() + cssContent;
     
     return styleEl;
 }  
