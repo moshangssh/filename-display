@@ -12,7 +12,8 @@ const LOG_PREFIX = '[文件名显示]';
  */
 export function log(message: string, data?: any, isError: boolean = false): void {
     const prefix = isError ? '错误' : '调试';
-    console[isError ? 'error' : 'log'](`${LOG_PREFIX} [${prefix}] ${message}`, data || '');
+    const timestamp = new Date().toISOString();
+    console[isError ? 'error' : 'log'](`${LOG_PREFIX} [${timestamp}] [${prefix}] ${message}`, data || '');
 }
 
 /**
