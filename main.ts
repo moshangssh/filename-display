@@ -24,9 +24,11 @@ export default class FileDisplayPlugin extends Plugin {
 		
 		// 初始化服务
 		this.cacheManager = new CacheManager({
-			maxCacheSize: this.settings.maxCacheSize,
+			maxMemoryCacheSize: this.settings.maxCacheSize,
+			maxDiskCacheSize: this.settings.maxCacheSize * 10,
 			expireTime: 5 * 60 * 1000,
-			cleanupInterval: 10 * 60 * 1000
+			cleanupInterval: 10 * 60 * 1000,
+			progressiveCleanupSize: 100
 		});
 		
 		this.fileManager = new FileManager(
@@ -91,7 +93,7 @@ export default class FileDisplayPlugin extends Plugin {
 
 		// 添加定期清理缓存的定时器
 		this.registerInterval(
-			window.setInterval(() => this.cacheManager.cleanup(), 10 * 60 * 1000)
+			window.setInterval(() => this.cacheManager.progressiveCleanup(), 10 * 60 * 1000)
 		);
 
 		// 添加链接点击事件处理
@@ -121,7 +123,7 @@ export default class FileDisplayPlugin extends Plugin {
 	onunload() {
 		// 清理资源
 		this.displayManager.destroy();
-		this.cacheManager.clearAllCache();
+		this.cacheManager.clear();
 	}
 
 	// 获取更新后的文件名
@@ -218,8 +220,12 @@ export default class FileDisplayPlugin extends Plugin {
 		await this.saveData(this.settings);
 		
 		// 更新缓存管理器配置
-		this.cacheManager.updateConfig({
-			maxCacheSize: this.settings.maxCacheSize
+		this.cacheManager = new CacheManager({
+			maxMemoryCacheSize: this.settings.maxCacheSize,
+			maxDiskCacheSize: this.settings.maxCacheSize * 10,
+			expireTime: 5 * 60 * 1000,
+			cleanupInterval: 10 * 60 * 1000,
+			progressiveCleanupSize: 100
 		});
 		
 		// 更新显示管理器配置

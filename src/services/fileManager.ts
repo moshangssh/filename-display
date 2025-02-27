@@ -230,7 +230,7 @@ export class FileManager {
         const activeFolder = this.config.activeFolder;
         if (activeFolder) {
             const normalizedPath = normalizePath(activeFolder);
-            this.cacheManager.clearCache(normalizedPath);
+            this.cacheManager.clear(normalizedPath);
         }
     }
     
