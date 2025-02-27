@@ -1,4 +1,5 @@
 import { TFile, normalizePath, Notice } from 'obsidian';
+import { RegexCache } from './regexCache';
 
 /**
  * 插件日志前缀
@@ -35,7 +36,7 @@ export function showNotice(message: string, timeout: number = 3000): Notice {
  */
 export function safeRegExMatch(pattern: string, input: string): RegExpMatchArray | null {
     try {
-        const regex = new RegExp(pattern);
+        const regex = RegexCache.getInstance().get(pattern);
         return input.match(regex);
     } catch (error) {
         log('正则表达式错误', error, true);
@@ -50,7 +51,7 @@ export function safeRegExMatch(pattern: string, input: string): RegExpMatchArray
  */
 export function isValidRegEx(pattern: string): boolean {
     try {
-        new RegExp(pattern);
+        RegexCache.getInstance().get(pattern);
         return true;
     } catch (error) {
         return false;

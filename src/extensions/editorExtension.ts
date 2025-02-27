@@ -1,6 +1,7 @@
 import { Decoration, DecorationSet, EditorView, WidgetType } from '@codemirror/view';
 import { StateField, RangeSetBuilder } from '@codemirror/state';
 import { FileDisplayPluginSettings } from '../types';
+import { RegexCache } from '../utils/regexCache';
 
 // 自定义链接部件
 export class EnhancedLinkWidget extends WidgetType {
@@ -83,7 +84,7 @@ export function createEditorExtension(plugin: any) {
                 if (inCodeBlock) continue;
 
                 // 使用正则匹配所有可能的链接格式
-                const linkRegex = /\[\[([^\]]+)\]\]|\[([^\]]+)\]\(([^\)]+)\)/g;
+                const linkRegex = RegexCache.getInstance().get('\\[\\[([^\\]]+)\\]\\]|\\[([^\\]]+)\\]\\(([^\\)]+)\\)', 'g');
                 let match;
 
                 while ((match = linkRegex.exec(text)) !== null) {

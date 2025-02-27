@@ -1,6 +1,6 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFolder, TFile, normalizePath } from 'obsidian';
 import { FileDisplayPluginSettings, DEFAULT_SETTINGS } from './src/types';
-import { FileManager } from './src/utils/fileManager';
+import { FileManager } from './src/services/fileManager';
 import { createEditorExtension } from './src/extensions/editorExtension';
 import { processMarkdownLinks } from './src/extensions/markdownProcessor';
 import { CacheManager } from './src/services/cacheManager';

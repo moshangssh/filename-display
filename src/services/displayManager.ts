@@ -1,4 +1,6 @@
 import { TFile } from 'obsidian';
+import { DisplayManagerConfig } from '../types';
+import { RegexCache } from '../utils/regexCache';
 
 /**
  * 文件名映射项接口，表示原始名称和显示名称之间的关系
@@ -6,15 +8,6 @@ import { TFile } from 'obsidian';
 export interface NameMapping {
     originalName: string;
     displayName: string;
-}
-
-/**
- * 显示管理器配置接口
- */
-export interface DisplayManagerConfig {
-    fileNamePattern: string;     // 文件名匹配模式
-    captureGroup: number;        // 要显示的捕获组索引
-    showOriginalNameOnHover: boolean; // 悬停显示原始名称
 }
 
 /**
@@ -47,7 +40,7 @@ export class DisplayManager {
             const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
             
             // 使用配置的正则表达式进行匹配
-            const regex = new RegExp(this.config.fileNamePattern);
+            const regex = RegexCache.getInstance().get(this.config.fileNamePattern);
             const match = nameWithoutExt.match(regex);
             
             // 验证捕获组索引是否有效

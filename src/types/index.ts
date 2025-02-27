@@ -33,4 +33,11 @@ export interface CacheStats {
     totalSize: number;
     itemCount: number;
     lastCleanup: number;
+}
+
+// 显示管理器配置接口
+export interface DisplayManagerConfig {
+    fileNamePattern: string;
+    captureGroup: number;
+    showOriginalNameOnHover: boolean;
 }  
