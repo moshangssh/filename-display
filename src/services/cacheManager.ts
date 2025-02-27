@@ -1,6 +1,15 @@
 import { TFile } from 'obsidian';
 
 /**
+ * 缓存管理器配置接口
+ */
+export interface CacheManagerConfig {
+    maxCacheSize: number;        // 最大缓存大小(MB)
+    expireTime: number;          // 缓存过期时间(ms)
+    cleanupInterval: number;     // 清理间隔(ms)
+}
+
+/**
  * 缓存项接口
  */
 export interface CacheItem<T> {
@@ -32,6 +41,13 @@ export interface CacheStats {
  */
 export class CacheManager {
     private fileCache: Map<string, CacheItem<TFile[]>> = new Map();
+    private indexCache: Map<string, {
+        files: Map<string, {
+            path: string;
+            lastModified: number;
+        }>;
+        timestamp: number;
+    }> = new Map();
     private weakFileRefs = new WeakMap<TFile, number>();
     private cacheStats: CacheStats = {
         totalSize: 0,
@@ -39,16 +55,9 @@ export class CacheManager {
         lastCleanup: Date.now()
     };
     
-    private config: CacheConfig = {
-        maxCacheSize: 100,            // 默认100MB
-        expireTime: 5 * 60 * 1000,    // 默认5分钟过期
-        cleanupInterval: 10 * 60 * 1000 // 默认10分钟清理一次
-    };
-    
-    constructor(config?: Partial<CacheConfig>) {
-        if (config) {
-            this.updateConfig(config);
-        }
+    constructor(private config: CacheManagerConfig) {
+        // 定期清理过期缓存
+        setInterval(() => this.cleanup(), this.config.cleanupInterval);
     }
     
     /**
@@ -147,40 +156,23 @@ export class CacheManager {
      * 移除过期或过大的缓存项
      */
     public cleanup(): void {
-        try {
-            const now = Date.now();
-            let cleanupCount = 0;
-            let freedSize = 0;
-            
-            // 使用数组存储待删除的缓存项
-            const toDelete: string[] = [];
-            
-            // 时间和大小双重检查
-            for (const [path, cacheItem] of this.fileCache) {
-                const isExpired = now - cacheItem.timestamp > this.config.expireTime;
-                const itemSize = this.estimateItemSize(cacheItem);
-                
-                if (isExpired || this.cacheStats.totalSize > this.config.maxCacheSize * 1024 * 1024) {
-                    toDelete.push(path);
-                    this.cacheStats.totalSize -= itemSize;
-                    this.cacheStats.itemCount--;
-                    cleanupCount++;
-                    freedSize += itemSize;
-                }
-            }
-            
-            // 批量删除缓存项
-            for (const path of toDelete) {
+        const now = Date.now();
+        
+        // 清理文件缓存
+        for (const [path, item] of this.fileCache.entries()) {
+            if (now - item.timestamp > this.config.expireTime) {
+                const itemSize = this.estimateItemSize(item);
+                this.cacheStats.totalSize -= itemSize;
+                this.cacheStats.itemCount--;
                 this.fileCache.delete(path);
             }
-            
-            if (cleanupCount > 0) {
-                console.log(`[文件名显示] 缓存清理: 移除了 ${cleanupCount} 项, 释放 ${(freedSize/1024/1024).toFixed(2)}MB`);
+        }
+        
+        // 清理索引缓存
+        for (const [path, item] of this.indexCache.entries()) {
+            if (now - item.timestamp > this.config.expireTime) {
+                this.indexCache.delete(path);
             }
-            
-            this.cacheStats.lastCleanup = now;
-        } catch (error) {
-            console.error('[文件名显示] 缓存清理失败:', error);
         }
     }
     
@@ -200,5 +192,41 @@ export class CacheManager {
         size += 8;
         
         return size;
+    }
+
+    /**
+     * 更新文件索引
+     */
+    public updateFileIndex(folderPath: string, files: TFile[]): void {
+        const now = Date.now();
+        const fileMap = new Map();
+        
+        files.forEach(file => {
+            fileMap.set(file.path, {
+                path: file.path,
+                lastModified: file.stat.mtime
+            });
+        });
+        
+        this.indexCache.set(folderPath, {
+            files: fileMap,
+            timestamp: now
+        });
+    }
+
+    /**
+     * 获取文件索引
+     */
+    public getFileIndex(folderPath: string) {
+        const indexItem = this.indexCache.get(folderPath);
+        if (!indexItem) return null;
+        
+        const now = Date.now();
+        if (now - indexItem.timestamp > this.config.expireTime) {
+            this.indexCache.delete(folderPath);
+            return null;
+        }
+        
+        return indexItem.files;
     }
 }  

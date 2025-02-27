@@ -31,12 +31,44 @@ export class FileManager {
         lastCleanup: Date.now()
     };
     private readonly CACHE_EXPIRE_TIME = 5 * 60 * 1000; // 5分钟过期
+    private worker: Worker | null = null;
 
     constructor(
         private app: App,
         private cacheManager: CacheManager,
         private config: FileManagerConfig
-    ) {}
+    ) {
+        this.initializeWorker();
+    }
+    
+    /**
+     * 初始化Web Worker
+     */
+    private initializeWorker() {
+        try {
+            const workerCode = `
+                self.onmessage = async function(e) {
+                    const { type, data } = e.data;
+                    if (type === 'scan') {
+                        // Worker中的文件扫描逻辑
+                        self.postMessage({ type: 'progress', data: '开始扫描' });
+                    }
+                }
+            `;
+            const blob = new Blob([workerCode], { type: 'application/javascript' });
+            this.worker = new Worker(URL.createObjectURL(blob));
+            
+            this.worker.onmessage = (e) => {
+                const { type, data } = e.data;
+                if (type === 'progress') {
+                    console.log('Worker进度:', data);
+                }
+            };
+        } catch (error) {
+            console.error('Worker初始化失败:', error);
+            this.worker = null;
+        }
+    }
     
     /**
      * 更新配置
@@ -61,6 +93,37 @@ export class FileManager {
     }
     
     /**
+     * 异步生成器：遍历文件夹
+     */
+    private async *traverseFolder(folder: TFolder): AsyncGenerator<TFile, void, unknown> {
+        const now = Date.now();
+        let batch: TFile[] = [];
+        
+        for (const child of folder.children) {
+            if (child instanceof TFile) {
+                batch.push(child);
+                this.weakFileRefs.set(child, now);
+                
+                if (batch.length >= this.config.batchSize) {
+                    yield* batch;
+                    batch = [];
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
+            } else if (child instanceof TFolder) {
+                if (batch.length > 0) {
+                    yield* batch;
+                    batch = [];
+                }
+                yield* this.traverseFolder(child);
+            }
+        }
+        
+        if (batch.length > 0) {
+            yield* batch;
+        }
+    }
+    
+    /**
      * 异步获取文件夹内所有文件
      * 使用缓存机制优化性能
      */
@@ -69,42 +132,17 @@ export class FileManager {
             const now = Date.now();
             const cacheItem = this.fileCache.get(folder.path);
             
+            // 检查缓存
             if (cacheItem && (now - cacheItem.timestamp) < this.CACHE_EXPIRE_TIME) {
                 return cacheItem.files;
             }
             
             const files: TFile[] = [];
             
-            // 使用迭代器进行分批处理
-            const processFiles = async (folder: TFolder) => {
-                let batch: TFile[] = [];
-                
-                const processBatch = async () => {
-                    if (batch.length > 0) {
-                        files.push(...batch);
-                        batch = [];
-                        await new Promise(resolve => setTimeout(resolve, 0));
-                    }
-                };
-                
-                for (const child of folder.children) {
-                    if (child instanceof TFile) {
-                        batch.push(child);
-                        this.weakFileRefs.set(child, now);
-                        
-                        if (batch.length >= this.config.batchSize) {
-                            await processBatch();
-                        }
-                    } else if (child instanceof TFolder) {
-                        await processBatch(); // 处理当前批次
-                        await processFiles(child);
-                    }
-                }
-                
-                await processBatch(); // 处理剩余文件
-            };
-            
-            await processFiles(folder);
+            // 使用异步生成器遍历文件
+            for await (const file of this.traverseFolder(folder)) {
+                files.push(file);
+            }
             
             // 更新缓存和统计
             const itemSize = this.estimateItemSize({files, timestamp: now});
@@ -116,10 +154,27 @@ export class FileManager {
                 timestamp: now
             });
             
+            // 在后台触发索引预构建
+            this.triggerBackgroundIndexing(folder);
+            
             return files;
         } catch (error) {
             console.error('[Filename Display] 获取文件失败:', error);
             return [];
+        }
+    }
+    
+    /**
+     * 触发后台索引预构建
+     */
+    private triggerBackgroundIndexing(folder: TFolder) {
+        if (this.worker) {
+            this.worker.postMessage({
+                type: 'scan',
+                data: {
+                    folderPath: folder.path
+                }
+            });
         }
     }
     
