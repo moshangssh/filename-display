@@ -7,137 +7,192 @@ If your plugin does not need CSS, delete this file.
 
 */
 
+/* 主题变量 */
+:root {
+  /* 颜色系统 */
+  --primary-color: var(--text-accent);
+  --primary-color-hover: var(--text-accent-hover);
+  --text-normal: var(--text-normal);
+  --bg-hover: var(--background-modifier-hover);
+  
+  /* 排版系统 */
+  --font-size-small: 12px;
+  --font-size-base: 14px;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  
+  /* 间距系统 */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  
+  /* 动画系统 */
+  --transition-quick: 0.2s ease-in-out;
+  --transition-normal: 0.3s ease-in-out;
+  
+  /* 组件特定变量 */
+  --nav-item-color: var(--text-normal);
+  --nav-item-size: var(--font-size-base);
+  --nav-item-weight: var(--font-weight-normal);
+  --tab-text-color: var(--text-normal);
+  --header-title-color: var(--text-normal);
+  
+  /* Z-index系统 */
+  --z-tooltip: 100;
+  --z-dropdown: 1000;
+  --z-modal: 2000;
+}
+
+/* 组件样式 */
+/* 文件导航组件 */
+.nav-component {
+  --nav-padding: var(--spacing-sm) var(--spacing-md);
+  --nav-margin: var(--spacing-xs) 0;
+}
+
+/* 通用标题组件 */
+.title-component {
+  position: relative;
+  padding: var(--nav-padding);
+  margin: var(--nav-margin);
+}
+
+/* 链接组件 */
+.link-component {
+  color: var(--primary-color);
+  text-decoration: none;
+  transition: color var(--transition-quick);
+}
+
+.link-component:hover {
+  color: var(--primary-color-hover);
+}
+
+/* 工具提示组件 */
+.tooltip-component {
+  position: absolute;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background-color: var(--bg-hover);
+  border-radius: var(--spacing-xs);
+  font-size: var(--font-size-small);
+  z-index: var(--z-tooltip);
+  opacity: 0;
+  transition: opacity var(--transition-quick);
+}
+
+.tooltip-component.visible {
+  opacity: 1;
+}
+
+/* 工具类 */
+/* 性能优化工具类 */
+.gpu-accelerated {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000;
+  will-change: transform;
+}
+
+.optimize-layer {
+  isolation: isolate;
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* 滚动优化 */
+.smooth-scroll {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
+/* 布局工具类 */
+.relative { position: relative; }
+.absolute { position: absolute; }
+.fixed { position: fixed; }
+.inline-block { display: inline-block; }
+
 /* 基础样式设置 */
 .nav-file-title-content,
 .workspace-tab-header-inner-title,
 .view-header-title,
 .tree-item-inner {
-    position: relative;
+  composes: title-component optimize-layer;
+  position: relative;
 }
 
 /* 文件树导航栏基础样式 */
 [data-path] .nav-file-title-content::before {
-    position: absolute;
-    left: 0;
-    color: var(--nav-item-color);
-    font-size: var(--nav-item-size);
-    font-weight: var(--nav-item-weight);
+  position: absolute;
+  left: 0;
+  color: var(--nav-item-color);
+  font-size: var(--nav-item-size);
+  font-weight: var(--nav-item-weight);
 }
 
 /* 编辑器标签页标题基础样式 */
 .workspace-tab-header-inner-title::before {
-    position: absolute;
-    left: 0;
-    color: var(--tab-text-color);
+  position: absolute;
+  left: 0;
+  color: var(--tab-text-color);
 }
 
 /* 文件标题栏基础样式 */
 .view-header-title::before {
-    position: absolute;
-    left: 0;
-    color: var(--header-title-color);
+  position: absolute;
+  left: 0;
+  color: var(--header-title-color);
 }
 
 /* 搜索结果和其他位置基础样式 */
 .tree-item-inner::before {
-    position: absolute;
-    left: 0;
-    color: var(--text-normal);
+  position: absolute;
+  left: 0;
+  color: var(--text-normal);
 }
 
 /* 添加新的链接样式 */
 .enhanced-link-widget {
-    display: inline-block;
-    position: relative;
+  composes: inline-block relative;
 }
 
 .link-display {
-    color: var(--text-accent);
-    text-decoration: underline;
-    cursor: pointer;
+  color: var(--text-accent);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .link-tooltip {
-    display: none;
-    position: absolute;
-    bottom: 100%;
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 4px 8px;
-    background-color: var(--background-modifier-hover);
-    border-radius: 4px;
-    font-size: 12px;
-    z-index: 100;
-    white-space: nowrap;
+  composes: tooltip-component;
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 .enhanced-link-widget:hover .link-tooltip {
-    display: block;
+  display: block;
 }
 
 /* 优化内部链接样式 */
 .internal-link,
 .cm-hmd-internal-link {
-    cursor: pointer;
-    text-decoration: none;
-    color: var(--text-accent);
+  composes: link-component;
+  cursor: pointer;
 }
 
-.internal-link:hover,
-.cm-hmd-internal-link:hover {
-    text-decoration: none;
-    color: var(--text-accent-hover);
-}
-
-/* 基础性能优化 */
-* {
-    /* 启用GPU加速 */
-    transform: translateZ(0);
-    backface-visibility: hidden;
-    perspective: 1000;
-    /* 优化重排重绘 */
-    will-change: transform;
-}
-
-/* 文件树性能优化 */
-.nav-file-title-content,
-.workspace-tab-header-inner-title,
-.view-header-title,
-.tree-item-inner {
-    /* 优化层叠上下文 */
-    isolation: isolate;
-    /* 优化合成层 */
-    transform: translateZ(0);
-    will-change: transform;
-}
-
-/* 链接组件优化 */
-.enhanced-link-widget {
-    /* 创建新的层叠上下文 */
-    isolation: isolate;
-    /* 优化hover效果性能 */
-    will-change: transform;
-    transform: translateZ(0);
-}
-
-.link-tooltip {
-    /* 优化tooltip显示性能 */
-    transform: translateZ(0);
-    will-change: transform, opacity;
-    transition: opacity 0.2s ease-in-out;
-}
-
-/* 优化滚动性能 */
+/* 性能优化 */
 .nav-files-container {
-    -webkit-overflow-scrolling: touch;
-    scroll-behavior: smooth;
-    overscroll-behavior: contain;
+  composes: smooth-scroll;
 }
 
 /* 针对低性能设备的优化 */
 @media (prefers-reduced-motion: reduce) {
-    * {
-        transition: none !important;
-        animation: none !important;
-    }
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
 }
