@@ -7,13 +7,31 @@ import { CacheManager } from './cacheManager';
 export interface FileManagerConfig {
     batchSize: number;        // 批处理大小
     activeFolder: string;     // 激活的文件夹路径
+    maxCacheSize: number;     // 最大缓存大小(MB)
+}
+
+/**
+ * 文件缓存项接口
+ */
+interface FileCacheItem {
+    files: TFile[];
+    timestamp: number;
 }
 
 /**
  * 文件管理器类
- * 负责文件的批量检索和处理
+ * 负责文件的批量检索、处理和缓存管理
  */
 export class FileManager {
+    private fileCache: Map<string, FileCacheItem> = new Map();
+    private weakFileRefs = new WeakMap<TFile, number>();
+    private cacheStats = {
+        totalSize: 0,
+        itemCount: 0,
+        lastCleanup: Date.now()
+    };
+    private readonly CACHE_EXPIRE_TIME = 5 * 60 * 1000; // 5分钟过期
+
     constructor(
         private app: App,
         private cacheManager: CacheManager,
@@ -48,51 +66,61 @@ export class FileManager {
      */
     public async getAllFiles(folder: TFolder): Promise<TFile[]> {
         try {
-            // 尝试从缓存获取
-            const cachedFiles = this.cacheManager.getCachedFiles(folder.path);
-            if (cachedFiles) {
-                return cachedFiles;
+            const now = Date.now();
+            const cacheItem = this.fileCache.get(folder.path);
+            
+            if (cacheItem && (now - cacheItem.timestamp) < this.CACHE_EXPIRE_TIME) {
+                return cacheItem.files;
             }
             
             const files: TFile[] = [];
             
-            // 过滤出 TFile 类型的文件
-            const validFiles = folder.children.filter(child => child instanceof TFile);
-            
             // 使用迭代器进行分批处理
-            await this.processFiles(validFiles, this.config.batchSize);
+            const processFiles = async (folder: TFolder) => {
+                let batch: TFile[] = [];
+                
+                const processBatch = async () => {
+                    if (batch.length > 0) {
+                        files.push(...batch);
+                        batch = [];
+                        await new Promise(resolve => setTimeout(resolve, 0));
+                    }
+                };
+                
+                for (const child of folder.children) {
+                    if (child instanceof TFile) {
+                        batch.push(child);
+                        this.weakFileRefs.set(child, now);
+                        
+                        if (batch.length >= this.config.batchSize) {
+                            await processBatch();
+                        }
+                    } else if (child instanceof TFolder) {
+                        await processBatch(); // 处理当前批次
+                        await processFiles(child);
+                    }
+                }
+                
+                await processBatch(); // 处理剩余文件
+            };
             
-            // 更新缓存
-            this.cacheManager.setCachedFiles(folder.path, files);
+            await processFiles(folder);
+            
+            // 更新缓存和统计
+            const itemSize = this.estimateItemSize({files, timestamp: now});
+            this.cacheStats.totalSize += itemSize;
+            this.cacheStats.itemCount++;
+            
+            this.fileCache.set(folder.path, {
+                files,
+                timestamp: now
+            });
             
             return files;
         } catch (error) {
             console.error('[Filename Display] 获取文件失败:', error);
             return [];
         }
-    }
-    
-    /**
-     * 递归处理文件夹
-     * 使用批处理机制避免UI阻塞
-     */
-    private async processFiles(files: TFile[], batchSize: number): Promise<void> {
-        let batch: TFile[] = [];
-        const processBatch = async () => {
-            if (batch.length > 0) {
-                files.push(...batch);
-                batch = [];
-                await new Promise(resolve => setTimeout(resolve, 0));
-            }
-        };
-
-        for (const file of files) {
-            batch.push(file);
-            if (batch.length >= batchSize) {
-                await processBatch();
-            }
-        }
-        await processBatch(); // 处理剩余文件
     }
     
     /**
@@ -212,5 +240,67 @@ export class FileManager {
             console.error(`获取文件元数据失败: ${file.path}`, error);
             return null;
         }
+    }
+
+    /**
+     * 清理缓存
+     */
+    public cleanupCache() {
+        try {
+            const now = Date.now();
+            let cleanupCount = 0;
+            let freedSize = 0;
+            
+            for (const [path, cacheItem] of this.fileCache) {
+                const isExpired = now - cacheItem.timestamp > this.CACHE_EXPIRE_TIME;
+                const itemSize = this.estimateItemSize(cacheItem);
+                
+                if (isExpired || this.cacheStats.totalSize > this.config.maxCacheSize * 1024 * 1024) {
+                    this.fileCache.delete(path);
+                    this.cacheStats.totalSize -= itemSize;
+                    this.cacheStats.itemCount--;
+                    cleanupCount++;
+                    freedSize += itemSize;
+                }
+            }
+            
+            if (cleanupCount > 0) {
+                console.log(`[Filename Display] 缓存清理: 移除了 ${cleanupCount} 项, 释放 ${(freedSize/1024/1024).toFixed(2)}MB`);
+            }
+            
+            this.cacheStats.lastCleanup = now;
+        } catch (error) {
+            console.error('[Filename Display] 缓存清理失败:', error);
+        }
+    }
+
+    /**
+     * 清除指定文件夹的缓存
+     */
+    public clearFolderCache(folderPath: string) {
+        if (folderPath) {
+            const normalizedPath = normalizePath(folderPath);
+            this.fileCache.delete(normalizedPath);
+        }
+    }
+
+    /**
+     * 获取缓存统计
+     */
+    public getCacheStats() {
+        return {
+            itemCount: this.cacheStats.itemCount,
+            totalSize: this.cacheStats.totalSize
+        };
+    }
+
+    /**
+     * 估算缓存项大小
+     */
+    private estimateItemSize(item: FileCacheItem): number {
+        let size = 40; // Map entry overhead
+        size += item.files.length * 32; // 每个TFile引用约32字节
+        size += 8; // 时间戳大小
+        return size;
     }
 }  
