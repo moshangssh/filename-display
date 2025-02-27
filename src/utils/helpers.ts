@@ -234,32 +234,16 @@ export function createDebouncedFunction<T extends (...args: any[]) => any>(
     name: string,
     wait: number
 ): (...args: Parameters<T>) => void {
-    let callCount = 0;
-    let lastExecutionTime = Date.now();
+    let timeout: NodeJS.Timeout | null = null;
     
-    // 导入防抖函数
-    const { debounce } = require('./debounce');
-    
-    const debouncedFunc = debounce(
-        (...args: Parameters<T>) => {
-            callCount++;
-            const now = Date.now();
-            const timeSinceLastExecution = now - lastExecutionTime;
-            
-            if (timeSinceLastExecution > 60000) { // 每分钟记录一次
-                log(`${name} 在过去的分钟内被调用了 ${callCount} 次`);
-                callCount = 0;
-                lastExecutionTime = now;
-            }
-            
-            // 调用原始函数
-            markPerformance(`${name}:start`);
+    return (...args: Parameters<T>) => {
+        if (timeout) {
+            clearTimeout(timeout);
+        }
+        
+        timeout = setTimeout(() => {
             func(...args);
-            markPerformance(`${name}:end`);
-            measurePerformance(`${name}:start`, `${name}:end`);
-        },
-        wait
-    );
-    
-    return debouncedFunc;
+            timeout = null;
+        }, wait);
+    };
 } 
