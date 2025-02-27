@@ -1,3 +1,0 @@
-export class CacheManager {
-    // 类的实现...
-} 
