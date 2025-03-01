@@ -22,10 +22,16 @@ export function processMarkdownLinks(
 
         const newName = getUpdatedFileName(originalName);
         if (newName) {
+          // 设置显示文本
           link.textContent = newName;
           
           // 添加原始名称的提示
-          link.setAttribute('title', originalName);
+          if (settings.showOriginalNameOnHover) {
+            link.setAttribute('title', originalName);
+          }
+          
+          // 为链接添加一个特殊的类，以便于CSS样式定位
+          link.classList.add('decorated-link');
         }
       } catch (error) {
         console.error(`处理链接失败: ${link.getAttribute('data-href')}`, error);

@@ -101,20 +101,6 @@ export class FileNameDisplaySettingTab extends PluginSettingTab {
                     }
                 }));
                 
-        new Setting(containerEl)
-            .setName('批处理大小')
-            .setDesc('每批处理的文件数量(建议值: 50-200)')
-            .addText(text => text
-                .setPlaceholder('100')
-                .setValue(String(this.plugin.settings.batchSize))
-                .onChange(async (value) => {
-                    const size = parseInt(value);
-                    if (!isNaN(size) && size > 0) {
-                        this.plugin.settings.batchSize = size;
-                        await this.plugin.saveSettings();
-                    }
-                }));
-
         // 添加示例说明
         containerEl.createEl('div', {
             text: '示例模式:',

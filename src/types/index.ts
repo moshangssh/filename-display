@@ -6,7 +6,6 @@ export interface FileDisplayPluginSettings {
     enablePlugin: boolean;
     fileNamePattern: string;  // 文件名匹配模式
     captureGroup: number;     // 要显示的捕获组索引
-    batchSize: number;        // 文件遍历批次大小
     showOriginalNameOnHover: boolean;
 }
 
@@ -16,7 +15,6 @@ export const DEFAULT_SETTINGS: FileDisplayPluginSettings = {
     enablePlugin: true,
     fileNamePattern: '^(.+?)_\\d{4}_\\d{2}_\\d{2}_(.+)$', // 默认保持原来的格式
     captureGroup: 2,     // 默认显示第二个捕获组
-    batchSize: 100,      // 每批处理100个文件
     showOriginalNameOnHover: true
 }
 
@@ -27,7 +25,7 @@ export interface FileCacheItem {
     timestamp: number;
 }
 
-// 显示管理器配置接口
+// 兼容性保留，对应现在的DecorationManagerConfig
 export interface DisplayManagerConfig {
     fileNamePattern: string;
     captureGroup: number;
