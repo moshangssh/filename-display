@@ -24,7 +24,6 @@ export default class FileDisplayPlugin extends Plugin {
 		this.fileManager = new FileManager(
 			this.app,
 			{
-				batchSize: 100,
 				activeFolder: this.settings.activeFolder
 			}
 		);
@@ -45,27 +44,14 @@ export default class FileDisplayPlugin extends Plugin {
 		// 设置选项卡
 		this.addSettingTab(new FileNameDisplaySettingTab(this.app, this));
 
-		// 事件监听
+		// 监听文件变更
+		this.fileManager.onFileChange(() => {
+			debouncedUpdateFileDisplay();
+		});
+
+		// 监听文件打开事件
 		this.registerEvent(
 			this.app.workspace.on('file-open', () => {
-				debouncedUpdateFileDisplay();
-			})
-		);
-
-		this.registerEvent(
-			this.app.vault.on('rename', () => {
-				debouncedUpdateFileDisplay();
-			})
-		);
-
-		this.registerEvent(
-			this.app.vault.on('create', () => {
-				debouncedUpdateFileDisplay();
-			})
-		);
-
-		this.registerEvent(
-			this.app.vault.on('delete', () => {
 				debouncedUpdateFileDisplay();
 			})
 		);
@@ -127,11 +113,9 @@ export default class FileDisplayPlugin extends Plugin {
 				return;
 			}
 
-			// 直接使用 app.vault 获取文件夹对象而不是调用 getActiveFolder
-			const normalizedPath = normalizePath(this.settings.activeFolder);
-			const folder = this.app.vault.getAbstractFileByPath(normalizedPath);
-			
-			if (!folder || !(folder instanceof TFolder)) {
+			// 获取活动文件夹
+			const folder = this.fileManager.getActiveFolder();
+			if (!folder) {
 				console.log(`文件夹不存在或无效: ${this.settings.activeFolder}`);
 				return;
 			}
@@ -144,7 +128,7 @@ export default class FileDisplayPlugin extends Plugin {
 			});
 			
 			// 获取所有文件
-			const files = await this.fileManager.getAllFiles(folder);
+			const files = this.fileManager.getFiles(folder);
 			const cssRules = new Map<string, string>();
 			
 			// 清除旧映射
@@ -204,7 +188,6 @@ export default class FileDisplayPlugin extends Plugin {
 		
 		// 更新FileManager配置
 		this.fileManager.updateConfig({
-			batchSize: 100,
 			activeFolder: this.settings.activeFolder
 		});
 		
@@ -222,21 +205,7 @@ export default class FileDisplayPlugin extends Plugin {
 	// 通过文件名打开文件
 	private async openFileByName(fileName: string) {
 		try {
-			// 获取活动文件夹
-			const normalizedPath = normalizePath(this.settings.activeFolder);
-			const folder = this.app.vault.getAbstractFileByPath(normalizedPath);
-			if (!folder || !(folder instanceof TFolder)) {
-				new Notice(`无效的活动文件夹`);
-				return;
-			}
-
-			// 查找并打开文件
-			const file = await this.fileManager.findFileByName(fileName);
-			if (file) {
-				await this.fileManager.openFile(file);
-			} else {
-				new Notice(`未找到文件: ${fileName}`);
-			}
+			await this.fileManager.openFileByName(fileName);
 		} catch (error) {
 			console.error('打开文件失败:', error);
 			new Notice(`打开文件失败: ${error.message}`);
