@@ -1,5 +1,4 @@
-import { App, TFile, TFolder, normalizePath, Vault } from 'obsidian';
-import { CacheManager } from './cacheManager';
+import { App, TFile, TFolder, normalizePath, Vault, CachedMetadata } from 'obsidian';
 
 /**
  * 文件管理器配置接口
@@ -7,7 +6,6 @@ import { CacheManager } from './cacheManager';
 export interface FileManagerConfig {
     batchSize: number;        // 批处理大小
     activeFolder: string;     // 激活的文件夹路径
-    maxCacheSize: number;     // 最大缓存大小(MB)
 }
 
 /**
@@ -15,6 +13,7 @@ export interface FileManagerConfig {
  */
 interface FileCacheItem {
     files: TFile[];
+    metadata: CachedMetadata;
     timestamp: number;
 }
 
@@ -23,51 +22,38 @@ interface FileCacheItem {
  * 负责文件的批量检索、处理和缓存管理
  */
 export class FileManager {
-    private fileCache: Map<string, FileCacheItem> = new Map();
-    private weakFileRefs = new WeakMap<TFile, number>();
-    private cacheStats = {
-        totalSize: 0,
-        itemCount: 0,
-        lastCleanup: Date.now()
-    };
+    private weakFileCache = new WeakMap<TFile, FileCacheItem>();
     private readonly CACHE_EXPIRE_TIME = 5 * 60 * 1000; // 5分钟过期
-    private worker: Worker | null = null;
 
     constructor(
         private app: App,
-        private cacheManager: CacheManager,
         private config: FileManagerConfig
     ) {
-        this.initializeWorker();
+        // 监听元数据缓存事件
+        this.app.metadataCache.on('changed', this.handleMetadataChange.bind(this));
+        this.app.vault.on('delete', this.handleFileDelete.bind(this));
     }
-    
+
     /**
-     * 初始化Web Worker
+     * 处理元数据变更事件
      */
-    private initializeWorker() {
-        try {
-            const workerCode = `
-                self.onmessage = async function(e) {
-                    const { type, data } = e.data;
-                    if (type === 'scan') {
-                        // Worker中的文件扫描逻辑
-                        self.postMessage({ type: 'progress', data: '开始扫描' });
-                    }
-                }
-            `;
-            const blob = new Blob([workerCode], { type: 'application/javascript' });
-            this.worker = new Worker(URL.createObjectURL(blob));
-            
-            this.worker.onmessage = (e) => {
-                const { type, data } = e.data;
-                if (type === 'progress') {
-                    console.log('Worker进度:', data);
-                }
-            };
-        } catch (error) {
-            console.error('Worker初始化失败:', error);
-            this.worker = null;
+    private handleMetadataChange(file: TFile): void {
+        const cacheItem = this.weakFileCache.get(file);
+        if (cacheItem) {
+            const metadata = this.app.metadataCache.getFileCache(file);
+            if (metadata) {
+                cacheItem.metadata = metadata;
+                cacheItem.timestamp = Date.now();
+            }
         }
+    }
+
+    /**
+     * 处理文件删除事件
+     */
+    private handleFileDelete(file: TFile): void {
+        // WeakMap会自动处理已删除文件的引用
+        // 不需要手动清理
     }
     
     /**
@@ -79,7 +65,6 @@ export class FileManager {
     
     /**
      * 获取当前活动文件夹
-     * @returns 活动文件夹或null
      */
     public getActiveFolder(): TFolder | null {
         if (!this.config.activeFolder) {
@@ -102,7 +87,14 @@ export class FileManager {
         for (const child of folder.children) {
             if (child instanceof TFile) {
                 batch.push(child);
-                this.weakFileRefs.set(child, now);
+                const metadata = this.app.metadataCache.getFileCache(child);
+                if (metadata) {
+                    this.weakFileCache.set(child, {
+                        files: [child],
+                        metadata,
+                        timestamp: now
+                    });
+                }
                 
                 if (batch.length >= this.config.batchSize) {
                     yield* batch;
@@ -125,18 +117,10 @@ export class FileManager {
     
     /**
      * 异步获取文件夹内所有文件
-     * 使用缓存机制优化性能
+     * 使用WeakMap和MetadataCache优化性能
      */
     public async getAllFiles(folder: TFolder): Promise<TFile[]> {
         try {
-            const now = Date.now();
-            const cacheItem = this.fileCache.get(folder.path);
-            
-            // 检查缓存
-            if (cacheItem && (now - cacheItem.timestamp) < this.CACHE_EXPIRE_TIME) {
-                return cacheItem.files;
-            }
-            
             const files: TFile[] = [];
             
             // 使用异步生成器遍历文件
@@ -144,37 +128,10 @@ export class FileManager {
                 files.push(file);
             }
             
-            // 更新缓存和统计
-            const itemSize = this.estimateItemSize({files, timestamp: now});
-            this.cacheStats.totalSize += itemSize;
-            this.cacheStats.itemCount++;
-            
-            this.fileCache.set(folder.path, {
-                files,
-                timestamp: now
-            });
-            
-            // 在后台触发索引预构建
-            this.triggerBackgroundIndexing(folder);
-            
             return files;
         } catch (error) {
             console.error('[Filename Display] 获取文件失败:', error);
             return [];
-        }
-    }
-    
-    /**
-     * 触发后台索引预构建
-     */
-    private triggerBackgroundIndexing(folder: TFolder) {
-        if (this.worker) {
-            this.worker.postMessage({
-                type: 'scan',
-                data: {
-                    folderPath: folder.path
-                }
-            });
         }
     }
     
@@ -188,7 +145,6 @@ export class FileManager {
     
     /**
      * 通过文件名查找文件
-     * 在活动文件夹中查找指定名称的文件
      */
     public async findFileByName(fileName: string): Promise<TFile | null> {
         const folder = this.getActiveFolder();
@@ -224,19 +180,7 @@ export class FileManager {
     }
     
     /**
-     * 清理活动文件夹的缓存
-     */
-    public clearActivePathCache(): void {
-        const activeFolder = this.config.activeFolder;
-        if (activeFolder) {
-            const normalizedPath = normalizePath(activeFolder);
-            this.cacheManager.clear(normalizedPath);
-        }
-    }
-    
-    /**
      * 批量处理文件
-     * 对大量文件应用同一操作，支持异步处理和进度回调
      */
     public async batchProcessFiles(
         folder: TFolder,
@@ -247,34 +191,17 @@ export class FileManager {
         const total = files.length;
         let processed = 0;
         
-        // 分批处理文件
         const batchSize = this.config.batchSize;
-        for (let i = 0; i < total; i += batchSize) {
+        for (let i = 0; i < files.length; i += batchSize) {
             const batch = files.slice(i, i + batchSize);
+            await Promise.all(batch.map(async file => {
+                await processor(file);
+                processed++;
+                progressCallback?.(processed, total);
+            }));
             
-            // 并行处理批次中的文件
-            await Promise.all(
-                batch.map(async (file) => {
-                    try {
-                        await processor(file);
-                    } catch (error) {
-                        console.error(`处理文件失败: ${file.path}`, error);
-                    } finally {
-                        processed++;
-                        if (progressCallback && processed % 10 === 0) {
-                            progressCallback(processed, total);
-                        }
-                    }
-                })
-            );
-            
-            // 让出主线程
+            // 避免阻塞UI
             await new Promise(resolve => setTimeout(resolve, 0));
-            
-            // 更新总进度
-            if (progressCallback) {
-                progressCallback(processed, total);
-            }
         }
     }
     
@@ -282,80 +209,13 @@ export class FileManager {
      * 检查文件是否存在
      */
     public fileExists(path: string): boolean {
-        return this.app.vault.getAbstractFileByPath(normalizePath(path)) instanceof TFile;
+        return this.app.vault.getAbstractFileByPath(path) instanceof TFile;
     }
     
     /**
      * 获取文件元数据
      */
-    public async getFileMetadata(file: TFile): Promise<any> {
-        try {
-            return this.app.metadataCache.getFileCache(file);
-        } catch (error) {
-            console.error(`获取文件元数据失败: ${file.path}`, error);
-            return null;
-        }
-    }
-
-    /**
-     * 清理缓存
-     */
-    public cleanupCache() {
-        try {
-            const now = Date.now();
-            let cleanupCount = 0;
-            let freedSize = 0;
-            
-            for (const [path, cacheItem] of this.fileCache) {
-                const isExpired = now - cacheItem.timestamp > this.CACHE_EXPIRE_TIME;
-                const itemSize = this.estimateItemSize(cacheItem);
-                
-                if (isExpired || this.cacheStats.totalSize > this.config.maxCacheSize * 1024 * 1024) {
-                    this.fileCache.delete(path);
-                    this.cacheStats.totalSize -= itemSize;
-                    this.cacheStats.itemCount--;
-                    cleanupCount++;
-                    freedSize += itemSize;
-                }
-            }
-            
-            if (cleanupCount > 0) {
-                console.log(`[Filename Display] 缓存清理: 移除了 ${cleanupCount} 项, 释放 ${(freedSize/1024/1024).toFixed(2)}MB`);
-            }
-            
-            this.cacheStats.lastCleanup = now;
-        } catch (error) {
-            console.error('[Filename Display] 缓存清理失败:', error);
-        }
-    }
-
-    /**
-     * 清除指定文件夹的缓存
-     */
-    public clearFolderCache(folderPath: string) {
-        if (folderPath) {
-            const normalizedPath = normalizePath(folderPath);
-            this.fileCache.delete(normalizedPath);
-        }
-    }
-
-    /**
-     * 获取缓存统计
-     */
-    public getCacheStats() {
-        return {
-            itemCount: this.cacheStats.itemCount,
-            totalSize: this.cacheStats.totalSize
-        };
-    }
-
-    /**
-     * 估算缓存项大小
-     */
-    private estimateItemSize(item: FileCacheItem): number {
-        let size = 40; // Map entry overhead
-        size += item.files.length * 32; // 每个TFile引用约32字节
-        size += 8; // 时间戳大小
-        return size;
+    public getFileMetadata(file: TFile): CachedMetadata | null {
+        return this.app.metadataCache.getFileCache(file);
     }
 }  

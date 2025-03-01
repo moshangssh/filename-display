@@ -1,32 +1,15 @@
-import { Cache } from './cache';
-
 /**
  * 正则表达式缓存管理器
  * 用于缓存和复用正则表达式对象
  */
 
-interface RegexCacheStats {
-    hits: number;
-    misses: number;
-    patterns: Map<string, number>;  // 模式使用次数统计
-}
-
 export class RegexCache {
     private static instance: RegexCache;
-    private cache: Cache<RegExp>;
-    private stats: RegexCacheStats;
+    private cache: Map<string, RegExp>;
     private readonly MAX_CACHE_SIZE = 100;  // 最大缓存数量
 
     private constructor() {
-        this.cache = Cache.getInstance<RegExp>('regex', {
-            maxSize: 1024 * 1024, // 1MB
-            expireTime: 30 * 60 * 1000 // 30分钟
-        });
-        this.stats = {
-            hits: 0,
-            misses: 0,
-            patterns: new Map()
-        };
+        this.cache = new Map();
     }
 
     /**
@@ -51,6 +34,13 @@ export class RegexCache {
         let regex = this.cache.get(key);
         if (!regex) {
             regex = new RegExp(pattern, flags);
+            
+            // 如果缓存已满,删除最早的项
+            if (this.cache.size >= this.MAX_CACHE_SIZE) {
+                const firstKey = this.cache.keys().next().value;
+                this.cache.delete(firstKey);
+            }
+            
             this.cache.set(key, regex);
         }
         
@@ -62,15 +52,5 @@ export class RegexCache {
      */
     public clear(): void {
         this.cache.clear();
-        this.stats.patterns.clear();
-        this.stats.hits = 0;
-        this.stats.misses = 0;
-    }
-
-    /**
-     * 获取缓存统计信息
-     */
-    public getStats(): any {
-        return this.cache.getStats();
     }
 } 

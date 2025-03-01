@@ -100,26 +100,12 @@ export class FileNameDisplaySettingTab extends PluginSettingTab {
                         new Notice('请输入有效的捕获组索引（大于等于0的整数）');
                     }
                 }));
-
-        new Setting(containerEl)
-            .setName('最大缓存大小')
-            .setDesc('设置文件缓存的最大大小(MB)')
-            .addText(text => text
-                .setPlaceholder('100')
-                .setValue(String(this.plugin.settings.maxCacheSize))
-                .onChange(async (value) => {
-                    const size = parseInt(value);
-                    if (!isNaN(size) && size > 0) {
-                        this.plugin.settings.maxCacheSize = size;
-                        await this.plugin.saveSettings();
-                    }
-                }));
                 
         new Setting(containerEl)
             .setName('批处理大小')
-            .setDesc('每批处理的文件数量(影响性能)')
+            .setDesc('每批处理的文件数量(建议值: 50-200)')
             .addText(text => text
-                .setPlaceholder('1000')
+                .setPlaceholder('100')
                 .setValue(String(this.plugin.settings.batchSize))
                 .onChange(async (value) => {
                     const size = parseInt(value);
@@ -128,13 +114,6 @@ export class FileNameDisplaySettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }
                 }));
-                
-        // 添加缓存统计信息显示
-        const stats = this.plugin.getCacheStats();
-        containerEl.createEl('div', {
-            cls: 'setting-item-description',
-            text: `缓存统计: ${stats.itemCount} 项, ${(stats.totalSize/1024/1024).toFixed(2)}MB`
-        });
 
         // 添加示例说明
         containerEl.createEl('div', {

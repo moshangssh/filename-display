@@ -3,7 +3,6 @@ import { FileDisplayPluginSettings, DEFAULT_SETTINGS } from './src/types';
 import { FileManager } from './src/services/fileManager';
 import { createEditorExtension } from './src/extensions/editorExtension';
 import { processMarkdownLinks } from './src/extensions/markdownProcessor';
-import { CacheManager } from './src/services/cacheManager';
 import { DisplayManager } from './src/services/displayManager';
 import { FileNameDisplaySettingTab } from './src/ui/settingsTab';
 import { createDebouncedFunction } from './src/utils/helpers';
@@ -11,7 +10,6 @@ import { createDebouncedFunction } from './src/utils/helpers';
 export default class FileDisplayPlugin extends Plugin {
 	settings: FileDisplayPluginSettings;
 	private fileManager: FileManager;
-	private cacheManager: CacheManager;
 	private displayManager: DisplayManager;
 	
 	// 性能监控
@@ -23,18 +21,12 @@ export default class FileDisplayPlugin extends Plugin {
 		await this.loadSettings();
 		
 		// 初始化服务
-		this.cacheManager = new CacheManager({
-			maxMemoryCacheSize: this.settings.maxCacheSize,
-			maxDiskCacheSize: this.settings.maxCacheSize * 10,
-			expireTime: 5 * 60 * 1000,
-			cleanupInterval: 10 * 60 * 1000,
-			progressiveCleanupSize: 100
-		});
-		
 		this.fileManager = new FileManager(
 			this.app,
-			this.cacheManager,
-			this.settings
+			{
+				batchSize: 100,
+				activeFolder: this.settings.activeFolder
+			}
 		);
 		
 		this.displayManager = new DisplayManager({
@@ -62,21 +54,18 @@ export default class FileDisplayPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.vault.on('rename', () => {
-				this.fileManager.clearFolderCache(this.settings.activeFolder);
 				debouncedUpdateFileDisplay();
 			})
 		);
 
 		this.registerEvent(
 			this.app.vault.on('create', () => {
-				this.fileManager.clearFolderCache(this.settings.activeFolder);
 				debouncedUpdateFileDisplay();
 			})
 		);
 
 		this.registerEvent(
 			this.app.vault.on('delete', () => {
-				this.fileManager.clearFolderCache(this.settings.activeFolder);
 				debouncedUpdateFileDisplay();
 			})
 		);
@@ -90,11 +79,6 @@ export default class FileDisplayPlugin extends Plugin {
 		this.registerMarkdownPostProcessor((el, ctx) => {
 			processMarkdownLinks(el, this.settings, this.getUpdatedFileName.bind(this));
 		});
-
-		// 添加定期清理缓存的定时器
-		this.registerInterval(
-			window.setInterval(() => this.cacheManager.progressiveCleanup(), 10 * 60 * 1000)
-		);
 
 		// 添加链接点击事件处理
 		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
@@ -123,7 +107,6 @@ export default class FileDisplayPlugin extends Plugin {
 	onunload() {
 		// 清理资源
 		this.displayManager.destroy();
-		this.cacheManager.clear();
 	}
 
 	// 获取更新后的文件名
@@ -219,13 +202,10 @@ export default class FileDisplayPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 		
-		// 更新缓存管理器配置
-		this.cacheManager = new CacheManager({
-			maxMemoryCacheSize: this.settings.maxCacheSize,
-			maxDiskCacheSize: this.settings.maxCacheSize * 10,
-			expireTime: 5 * 60 * 1000,
-			cleanupInterval: 10 * 60 * 1000,
-			progressiveCleanupSize: 100
+		// 更新FileManager配置
+		this.fileManager.updateConfig({
+			batchSize: 100,
+			activeFolder: this.settings.activeFolder
 		});
 		
 		// 更新显示管理器配置
@@ -235,7 +215,7 @@ export default class FileDisplayPlugin extends Plugin {
 			showOriginalNameOnHover: this.settings.showOriginalNameOnHover
 		});
 		
-		// 直接应用新设置，而不是调用不存在的updateConfig方法
+		// 更新显示
 		this.updateFileDisplay();
 	}
 
@@ -249,39 +229,26 @@ export default class FileDisplayPlugin extends Plugin {
 				new Notice(`无效的活动文件夹`);
 				return;
 			}
-			
-			// 获取所有文件并查找匹配项
-			const files = await this.fileManager.getAllFiles(folder);
-			const file = files.find(f => f.basename === fileName);
-			
+
+			// 查找并打开文件
+			const file = await this.fileManager.findFileByName(fileName);
 			if (file) {
-				// 使用 app.workspace 打开文件
-				const leaf = this.app.workspace.getLeaf(true);
-				await leaf.openFile(file);
+				await this.fileManager.openFile(file);
 			} else {
 				new Notice(`未找到文件: ${fileName}`);
 			}
 		} catch (error) {
 			console.error('打开文件失败:', error);
-			new Notice('打开文件失败');
+			new Notice(`打开文件失败: ${error.message}`);
 		}
 	}
 
-	// 获取缓存统计信息
-	public getCacheStats() {
-		return this.cacheManager.getStats();
-	}
-
-	// 刷新编辑器视图方法
 	public refreshEditorDecorations() {
-		this.app.workspace.iterateAllLeaves(leaf => {
-			if (leaf.view instanceof MarkdownView && leaf.view.editor) {
-				// 触发编辑器内容更新
-				const editor = leaf.view.editor;
-				const doc = editor.getValue();
-				editor.setValue(doc);
-			}
-		});
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (view) {
+			const editor = view.editor;
+			editor.refresh();
+		}
 	}
 }
 

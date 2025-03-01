@@ -1,5 +1,3 @@
-import { Cache } from './cache';
-
 interface StyleRule {
     selector: string;
     properties: { [key: string]: string };
@@ -11,13 +9,10 @@ interface StyleRule {
 export class CSSManager {
     private static instance: CSSManager;
     private styleElement: HTMLStyleElement | null = null;
-    private styleCache: Cache<string>;
+    private styleCache: Map<string, string>;
 
     private constructor() {
-        this.styleCache = Cache.getInstance<string>('css', {
-            maxSize: 5 * 1024 * 1024, // 5MB
-            expireTime: 24 * 60 * 60 * 1000 // 24小时
-        });
+        this.styleCache = new Map();
         this.initStyleElement();
     }
 
@@ -70,7 +65,7 @@ export class CSSManager {
      * 移除样式规则
      */
     public removeRule(selector: string): void {
-        if (this.styleCache.get(selector)) {
+        if (this.styleCache.has(selector)) {
             this.styleCache.delete(selector);
             this.injectStyles();
         }
@@ -94,14 +89,8 @@ export class CSSManager {
             this.initStyleElement();
         }
 
-        // 获取所有缓存的选择器
-        const selectors = Object.keys(this.styleCache.getStats().itemCount || {});
-        
-        // 获取并组合所有有效的样式规则
-        const allRules = selectors
-            .map(selector => this.styleCache.get(selector))
-            .filter((rule): rule is string => rule !== undefined)
-            .join('\n');
+        // 获取并组合所有样式规则
+        const allRules = Array.from(this.styleCache.values()).join('\n');
 
         if (this.styleElement) {
             this.styleElement.textContent = allRules;
