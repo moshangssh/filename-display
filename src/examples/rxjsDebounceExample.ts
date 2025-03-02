@@ -13,8 +13,6 @@ import {
 } from 'rxjs';
 import { 
     debounceFn, 
-    setDebounceImplementation, 
-    DebounceImplementation,
     createDebouncedObservable 
 } from '../utils/debounceIntegration';
 
@@ -26,8 +24,7 @@ export class RxJSExample {
     private searchInput$ = new Subject<string>();
     
     constructor(private app: App, private plugin: Plugin) {
-        // 确保使用RxJS实现
-        setDebounceImplementation(DebounceImplementation.RXJS);
+        // RxJS实现已默认启用
     }
     
     /**

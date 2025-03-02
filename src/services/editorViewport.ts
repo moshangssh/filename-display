@@ -1,5 +1,5 @@
 import { App, MarkdownView, WorkspaceLeaf, Editor } from 'obsidian';
-import { debounce } from '../utils/debounce';
+import { debounceFn } from '../utils/debounceIntegration';
 
 /**
  * 视口元素接口
@@ -121,12 +121,12 @@ export class EditorViewport {
             });
             
             // 编辑器内容变化时重新扫描
-            this.app.workspace.on('editor-change', debounce(() => {
+            this.app.workspace.on('editor-change', debounceFn(() => {
                 this.scanCurrentView();
             }, 200));
             
             // 窗口大小改变时重新计算视口
-            window.addEventListener('resize', debounce(() => {
+            window.addEventListener('resize', debounceFn(() => {
                 this.recalculateViewport();
             }, 200));
         });

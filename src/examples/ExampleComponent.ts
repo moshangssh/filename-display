@@ -2,8 +2,6 @@ import { App, PluginSettingTab, Setting, Plugin, MarkdownView } from 'obsidian';
 import { RxJSExample } from './rxjsDebounceExample';
 import { 
     debounceFn, 
-    setDebounceImplementation, 
-    DebounceImplementation,
     createDebouncedObservable
 } from '../utils/debounceIntegration';
 
@@ -18,9 +16,6 @@ export class ExampleSettingTab extends PluginSettingTab {
     constructor(app: App, private plugin: Plugin) {
         super(app, plugin);
         this.rxjsExample = new RxJSExample(app, plugin);
-        
-        // 设置使用RxJS实现
-        setDebounceImplementation(DebounceImplementation.RXJS);
     }
     
     /**
@@ -61,24 +56,25 @@ export class ExampleSettingTab extends PluginSettingTab {
                     })
             );
             
-        // 添加对比示例
-        this.addComparisonExamples(containerEl);
+        // 添加RxJS示例
+        this.addRxJSExamples(containerEl);
     }
     
     /**
-     * 添加不同实现对比示例
+     * 添加RxJS实现示例
      */
-    private addComparisonExamples(containerEl: HTMLElement): void {
-        containerEl.createEl('h3', { text: '实现对比' });
+    private addRxJSExamples(containerEl: HTMLElement): void {
+        containerEl.createEl('h3', { text: 'RxJS防抖示例' });
         
-        // 创建三个文本区域来显示结果
-        const resultAreaContainer = containerEl.createDiv({ cls: 'comparison-results' });
-        resultAreaContainer.style.display = 'flex';
+        // 创建结果区域
+        const resultAreaContainer = containerEl.createDiv({ cls: 'result-container' });
         resultAreaContainer.style.marginBottom = '20px';
         
-        // 创建两个结果区域
-        const customResultEl = this.createResultArea(resultAreaContainer, '自定义实现');
-        const rxjsResultEl = this.createResultArea(resultAreaContainer, 'RxJS实现');
+        // 创建结果区域
+        const resultEl = this.createResultArea(resultAreaContainer, 'RxJS防抖结果');
+        
+        // 创建Observable版本结果区域
+        const observableResultEl = this.createResultArea(resultAreaContainer, 'Observable版本');
         
         // 输入框
         const inputEl = containerEl.createEl('input', { 
@@ -90,29 +86,27 @@ export class ExampleSettingTab extends PluginSettingTab {
         inputEl.style.width = '100%';
         inputEl.style.marginBottom = '10px';
         
-        // 切换到自定义实现
-        setDebounceImplementation(DebounceImplementation.CUSTOM);
-        
-        // 自定义实现的防抖
-        const customDebounce = debounceFn((value: string) => {
-            customResultEl.textContent = `结果: ${value} (自定义实现)`;
+        // 函数版本的RxJS防抖实现
+        const functionDebounce = debounceFn((value: string) => {
+            resultEl.textContent = `结果: ${value} (函数版本)`;
             return value;
-        }, 500, false, 'customDebounce');
+        }, 500, false, 'functionDebounce');
         
-        // 切换到RxJS实现
-        setDebounceImplementation(DebounceImplementation.RXJS);
+        // Observable版本的防抖实现
+        const { observable, next } = createDebouncedObservable<string>(
+            500, false, 'observableDebounce'
+        );
         
-        // RxJS实现的防抖
-        const rxjsDebounce = debounceFn((value: string) => {
-            rxjsResultEl.textContent = `结果: ${value} (RxJS实现)`;
-            return value;
-        }, 500, false, 'rxjsDebounce');
+        // 订阅Observable
+        observable.subscribe(value => {
+            observableResultEl.textContent = `结果: ${value} (Observable版本)`;
+        });
         
         // 监听输入
         inputEl.addEventListener('input', () => {
             const value = inputEl.value;
-            customDebounce(value);
-            rxjsDebounce(value);
+            functionDebounce(value);  // 函数版本
+            next(value);              // Observable版本
         });
     }
     
@@ -121,8 +115,7 @@ export class ExampleSettingTab extends PluginSettingTab {
      */
     private createResultArea(container: HTMLElement, title: string): HTMLElement {
         const areaEl = container.createDiv({ cls: 'result-area' });
-        areaEl.style.flex = '1';
-        areaEl.style.margin = '0 5px';
+        areaEl.style.margin = '10px 0';
         areaEl.style.padding = '10px';
         areaEl.style.border = '1px solid #ddd';
         areaEl.style.borderRadius = '4px';
@@ -140,7 +133,4 @@ export class ExampleSettingTab extends PluginSettingTab {
     hide(): void {
         this.rxjsExample.destroy();
     }
-}
-
-// 别忘了导入debounce函数
-import { debounce } from '../utils/debounce'; 
+} 

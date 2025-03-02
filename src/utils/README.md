@@ -2,19 +2,15 @@
 
 ## 防抖函数 (Debounce)
 
-本项目提供了几种防抖函数实现，推荐使用统一接口。
+本项目提供了基于RxJS的防抖函数实现，推荐使用统一接口。
 
 ### 1. 统一接口 (推荐用法)
 
 ```typescript
 import { 
   debounceFn, 
-  setDebounceImplementation, 
-  DebounceImplementation 
+  createDebouncedObservable
 } from './utils/debounceIntegration';
-
-// 可选：设置使用RxJS实现
-setDebounceImplementation(DebounceImplementation.RXJS);
 
 // 创建防抖函数 
 const debouncedHandler = debounceFn(
@@ -52,7 +48,7 @@ const result = debouncedHandler('搜索关键词');
 debouncedHandler.cancel();
 ```
 
-### 3. Observable形式的防抖 (RxJS特有)
+### 3. Observable形式的防抖 (RxJS强大功能)
 
 ```typescript
 import { createDebouncedObservable } from './utils/debounceIntegration';
@@ -79,54 +75,23 @@ cancel();
 complete();
 ```
 
-### 4. 原始实现 (内部使用)
+## RxJS实现优势
 
-以下是内部使用的实现，推荐通过统一接口访问：
+RxJS防抖实现提供以下优势：
 
-```typescript
-// 自定义实现
-import { debounce } from './utils/debounce';
-
-// RxJS实现
-import { debounceRxJS } from './utils/debounceRxJS';
-```
-
-## 实现比较
-
-| 特性 | 自定义实现 | RxJS实现 |
-|------|-----------|---------|
-| 立即执行模式 | ✅ | ✅ |
-| 取消能力 | ✅ | ✅ |
-| 类型完善 | ✅ | ✅ |
-| 性能监控 | ✅ | ✅ |
-| 可链式调用 | ❌ | ✅ |
-| 兼容Observable | ❌ | ✅ |
-| Tree Shaking | ✅ | ✅ |
-| 额外依赖 | 无 | RxJS |
-| 文件大小 | 小 | 中等 |
-
-## 选择建议
-
-- **简单场景**：保持默认设置（自定义实现）
-- **响应式编程**：设置使用RxJS实现 `setDebounceImplementation(DebounceImplementation.RXJS)`
-- **复杂流程**：使用Observable形式 `createDebouncedObservable`
+- **立即执行模式** - 支持首次调用立即执行
+- **取消能力** - 随时取消待执行的操作
+- **类型完善** - 完整的TypeScript类型支持
+- **性能监控** - 内置与Obsidian兼容的性能监控
+- **可链式调用** - 与其他RxJS操作符无缝集成
+- **Observable兼容** - 完全融入响应式编程范式
+- **Tree Shaking** - 优化打包体积 
 
 ## 代码库结构
 
 - **debounceIntegration.ts**: 统一接口和配置
-- **debounce.ts**: 原生JavaScript实现 
 - **debounceRxJS.ts**: 基于RxJS的实现
 - **performanceMonitor.ts**: 性能监控工具
-
-## 安装RxJS
-
-如要使用RxJS实现，请先安装依赖：
-
-```bash
-npm install rxjs --save
-# 或
-yarn add rxjs
-```
 
 ## 性能监控使用
 

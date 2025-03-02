@@ -1,26 +1,31 @@
-import { debounce } from './debounce';
 import { debounceRxJS, createDebouncedObservable } from './debounceRxJS';
 
-// 防抖函数实现类型（用于配置）
+/**
+ * 防抖函数实现类型（用于配置）
+ * @deprecated 简化为仅使用RxJS实现
+ */
 export enum DebounceImplementation {
-    CUSTOM = 'custom', // 自定义实现
     RXJS = 'rxjs'      // RxJS实现
 }
 
-// 当前使用的实现
-let currentImplementation = DebounceImplementation.CUSTOM;
+// 当前实现总是使用RxJS
+const currentImplementation = DebounceImplementation.RXJS;
 
 /**
  * 设置使用的防抖实现
  * @param implementation 实现类型
+ * @deprecated 简化为仅使用RxJS实现，此函数保留仅用于兼容性
  */
 export function setDebounceImplementation(implementation: DebounceImplementation): void {
-    currentImplementation = implementation;
+    // 无操作 - 总是使用RxJS实现
+    if (implementation !== DebounceImplementation.RXJS) {
+        console.warn('只支持RxJS防抖实现。其他实现已被移除。');
+    }
 }
 
 /**
  * 统一的防抖函数接口
- * 根据配置使用不同的实现
+ * 使用RxJS实现
  * 
  * @param func 要执行的函数
  * @param wait 等待时间(毫秒)
@@ -37,11 +42,7 @@ export function debounceFn<T extends (...args: any[]) => any>(
     (...args: Parameters<T>): ReturnType<T> | undefined;
     cancel: () => void;
 } {
-    if (currentImplementation === DebounceImplementation.RXJS) {
-        return debounceRxJS(func, wait, immediate, name);
-    } else {
-        return debounce(func, wait, immediate, name);
-    }
+    return debounceRxJS(func, wait, immediate, name);
 }
 
 /**
@@ -67,7 +68,8 @@ export function createUnifiedDebouncedFunction<T extends (...args: any[]) => any
 }
 
 /**
- * 为了向后兼容helpers.ts中删除的函数
+ * 旧版本的防抖函数创建工具
+ * 
  * @deprecated 使用createUnifiedDebouncedFunction替代
  */
 export function createDebouncedFunction<T extends (...args: any[]) => any>(
@@ -83,5 +85,4 @@ export function createDebouncedFunction<T extends (...args: any[]) => any>(
     return createUnifiedDebouncedFunction(func, name, wait, immediate);
 }
 
-// 导出Observable创建函数（仅RxJS特有功能）
 export { createDebouncedObservable }; 
