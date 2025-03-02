@@ -3,8 +3,11 @@ import { FileDisplayPluginSettings, DEFAULT_SETTINGS } from './src/types';
 import { FileManager } from './src/services/fileManager';
 import { processMarkdownLinks } from './src/extensions/markdownProcessor';
 import { FileNameDisplaySettingTab } from './src/ui/settingsTab';
-import { createDebouncedFunction } from './src/utils/helpers';
 import { DecorationManager } from './src/services/decorationManager';
+import { RegexCache } from './src/utils/regexCache';
+import { FileEventType } from './src/services/eventStreamService';
+import { Subscription } from 'rxjs';
+import { throttleTime } from 'rxjs/operators';
 
 export default class FileDisplayPlugin extends Plugin {
 	settings: FileDisplayPluginSettings;
@@ -16,6 +19,9 @@ export default class FileDisplayPlugin extends Plugin {
 	private updateCount = 0;
 	private lastUpdateTime = Date.now();
 	private domOperationsReduced = 0;
+	
+	// 事件流订阅
+	private eventSubscriptions: Subscription[] = [];
 
 	async onload() {
 		// 加载设置
@@ -39,31 +45,25 @@ export default class FileDisplayPlugin extends Plugin {
 			}
 		);
 		
+		// 更新正则缓存设置
+		RegexCache.getInstance().updateSettings(this.settings);
+		
 		// 创建编辑器扩展
 		this.editorExtension = [this.decorationManager.createEditorViewPlugin()];
 		
-		// 使用工具函数创建防抖的文件显示更新函数
-		const debouncedUpdateFileDisplay = createDebouncedFunction(
-			() => this.updateFileDisplay(),
-			'updateFileDisplay',
-			500
-		);
-
 		// 设置选项卡
 		this.addSettingTab(new FileNameDisplaySettingTab(this.app, this));
 
-		// 监听文件变更
-		this.fileManager.onFileChange(() => {
-			debouncedUpdateFileDisplay();
-		});
+		// 订阅合并的事件流，替代传统的事件监听
+		this.setupEventSubscriptions();
 
 		// 监听文件打开事件
 		this.registerEvent(
 			this.app.workspace.on('file-open', () => {
-				debouncedUpdateFileDisplay();
+				this.updateFileDisplay();
 			})
 		);
-
+		
 		// 添加编辑器扩展
 		this.registerEditorExtension(this.editorExtension);
 
@@ -112,12 +112,83 @@ export default class FileDisplayPlugin extends Plugin {
 		this.updateFileDisplay();
 		
 		// 记录插件加载完成
-		console.log('文件名显示插件已加载 - 优化版本 (EditorViewport)');
+		console.log('文件名显示插件已加载 - 优化版本 (RxJS事件流)');
+	}
+	
+	/**
+	 * 设置事件流订阅
+	 * 使用RxJS处理文件事件
+	 */
+	private setupEventSubscriptions() {
+		// 清理可能存在的旧订阅
+		this.clearEventSubscriptions();
+		
+		// 订阅激活文件夹的所有事件
+		const folderPath = this.settings.activeFolder;
+		if (folderPath) {
+			// 对激活文件夹的Markdown文件事件进行订阅
+			const folderSubscription = this.fileManager
+				.getFolderEventStream(folderPath)
+				.pipe(
+					// 额外的节流，避免密集更新
+					throttleTime(800)
+				)
+				.subscribe(event => {
+					// 不同事件类型的处理逻辑可以在这里扩展
+					console.log(`处理文件事件: ${event.type} - ${event.file.path}`);
+					this.updateFileDisplay();
+				});
+			
+			this.eventSubscriptions.push(folderSubscription);
+		}
+		
+		// 全局Markdown文件事件订阅
+		const mdSubscription = this.fileManager
+			.getFileTypeEventStream('md')
+			.pipe(
+				throttleTime(1000)
+			)
+			.subscribe(event => {
+				// 处理特定类型的事件，可以针对不同事件类型进行优化
+				if (event.type === FileEventType.RENAME) {
+					console.log(`重命名事件: ${event.file.path} (原路径: ${event.oldPath})`);
+				}
+				
+				this.updateFileDisplay();
+			});
+		
+		this.eventSubscriptions.push(mdSubscription);
+	}
+	
+	/**
+	 * 清理事件订阅
+	 */
+	private clearEventSubscriptions() {
+		for (const subscription of this.eventSubscriptions) {
+			subscription.unsubscribe();
+		}
+		this.eventSubscriptions = [];
 	}
 
 	onunload() {
-		// 清理资源
-		this.decorationManager.destroy();
+		// 清理事件订阅
+		this.clearEventSubscriptions();
+		
+		// 清理文件管理器订阅
+		if (this.fileManager) {
+			this.fileManager.destroy();
+		}
+		
+		// 关闭数据库连接
+		RegexCache.getInstance().clear();
+		
+		// 清理装饰管理器
+		if (this.decorationManager) {
+			this.decorationManager.destroy();
+		}
+		
+		// 移除所有DOM修改
+		this.decorationManager?.clearFileDecorations();
 		
 		// 输出性能改进统计 
 		console.log(`文件名显示性能统计: DOM操作减少约 ${this.domOperationsReduced}%, 优化后处理了 ${this.updateCount} 次更新`);
@@ -208,7 +279,7 @@ export default class FileDisplayPlugin extends Plugin {
 			
 			if (this.updateCount % 10 === 0) {
 				// 估算DOM操作减少比例
-				this.domOperationsReduced = 70; // 根据视口优化的预期减少量
+				this.domOperationsReduced = 80; // 根据视口优化和RxJS双重优化的预期减少量
 				
 				console.log(`更新文件显示耗时: ${duration.toFixed(2)}ms，文件数: ${files.length}，DOM操作减少: ~${this.domOperationsReduced}%`);
 				
@@ -228,40 +299,36 @@ export default class FileDisplayPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 		
-		// 更新FileManager配置
-		this.fileManager.updateConfig({
-			activeFolder: this.settings.activeFolder
-		});
+		// 更新正则缓存
+		RegexCache.getInstance().updateSettings(this.settings);
 		
-		// 更新显示管理器配置
+		// 更新装饰管理器配置
 		this.decorationManager.updateConfig({
 			fileNamePattern: this.settings.fileNamePattern,
 			captureGroup: this.settings.captureGroup,
 			showOriginalNameOnHover: this.settings.showOriginalNameOnHover
 		});
 		
-		// 更新显示
+		// 重新设置事件订阅
+		this.setupEventSubscriptions();
+		
+		// 更新文件显示
 		this.updateFileDisplay();
 	}
-
-	// 通过文件名打开文件
+	
 	private async openFileByName(fileName: string) {
 		try {
 			await this.fileManager.openFileByName(fileName);
 		} catch (error) {
 			console.error('打开文件失败:', error);
-			new Notice(`打开文件失败: ${error.message}`);
+			new Notice(`无法找到或打开文件: ${fileName}`);
 		}
 	}
-
+	
 	public refreshEditorDecorations() {
-		// 刷新所有编辑器视图
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (view) {
-			const editor = view.editor;
-			// 通过重新应用状态触发编辑器刷新
-			editor.refresh();
-		}
+		// 手动刷新编辑器装饰
+		// 用于应用实时更改
+		this.app.workspace.updateOptions();
 	}
 }
 

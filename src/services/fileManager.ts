@@ -1,4 +1,7 @@
 import { App, TFile, TFolder, normalizePath } from 'obsidian';
+import { EventStreamService, FileEventType, FileEvent } from './eventStreamService';
+import { Observable } from 'rxjs';
+import { tap } from 'rxjs/operators';
 
 /**
  * 文件管理器配置接口
@@ -13,16 +16,48 @@ export interface FileManagerConfig {
  */
 export class FileManager {
     private fileChangeHandlers: Set<() => void> = new Set();
+    private eventStreamService: EventStreamService;
+    private subscription: any;
 
     constructor(
         private app: App,
         private config: FileManagerConfig
     ) {
-        // 监听文件变更事件
-        this.app.vault.on('modify', () => this.notifyFileChange());
-        this.app.vault.on('create', () => this.notifyFileChange());
-        this.app.vault.on('delete', () => this.notifyFileChange());
-        this.app.vault.on('rename', () => this.notifyFileChange());
+        // 初始化事件流服务
+        this.eventStreamService = new EventStreamService({
+            throttleTimeMs: 300,  // 节流时间
+            debounceTimeMs: 500   // 去抖时间
+        });
+        
+        // 监听文件变更事件并转发到事件流
+        this.app.vault.on('modify', (file) => {
+            this.eventStreamService.emitModify(file);
+        });
+        
+        this.app.vault.on('create', (file) => {
+            this.eventStreamService.emitCreate(file);
+        });
+        
+        this.app.vault.on('delete', (file) => {
+            this.eventStreamService.emitDelete(file);
+        });
+        
+        this.app.vault.on('rename', (file, oldPath) => {
+            this.eventStreamService.emitRename(file, oldPath);
+        });
+        
+        // 为了保持向后兼容，在每次处理完事件后通知传统监听器
+        this.subscription = this.eventStreamService.getCombinedStream()
+            .pipe(
+                tap((event: FileEvent) => {
+                    // 输出调试信息
+                    console.log(`[文件事件流] 类型: ${event.type}, 文件: ${event.file.path}`);
+                })
+            )
+            .subscribe(() => {
+                // 触发传统事件处理
+                this.notifyFileChange();
+            });
     }
 
     /**
@@ -34,6 +69,7 @@ export class FileManager {
 
     /**
      * 注册文件变更处理器
+     * @deprecated 推荐使用getFileEventStream()方法订阅事件流
      */
     public onFileChange(handler: () => void): void {
         this.fileChangeHandlers.add(handler);
@@ -41,9 +77,32 @@ export class FileManager {
 
     /**
      * 移除文件变更处理器
+     * @deprecated 推荐使用RxJS订阅模式
      */
     public offFileChange(handler: () => void): void {
         this.fileChangeHandlers.delete(handler);
+    }
+    
+    /**
+     * 获取文件事件流
+     * 允许直接订阅经过节流和去重的事件
+     */
+    public getFileEventStream(): Observable<FileEvent> {
+        return this.eventStreamService.getCombinedStream();
+    }
+    
+    /**
+     * 获取指定文件夹下的事件流
+     */
+    public getFolderEventStream(folderPath: string): Observable<FileEvent> {
+        return this.eventStreamService.getFolderStream(folderPath);
+    }
+    
+    /**
+     * 获取指定文件类型的事件流
+     */
+    public getFileTypeEventStream(extension: string): Observable<FileEvent> {
+        return this.eventStreamService.getFileTypeStream(extension);
     }
     
     /**
@@ -113,5 +172,16 @@ export class FileManager {
             return;
         }
         throw new Error(`未找到文件: ${fileName}`);
+    }
+    
+    /**
+     * 销毁服务
+     * 清理订阅以避免内存泄漏
+     */
+    public destroy(): void {
+        if (this.subscription) {
+            this.subscription.unsubscribe();
+            this.subscription = null;
+        }
     }
 }  

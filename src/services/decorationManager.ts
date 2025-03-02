@@ -81,6 +81,11 @@ export class DecorationManager {
         this.createStyleElement();
         // 初始化EditorViewport
         this.setupEditorViewport();
+        
+        // 延迟初始化文件浏览器
+        setTimeout(() => {
+            this.setupFileExplorerObserver();
+        }, 300);
     }
     
     /**
@@ -194,26 +199,39 @@ export class DecorationManager {
                     display: block;
                 }
                 
-                /* 文件树和标签页样式 */
-                [data-displayed-filename] .nav-file-title-content,
-                [data-displayed-filename] .workspace-tab-header-inner-title,
-                [data-displayed-filename] .view-header-title,
-                [data-displayed-filename] .tree-item-inner {
-                    color: transparent;
+                /* 基础样式，使原始文件名变为透明 */
+                .nav-file-title-content[data-displayed-filename],
+                .workspace-tab-header-inner-title[data-displayed-filename],
+                .view-header-title[data-displayed-filename] {
+                    color: transparent !important;
                     position: relative;
                 }
                 
-                [data-displayed-filename] .nav-file-title-content::before,
-                [data-displayed-filename] .workspace-tab-header-inner-title::before,
-                [data-displayed-filename] .view-header-title::before,
-                [data-displayed-filename] .tree-item-inner::before {
+                /* 伪元素内容定位，精确显示在原始文件名位置 */
+                .nav-file-title-content[data-displayed-filename]::before,
+                .workspace-tab-header-inner-title[data-displayed-filename]::before,
+                .view-header-title[data-displayed-filename]::before {
                     content: attr(data-displayed-filename);
                     position: absolute;
                     left: 0;
+                    top: 0;
+                    right: 0;
+                    bottom: 0;
                     color: var(--text-normal);
-                    /* 添加GPU加速 */
-                    transform: translateZ(0);
-                    will-change: transform;
+                    background: none;
+                    z-index: 1;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    display: flex;
+                    align-items: center;
+                }
+                
+                /* 确保图标和展开/折叠箭头保持可见 */
+                .nav-folder-collapse-indicator, 
+                .nav-file-icon {
+                    z-index: 2;
+                    position: relative;
                 }
             `;
         }
@@ -234,8 +252,17 @@ export class DecorationManager {
             // 移除文件扩展名
             const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
             
+            // 获取正则表达式缓存实例
+            const regexCache = RegexCache.getInstance();
+            
+            // 验证正则表达式模式是否有效
+            if (!regexCache.isValidRegex(this.config.fileNamePattern)) {
+                console.error(`无效的正则表达式模式: ${this.config.fileNamePattern}`);
+                return this.getFallbackName(nameWithoutExt);
+            }
+            
             // 使用配置的正则表达式进行匹配
-            const regex = RegexCache.getInstance().get(this.config.fileNamePattern);
+            const regex = regexCache.get(this.config.fileNamePattern);
             const match = nameWithoutExt.match(regex);
             
             // 验证捕获组索引是否有效
@@ -248,9 +275,8 @@ export class DecorationManager {
             // 如果匹配失败或捕获组无效，使用回退名称
             return this.getFallbackName(nameWithoutExt);
         } catch (error) {
-            // 记录错误并使用回退名称
-            console.error('文件名处理错误:', error);
-            return this.getFallbackName(originalName);
+            console.error(`处理文件名时出错: ${originalName}`, error);
+            return originalName; // 发生错误时返回原始文件名
         }
     }
     
@@ -267,25 +293,87 @@ export class DecorationManager {
     }
     
     /**
+     * 设置文件浏览器观察器
+     * 这将处理文件浏览器中的文件显示
+     */
+    private setupFileExplorerObserver(): void {
+        try {
+            // 尝试获取文件浏览器元素
+            const fileExplorer = document.querySelector('.nav-files-container');
+            if (!fileExplorer) {
+                // 如果找不到，设置更长的延迟重试
+                setTimeout(() => this.setupFileExplorerObserver(), 2000);
+                return;
+            }
+            
+            // 创建观察器监听文件浏览器的变化
+            const observer = new MutationObserver((mutations) => {
+                // 总是尝试处理文件面板，因为Obsidian可能会动态更新DOM
+                // 而不会触发明显的节点添加
+                setTimeout(() => this.processFilesPanel(), 50);
+            });
+            
+            // 开始观察，监听更多的变化类型
+            observer.observe(fileExplorer, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                characterData: true // 监听文本变化
+            });
+            
+            // 初始处理所有现有文件
+            this.processFilesPanel();
+            
+            // 添加多个延迟处理，应对不同加载情况
+            setTimeout(() => this.processFilesPanel(), 500);
+            setTimeout(() => this.processFilesPanel(), 1000);
+            setTimeout(() => this.processFilesPanel(), 3000);
+            
+            // 另外观察整个文档的变化，捕获可能的视图变化
+            const docObserver = new MutationObserver((mutations) => {
+                // 查找潜在的文件标题相关变化
+                for (const mutation of mutations) {
+                    if (mutation.target instanceof HTMLElement) {
+                        const targetEl = mutation.target;
+                        if (targetEl.classList.contains('nav-file-title') || 
+                            targetEl.closest('.nav-file-title') || 
+                            targetEl.querySelector('.nav-file-title')) {
+                            setTimeout(() => this.processFilesPanel(), 50);
+                            break;
+                        }
+                    }
+                }
+            });
+            
+            // 针对整个应用容器应用观察
+            const appContainer = document.querySelector('.app-container');
+            if (appContainer) {
+                docObserver.observe(appContainer, { 
+                    childList: true, 
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ['class', 'data-path']
+                });
+            }
+        } catch (error) {
+            console.error('设置文件浏览器观察器失败:', error);
+        }
+    }
+    
+    /**
      * 应用文件元素装饰
      * 为DOM元素添加data-displayed-filename属性来修改显示
      * 不再使用CSS规则覆盖，而是使用数据属性和单一全局样式
      */
     public applyFileDecorations(files: TFile[]): void {
         try {
-            // 清除旧的名称映射
-            this.clearNameMapping();
-            
-            // 计算需要处理的文件
-            const filesToProcess = this.getVisibleFiles(files);
-            
-            // 批量处理文件
-            for (const file of filesToProcess) {
+            // 处理所有文件，确保文件面板中的文件都能正确显示
+            for (const file of files) {
                 try {
                     const originalName = file.basename;
                     const newName = this.getUpdatedFileName(originalName);
                     
-                    if (newName) {
+                    if (newName && newName !== originalName) {
                         // 更新名称映射
                         this.updateNameMapping(originalName, newName);
                         
@@ -296,6 +384,9 @@ export class DecorationManager {
                     console.error(`处理文件失败: ${file.path}`, error);
                 }
             }
+            
+            // 额外处理文件面板
+            this.processFilesPanel();
         } catch (error) {
             console.error('应用文件装饰失败:', error);
         }
@@ -306,8 +397,8 @@ export class DecorationManager {
      * 如果文件数量少于阈值，则返回所有文件
      */
     private getVisibleFiles(files: TFile[]): TFile[] {
-        // 如果文件数量很少，直接返回所有文件
-        const THRESHOLD = 50;
+        // 如果文件不多，直接处理所有文件，解决Files panel中未点击文件不显示修改后名称的问题
+        const THRESHOLD = 500; // 提高阈值以处理更多文件
         if (files.length <= THRESHOLD) {
             return files;
         }
@@ -335,7 +426,7 @@ export class DecorationManager {
             
             // 获取最近打开的文件
             const recentFiles = this.app.workspace.getLastOpenFiles();
-            for (const path of recentFiles.slice(0, 5)) { // 最多处理5个最近文件
+            for (const path of recentFiles.slice(0, 20)) { // 增加处理更多最近文件
                 visiblePaths.add(path);
             }
         }
@@ -343,19 +434,61 @@ export class DecorationManager {
         // 筛选出可见文件
         const visibleFiles = files.filter(file => visiblePaths.has(file.path));
         
-        // 如果没有可见文件，则返回部分文件作为备选
-        return visibleFiles.length > 0 ? visibleFiles : files.slice(0, THRESHOLD);
+        // 如果可见文件不多，则返回更多文件以确保文件面板显示正确
+        return visibleFiles.length > 0 ? [...visibleFiles, ...files.slice(0, 100)] : files.slice(0, THRESHOLD);
     }
     
     /**
      * 更新文件相关DOM元素的显示
      */
     private updateFileElements(filePath: string, displayName: string): void {
-        // 查找所有相关元素并更新数据属性
-        const elements = document.querySelectorAll(`[data-path="${CSS.escape(filePath)}"]`);
-        elements.forEach(el => {
-            el.setAttribute('data-displayed-filename', displayName);
-        });
+        try {
+            // 提取文件名（不含扩展名）和文件路径信息
+            const filePathWithoutExt = filePath.replace(/\.[^/.]+$/, "");
+            const fileName = filePathWithoutExt.split('/').pop() || '';
+            const fullFileName = filePath.split('/').pop() || '';
+            
+            // 1. 查找所有通过data-path属性关联的元素
+            const pathElements = document.querySelectorAll(`[data-path="${CSS.escape(filePath)}"]`);
+            pathElements.forEach(el => {
+                // 对于文件标题元素的处理
+                const titleContent = el.querySelector('.nav-file-title-content');
+                if (titleContent) {
+                    titleContent.setAttribute('data-displayed-filename', displayName);
+                }
+                
+                // 对于其他元素的处理
+                const headerTitle = el.querySelector('.workspace-tab-header-inner-title, .view-header-title');
+                if (headerTitle) {
+                    headerTitle.setAttribute('data-displayed-filename', displayName);
+                }
+            });
+            
+            // 2. 针对Files panel特殊处理
+            const fileExplorer = document.querySelector('.nav-files-container');
+            if (fileExplorer) {
+                // 查找所有文件标题内容元素
+                const fileTitleContents = fileExplorer.querySelectorAll('.nav-file-title-content');
+                
+                for (const titleEl of Array.from(fileTitleContents)) {
+                    const currentText = titleEl.textContent;
+                    if (!currentText) continue;
+                    
+                    // 精确匹配文件名
+                    if (currentText === fileName || currentText === fullFileName) {
+                        titleEl.setAttribute('data-displayed-filename', displayName);
+                        
+                        // 保存原始路径信息到父元素
+                        const fileTitle = titleEl.closest('.nav-file-title');
+                        if (fileTitle && !fileTitle.hasAttribute('data-path')) {
+                            fileTitle.setAttribute('data-path', filePath);
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`更新文件元素失败: ${filePath}`, error);
+        }
     }
     
     /**
@@ -401,6 +534,20 @@ export class DecorationManager {
         if (this.editorViewport) {
             this.editorViewport.destroy();
             this.editorViewport = null;
+        }
+        
+        // 销毁文件浏览器观察器
+        try {
+            const fileExplorer = document.querySelector('.nav-files-container');
+            if (fileExplorer) {
+                // 我们无法直接访问已注册的MutationObserver
+                // 使用直接的DOM方法清理
+                document.querySelectorAll('.nav-file-title[data-displayed-filename]').forEach(el => {
+                    el.removeAttribute('data-displayed-filename');
+                });
+            }
+        } catch (error) {
+            console.error('清理文件浏览器样式失败:', error);
         }
         
         if (this.styleEl) {
@@ -481,5 +628,50 @@ export class DecorationManager {
                 decorations: v => v.decorations
             }
         );
+    }
+    
+    /**
+     * 处理文件面板中的所有文件
+     */
+    private processFilesPanel(): void {
+        try {
+            // 获取所有文件标题内容元素
+            const fileTitleContents = document.querySelectorAll('.nav-file-title-content');
+            
+            for (const titleEl of Array.from(fileTitleContents)) {
+                if (!titleEl.textContent) continue;
+                
+                // 获取原始文件名
+                const fileName = titleEl.textContent;
+                
+                // 获取更新后的文件名
+                const newName = this.getUpdatedFileName(fileName);
+                if (!newName || newName === fileName) continue;
+                
+                // 直接在内容元素上设置属性
+                titleEl.setAttribute('data-displayed-filename', newName);
+                
+                // 更新映射
+                this.updateNameMapping(fileName, newName);
+                
+                // 同时更新父元素（为了兼容性）
+                const navFileTitle = titleEl.closest('.nav-file-title');
+                if (navFileTitle) {
+                    // 尝试找到文件路径
+                    const filePath = navFileTitle.getAttribute('data-path');
+                    if (!filePath) {
+                        const parent = navFileTitle.closest('.nav-file');
+                        if (parent) {
+                            const possiblePath = parent.getAttribute('data-path');
+                            if (possiblePath) {
+                                navFileTitle.setAttribute('data-path', possiblePath);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('处理文件面板失败:', error);
+        }
     }
 } 
