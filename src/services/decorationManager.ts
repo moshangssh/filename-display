@@ -3,6 +3,9 @@ import { RangeSetBuilder } from '@codemirror/state';
 import { TFile, App } from 'obsidian';
 import { RegexCache } from '../utils/regexCache';
 import { EditorViewport, ViewportElement } from './editorViewport';
+import { BaseWidget } from '../ui/linkWidget';
+import { DOMUtils } from '../utils/domUtils';
+import { createGlobalStyles } from '../styles/widgetStyles';
 
 /**
  * 文件名显示配置接口
@@ -16,35 +19,27 @@ export interface DecorationManagerConfig {
 /**
  * 链接部件类，显示替换后的文件名
  */
-export class FilenameDecorationWidget extends WidgetType {
+export class FilenameDecorationWidget extends BaseWidget {
     constructor(
         readonly displayText: string, 
         readonly originalText: string, 
         readonly showTooltip: boolean
     ) {
-        super();
+        super(displayText, originalText);
     }
 
     toDOM() {
-        const container = document.createElement('span');
-        container.className = 'filename-decoration-widget';
+        const container = this.createContainer('filename-decoration-widget');
         
         // 显示新名称
-        const display = document.createElement('span');
-        display.textContent = this.displayText;
-        display.className = 'filename-display cm-hmd-internal-link';
+        const display = this.createDisplayElement('filename-display cm-hmd-internal-link');
         container.appendChild(display);
 
         // 根据设置决定是否添加提示
         if (this.showTooltip) {
-            const tooltip = document.createElement('span');
-            tooltip.textContent = this.originalText;
-            tooltip.className = 'filename-tooltip';
+            const tooltip = this.createTooltipElement('filename-tooltip');
             container.appendChild(tooltip);
         }
-
-        // 保存原始文本用于复制等操作
-        container.dataset.originalText = this.originalText;
 
         return container;
     }
@@ -53,10 +48,6 @@ export class FilenameDecorationWidget extends WidgetType {
         return other.displayText === this.displayText && 
                other.originalText === this.originalText &&
                other.showTooltip === this.showTooltip;
-    }
-
-    ignoreEvent(): boolean {
-        return false;
     }
 }
 
@@ -130,25 +121,16 @@ export class DecorationManager {
         // 更新元素显示
         if (element.element.dataset.originalText !== content) {
             // 保存原始文本
-            element.element.dataset.originalText = content;
+            DOMUtils.setDataset(element.element, {
+                originalText: content
+            });
             
-            // 创建装饰容器
-            const container = document.createElement('span');
-            container.className = 'filename-decoration-widget';
-            
-            // 显示新名称
-            const display = document.createElement('span');
-            display.textContent = newName;
-            display.className = 'filename-display';
-            container.appendChild(display);
-            
-            // 根据设置决定是否添加提示
-            if (this.config.showOriginalNameOnHover) {
-                const tooltip = document.createElement('span');
-                tooltip.textContent = content;
-                tooltip.className = 'filename-tooltip';
-                container.appendChild(tooltip);
-            }
+            // 创建装饰部件
+            const widget = new FilenameDecorationWidget(
+                newName, 
+                content, 
+                this.config.showOriginalNameOnHover
+            );
             
             // 清空原始元素内容
             while (element.element.firstChild) {
@@ -156,7 +138,7 @@ export class DecorationManager {
             }
             
             // 添加装饰容器
-            element.element.appendChild(container);
+            element.element.appendChild(widget.toDOM());
             
             // 更新映射关系
             this.updateNameMapping(content, newName);
@@ -168,72 +150,8 @@ export class DecorationManager {
      */
     private createStyleElement(): void {
         if (!this.styleEl) {
-            this.styleEl = document.createElement('style');
-            this.styleEl.id = 'filename-display-global-styles';
+            this.styleEl = createGlobalStyles();
             document.head.appendChild(this.styleEl);
-            
-            // 添加全局基础样式
-            this.styleEl.textContent = `
-                .filename-decoration-widget {
-                    position: relative;
-                    display: inline-block;
-                }
-                .filename-display {
-                    color: var(--text-accent);
-                    text-decoration: none;
-                    cursor: pointer;
-                }
-                .filename-tooltip {
-                    display: none;
-                    position: absolute;
-                    bottom: 100%;
-                    left: 50%;
-                    transform: translateX(-50%);
-                    padding: 4px 8px;
-                    background-color: var(--background-modifier-hover);
-                    border-radius: 4px;
-                    font-size: 12px;
-                    z-index: 100;
-                }
-                .filename-decoration-widget:hover .filename-tooltip {
-                    display: block;
-                }
-                
-                /* 基础样式，使原始文件名变为透明 */
-                .nav-file-title-content[data-displayed-filename],
-                .workspace-tab-header-inner-title[data-displayed-filename],
-                .view-header-title[data-displayed-filename] {
-                    color: transparent !important;
-                    position: relative;
-                }
-                
-                /* 伪元素内容定位，精确显示在原始文件名位置 */
-                .nav-file-title-content[data-displayed-filename]::before,
-                .workspace-tab-header-inner-title[data-displayed-filename]::before,
-                .view-header-title[data-displayed-filename]::before {
-                    content: attr(data-displayed-filename);
-                    position: absolute;
-                    left: 0;
-                    top: 0;
-                    right: 0;
-                    bottom: 0;
-                    color: var(--text-normal);
-                    background: none;
-                    z-index: 1;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    display: flex;
-                    align-items: center;
-                }
-                
-                /* 确保图标和展开/折叠箭头保持可见 */
-                .nav-folder-collapse-indicator, 
-                .nav-file-icon {
-                    z-index: 2;
-                    position: relative;
-                }
-            `;
         }
     }
     
@@ -454,13 +372,17 @@ export class DecorationManager {
                 // 对于文件标题元素的处理
                 const titleContent = el.querySelector('.nav-file-title-content');
                 if (titleContent) {
-                    titleContent.setAttribute('data-displayed-filename', displayName);
+                    DOMUtils.setAttributes(titleContent as HTMLElement, {
+                        'data-displayed-filename': displayName
+                    });
                 }
                 
                 // 对于其他元素的处理
                 const headerTitle = el.querySelector('.workspace-tab-header-inner-title, .view-header-title');
                 if (headerTitle) {
-                    headerTitle.setAttribute('data-displayed-filename', displayName);
+                    DOMUtils.setAttributes(headerTitle as HTMLElement, {
+                        'data-displayed-filename': displayName
+                    });
                 }
             });
             
@@ -476,12 +398,16 @@ export class DecorationManager {
                     
                     // 精确匹配文件名
                     if (currentText === fileName || currentText === fullFileName) {
-                        titleEl.setAttribute('data-displayed-filename', displayName);
+                        DOMUtils.setAttributes(titleEl as HTMLElement, {
+                            'data-displayed-filename': displayName
+                        });
                         
                         // 保存原始路径信息到父元素
                         const fileTitle = titleEl.closest('.nav-file-title');
                         if (fileTitle && !fileTitle.hasAttribute('data-path')) {
-                            fileTitle.setAttribute('data-path', filePath);
+                            DOMUtils.setAttributes(fileTitle as HTMLElement, {
+                                'data-path': filePath
+                            });
                         }
                     }
                 }
@@ -497,6 +423,9 @@ export class DecorationManager {
     public clearFileDecorations(): void {
         // 移除所有数据属性
         document.querySelectorAll('[data-displayed-filename]').forEach(el => {
+            DOMUtils.setAttributes(el as HTMLElement, {
+                'data-displayed-filename': ''
+            });
             el.removeAttribute('data-displayed-filename');
         });
     }
@@ -649,7 +578,9 @@ export class DecorationManager {
                 if (!newName || newName === fileName) continue;
                 
                 // 直接在内容元素上设置属性
-                titleEl.setAttribute('data-displayed-filename', newName);
+                DOMUtils.setAttributes(titleEl as HTMLElement, {
+                    'data-displayed-filename': newName
+                });
                 
                 // 更新映射
                 this.updateNameMapping(fileName, newName);
@@ -664,7 +595,9 @@ export class DecorationManager {
                         if (parent) {
                             const possiblePath = parent.getAttribute('data-path');
                             if (possiblePath) {
-                                navFileTitle.setAttribute('data-path', possiblePath);
+                                DOMUtils.setAttributes(navFileTitle as HTMLElement, {
+                                    'data-path': possiblePath
+                                });
                             }
                         }
                     }

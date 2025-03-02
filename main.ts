@@ -8,6 +8,7 @@ import { RegexCache } from './src/utils/regexCache';
 import { FileEventType } from './src/services/eventStreamService';
 import { Subscription } from 'rxjs';
 import { throttleTime } from 'rxjs/operators';
+import { widgetStyles } from './src/styles/widgetStyles';
 
 export default class FileDisplayPlugin extends Plugin {
 	settings: FileDisplayPluginSettings;
@@ -48,8 +49,11 @@ export default class FileDisplayPlugin extends Plugin {
 		// 更新正则缓存设置
 		RegexCache.getInstance().updateSettings(this.settings);
 		
-		// 创建编辑器扩展
-		this.editorExtension = [this.decorationManager.createEditorViewPlugin()];
+		// 创建编辑器扩展，包含统一的样式
+		this.editorExtension = [
+			this.decorationManager.createEditorViewPlugin(),
+			widgetStyles
+		];
 		
 		// 设置选项卡
 		this.addSettingTab(new FileNameDisplaySettingTab(this.app, this));
