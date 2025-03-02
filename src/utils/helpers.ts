@@ -218,32 +218,4 @@ export function getFolderPathFromFilePath(path: string): string {
     const lastSlashIndex = path.lastIndexOf('/');
     if (lastSlashIndex < 0) return '';
     return path.substring(0, lastSlashIndex);
-}
-
-/**
- * 创建防抖函数的包装器
- * 带有性能监控功能
- * 
- * @param func 要执行的函数
- * @param name 函数名(用于日志)
- * @param wait 等待时间(毫秒)
- * @returns 防抖处理后的函数
- */
-export function createDebouncedFunction<T extends (...args: any[]) => any>(
-    func: T,
-    name: string,
-    wait: number
-): (...args: Parameters<T>) => void {
-    let timeout: NodeJS.Timeout | null = null;
-    
-    return (...args: Parameters<T>) => {
-        if (timeout) {
-            clearTimeout(timeout);
-        }
-        
-        timeout = setTimeout(() => {
-            func(...args);
-            timeout = null;
-        }, wait);
-    };
 } 
