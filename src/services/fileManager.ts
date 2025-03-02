@@ -15,7 +15,6 @@ export interface FileManagerConfig {
  * 负责文件的检索和处理
  */
 export class FileManager {
-    private fileChangeHandlers: Set<() => void> = new Set();
     private eventStreamService: EventStreamService;
     private subscription: any;
 
@@ -55,34 +54,10 @@ export class FileManager {
                 })
             )
             .subscribe(() => {
-                // 触发传统事件处理
-                this.notifyFileChange();
+                // 事件流已经可以被直接订阅，不需要额外通知
             });
     }
 
-    /**
-     * 通知文件变更
-     */
-    private notifyFileChange(): void {
-        this.fileChangeHandlers.forEach(handler => handler());
-    }
-
-    /**
-     * 注册文件变更处理器
-     * @deprecated 推荐使用getFileEventStream()方法订阅事件流
-     */
-    public onFileChange(handler: () => void): void {
-        this.fileChangeHandlers.add(handler);
-    }
-
-    /**
-     * 移除文件变更处理器
-     * @deprecated 推荐使用RxJS订阅模式
-     */
-    public offFileChange(handler: () => void): void {
-        this.fileChangeHandlers.delete(handler);
-    }
-    
     /**
      * 获取文件事件流
      * 允许直接订阅经过节流和去重的事件
