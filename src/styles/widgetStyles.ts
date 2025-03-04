@@ -28,7 +28,11 @@ export const widgetStyles = EditorView.baseTheme({
         backgroundColor: 'var(--background-modifier-hover)',
         borderRadius: '4px',
         fontSize: '12px',
-        zIndex: '100'
+        zIndex: '100',
+        whiteSpace: 'nowrap',
+        maxWidth: '300px',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
     },
     '.enhanced-link-widget:hover .link-tooltip': {
         display: 'block'
@@ -54,7 +58,11 @@ export const widgetStyles = EditorView.baseTheme({
         backgroundColor: 'var(--background-modifier-hover)',
         borderRadius: '4px',
         fontSize: '12px',
-        zIndex: '100'
+        zIndex: '100',
+        whiteSpace: 'nowrap',
+        maxWidth: '300px',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
     },
     '.filename-decoration-widget:hover .filename-tooltip': {
         display: 'block'

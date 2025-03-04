@@ -42,6 +42,11 @@ If your plugin does not need CSS, delete this file.
   --z-tooltip: 100;
   --z-dropdown: 1000;
   --z-modal: 2000;
+
+  /* Obsidian 变量引用 */
+  --fd-nav-bg: var(--nav-item-background-active);
+  --fd-text-color: var(--nav-item-color);
+  --fd-hover-bg: var(--nav-item-background-hover);
 }
 
 /* 组件样式 */
@@ -87,21 +92,21 @@ If your plugin does not need CSS, delete this file.
 
 /* 工具类 */
 /* 性能优化工具类 */
-.gpu-accelerated {
+.fd-gpu-accelerated {
   transform: translateZ(0);
   backface-visibility: hidden;
   perspective: 1000;
   will-change: transform;
 }
 
-.optimize-layer {
+.fd-optimize-layer {
   isolation: isolate;
   transform: translateZ(0);
   will-change: transform;
 }
 
 /* 滚动优化 */
-.smooth-scroll {
+.fd-smooth-scroll {
   -webkit-overflow-scrolling: touch;
   scroll-behavior: smooth;
   overscroll-behavior: contain;
@@ -118,8 +123,11 @@ If your plugin does not need CSS, delete this file.
 .workspace-tab-header-inner-title,
 .view-header-title,
 .tree-item-inner {
-  composes: title-component optimize-layer;
   position: relative;
+  padding: var(--nav-padding);
+  margin: var(--nav-margin);
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 /* 文件树导航栏基础样式 */
@@ -154,7 +162,8 @@ If your plugin does not need CSS, delete this file.
 
 /* 添加新的链接样式 */
 .enhanced-link-widget {
-  composes: inline-block relative;
+  display: inline-block;
+  position: relative;
 }
 
 .link-display {
@@ -164,9 +173,15 @@ If your plugin does not need CSS, delete this file.
 }
 
 .link-tooltip {
-  composes: tooltip-component;
-  display: none;
   position: absolute;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background-color: var(--bg-hover);
+  border-radius: var(--spacing-xs);
+  font-size: var(--font-size-small);
+  z-index: var(--z-tooltip);
+  opacity: 0;
+  transition: opacity var(--transition-quick);
+  display: none;
   bottom: 100%;
   left: 50%;
   transform: translateX(-50%);
@@ -180,13 +195,23 @@ If your plugin does not need CSS, delete this file.
 /* 优化内部链接样式 */
 .internal-link,
 .cm-hmd-internal-link {
-  composes: link-component;
+  color: var(--primary-color);
+  text-decoration: none;
+  transition: color var(--transition-quick);
   cursor: pointer;
 }
 
 /* 性能优化 */
-.nav-files-container {
-  composes: smooth-scroll;
+.fd-nav-files-container {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+  background-color: var(--fd-nav-bg);
+  color: var(--fd-text-color);
+}
+
+.fd-nav-files-container:hover {
+  background-color: var(--fd-hover-bg);
 }
 
 /* 针对低性能设备的优化 */
