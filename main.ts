@@ -6,8 +6,8 @@ import { FileNameDisplaySettingTab } from './src/ui/settingsTab';
 import { DecorationManager } from './src/services/decorationManager';
 import { RegexCache } from './src/utils/regexCache';
 import { FileEventType } from './src/services/eventStreamService';
-import { Subscription } from 'rxjs';
-import { throttleTime } from 'rxjs/operators';
+import { Subscription, timer } from 'rxjs';
+import { throttleTime, retryWhen, tap, delayWhen, take } from 'rxjs/operators';
 import { widgetStyles } from './src/styles/widgetStyles';
 
 export default class FileDisplayPlugin extends Plugin {
@@ -135,12 +135,31 @@ export default class FileDisplayPlugin extends Plugin {
 				.getFolderEventStream(folderPath)
 				.pipe(
 					// 额外的节流，避免密集更新
-					throttleTime(800)
+					throttleTime(800),
+					// 错误处理和自动重试
+					retryWhen(errors => 
+						errors.pipe(
+							tap(err => {
+								console.error('文件夹事件流错误:', err);
+								new Notice('文件夹监听出现错误，正在尝试恢复...');
+							}),
+							delayWhen((_, index) => timer(Math.min(1000 * Math.pow(2, index), 10000))),
+							take(3)
+						)
+					)
 				)
-				.subscribe(event => {
-					// 不同事件类型的处理逻辑可以在这里扩展
-					console.log(`处理文件事件: ${event.type} - ${event.file.path}`);
-					this.updateFileDisplay();
+				.subscribe({
+					next: event => {
+						console.log(`处理文件事件: ${event.type} - ${event.file.path}`);
+						this.updateFileDisplay();
+					},
+					error: err => {
+						console.error('文件夹事件流发生严重错误:', err);
+						new Notice('文件夹监听发生错误，请重启插件');
+					},
+					complete: () => {
+						console.log('文件夹事件流已完成');
+					}
 				});
 			
 			this.eventSubscriptions.push(folderSubscription);
@@ -150,15 +169,33 @@ export default class FileDisplayPlugin extends Plugin {
 		const mdSubscription = this.fileManager
 			.getFileTypeEventStream('md')
 			.pipe(
-				throttleTime(1000)
+				throttleTime(1000),
+				// 错误处理和自动重试
+				retryWhen(errors => 
+					errors.pipe(
+						tap(err => {
+							console.error('Markdown文件事件流错误:', err);
+							new Notice('Markdown文件监听出现错误，正在尝试恢复...');
+						}),
+						delayWhen((_, index) => timer(Math.min(1000 * Math.pow(2, index), 10000))),
+						take(3)
+					)
+				)
 			)
-			.subscribe(event => {
-				// 处理特定类型的事件，可以针对不同事件类型进行优化
-				if (event.type === FileEventType.RENAME) {
-					console.log(`重命名事件: ${event.file.path} (原路径: ${event.oldPath})`);
+			.subscribe({
+				next: event => {
+					if (event.type === FileEventType.RENAME) {
+						console.log(`重命名事件: ${event.file.path} (原路径: ${event.oldPath})`);
+					}
+					this.updateFileDisplay();
+				},
+				error: err => {
+					console.error('Markdown文件事件流发生严重错误:', err);
+					new Notice('Markdown文件监听发生错误，请重启插件');
+				},
+				complete: () => {
+					console.log('Markdown文件事件流已完成');
 				}
-				
-				this.updateFileDisplay();
 			});
 		
 		this.eventSubscriptions.push(mdSubscription);
