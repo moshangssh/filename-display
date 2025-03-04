@@ -47,7 +47,7 @@ export default class FileDisplayPlugin extends Plugin {
 		);
 		
 		// 更新正则缓存设置
-		RegexCache.getInstance().updateSettings(this.settings);
+		RegexCache.getInstance().updateSettings();
 		
 		// 创建编辑器扩展，包含统一的样式
 		this.editorExtension = [
@@ -205,10 +205,20 @@ export default class FileDisplayPlugin extends Plugin {
 	 * 清理事件订阅
 	 */
 	private clearEventSubscriptions() {
-		for (const subscription of this.eventSubscriptions) {
-			subscription.unsubscribe();
-		}
+		// 遍历并清理每个订阅
+		this.eventSubscriptions.forEach(subscription => {
+			if (subscription && !subscription.closed) {
+				subscription.unsubscribe();
+			}
+		});
+		
+		// 清空订阅数组
 		this.eventSubscriptions = [];
+		
+		// 额外安全检查 - 确保所有订阅都被清理
+		if (this.eventSubscriptions.length > 0) {
+			console.warn('仍有未清理的订阅');
+		}
 	}
 
 	onunload() {
@@ -341,7 +351,7 @@ export default class FileDisplayPlugin extends Plugin {
 		await this.saveData(this.settings);
 		
 		// 更新正则缓存
-		RegexCache.getInstance().updateSettings(this.settings);
+		RegexCache.getInstance().updateSettings();
 		
 		// 更新装饰管理器配置
 		this.decorationManager.updateConfig({

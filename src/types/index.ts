@@ -7,9 +7,6 @@ export interface FileDisplayPluginSettings {
     fileNamePattern: string;  // 文件名匹配模式
     captureGroup: number;     // 要显示的捕获组索引
     showOriginalNameOnHover: boolean;
-    // 正则缓存设置
-    enableRegexCaching: boolean;  // 是否启用正则表达式缓存
-    maxRegexCacheSize: number;    // 最大正则缓存数量
 }
 
 // 默认设置
@@ -18,10 +15,7 @@ export const DEFAULT_SETTINGS: FileDisplayPluginSettings = {
     enablePlugin: true,
     fileNamePattern: '^(.+?)_\\d{4}_\\d{2}_\\d{2}_(.+)$', // 默认保持原来的格式
     captureGroup: 2,     // 默认显示第二个捕获组
-    showOriginalNameOnHover: true,
-    // 正则缓存默认设置
-    enableRegexCaching: true,
-    maxRegexCacheSize: 50
+    showOriginalNameOnHover: true
 }
 
 // 文件缓存项接口

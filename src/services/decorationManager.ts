@@ -6,6 +6,7 @@ import { EditorViewport, ViewportElement } from './editorViewport';
 import { BaseWidget } from '../ui/linkWidget';
 import { DOMUtils } from '../utils/domUtils';
 import { createGlobalStyles } from '../styles/widgetStyles';
+import { debounceFn } from '../utils/debounceIntegration';
 
 /**
  * 文件名显示配置接口
@@ -52,26 +53,105 @@ export class FilenameDecorationWidget extends BaseWidget {
 }
 
 /**
+ * LRU缓存实现
+ */
+class LRUCache<K, V> {
+    private cache: Map<K, V>;
+    private timestamps: Map<K, number>;
+    private readonly maxSize: number;
+    private hits: number = 0;
+    private misses: number = 0;
+    
+    constructor(maxSize: number) {
+        this.maxSize = maxSize;
+        this.cache = new Map();
+        this.timestamps = new Map();
+    }
+    
+    set(key: K, value: V): void {
+        this.timestamps.set(key, Date.now());
+        
+        if (this.cache.size >= this.maxSize) {
+            this.evictOldest();
+        }
+        
+        this.cache.set(key, value);
+    }
+    
+    get(key: K): V | null {
+        const value = this.cache.get(key);
+        if (value !== undefined) {
+            this.hits++;
+            this.timestamps.set(key, Date.now());
+            return value;
+        }
+        this.misses++;
+        return null;
+    }
+    
+    private evictOldest(): void {
+        let oldestKey: K | null = null;
+        let oldestTime = Infinity;
+        
+        for (const [key, time] of this.timestamps) {
+            if (time < oldestTime) {
+                oldestTime = time;
+                oldestKey = key;
+            }
+        }
+        
+        if (oldestKey) {
+            this.cache.delete(oldestKey);
+            this.timestamps.delete(oldestKey);
+        }
+    }
+    
+    clear(): void {
+        this.cache.clear();
+        this.timestamps.clear();
+        this.hits = 0;
+        this.misses = 0;
+    }
+    
+    getStats(): { hits: number; misses: number; hitRate: number } {
+        const total = this.hits + this.misses;
+        return {
+            hits: this.hits,
+            misses: this.misses,
+            hitRate: total > 0 ? this.hits / total : 0
+        };
+    }
+}
+
+/**
  * 文件名装饰管理器
  * 使用CodeMirror 6 Decoration系统来管理文件名显示
  */
 export class DecorationManager {
     private config: DecorationManagerConfig;
-    private nameMapping: Map<string, string> = new Map();
+    private readonly nameCache: LRUCache<string, string>;
     private styleEl: HTMLStyleElement | null = null;
     private editorViewport: EditorViewport | null = null;
     private app: App;
+    private readonly CLEANUP_INTERVAL = 1000 * 60 * 5; // 5分钟清理一次
+    private cleanupTimer: NodeJS.Timeout | null = null;
     
-    // 性能指标
-    private totalElementsProcessed: number = 0;
-    private lastProcessedCount: number = 0;
+    // 性能监控
+    private metrics = {
+        totalProcessed: 0,
+        lastBatchSize: 0,
+        lastProcessTime: 0,
+        avgProcessTime: 0
+    };
     
     constructor(app: App, config: DecorationManagerConfig) {
         this.app = app;
         this.config = { ...config };
+        this.nameCache = new LRUCache<string, string>(1000);
+        
         this.createStyleElement();
-        // 初始化EditorViewport
         this.setupEditorViewport();
+        this.setupPeriodicCleanup();
         
         // 延迟初始化文件浏览器
         setTimeout(() => {
@@ -97,8 +177,8 @@ export class DecorationManager {
      */
     private handleViewportChange(visibleElements: ViewportElement[]): void {
         // 记录性能指标
-        this.lastProcessedCount = visibleElements.length;
-        this.totalElementsProcessed += visibleElements.length;
+        this.metrics.lastBatchSize = visibleElements.length;
+        this.metrics.totalProcessed += visibleElements.length;
         
         // 仅处理可见元素，大幅减少DOM操作
         for (const element of visibleElements) {
@@ -107,42 +187,42 @@ export class DecorationManager {
     }
     
     /**
-     * 处理单个元素的装饰
+     * 设置定期清理机制
      */
-    private processElement(element: ViewportElement): void {
-        // 获取元素内容
-        const content = element.element.textContent;
-        if (!content) return;
-        
-        // 获取更新后的文件名
-        const newName = this.getUpdatedFileName(content);
-        if (!newName || newName === content) return;
-        
-        // 更新元素显示
-        if (element.element.dataset.originalText !== content) {
-            // 保存原始文本
-            DOMUtils.setDataset(element.element, {
-                originalText: content
-            });
+    private setupPeriodicCleanup(): void {
+        this.cleanupTimer = setInterval(() => {
+            this.performCleanup();
+        }, this.CLEANUP_INTERVAL);
+    }
+    
+    /**
+     * 执行清理操作
+     */
+    private performCleanup(): void {
+        try {
+            // 获取当前活跃文件
+            const activeFile = this.app.workspace.getActiveFile();
+            const recentFiles = new Set(this.app.workspace.getLastOpenFiles());
             
-            // 创建装饰部件
-            const widget = new FilenameDecorationWidget(
-                newName, 
-                content, 
-                this.config.showOriginalNameOnHover
-            );
+            // 清理不在活跃列表中的缓存
+            const stats = this.nameCache.getStats();
+            console.debug('缓存统计:', stats);
             
-            // 清空原始元素内容
-            while (element.element.firstChild) {
-                element.element.removeChild(element.element.firstChild);
-            }
-            
-            // 添加装饰容器
-            element.element.appendChild(widget.toDOM());
-            
-            // 更新映射关系
-            this.updateNameMapping(content, newName);
+            // 记录性能指标
+            this.logMetrics();
+        } catch (error) {
+            console.error('执行清理操作失败:', error);
         }
+    }
+    
+    /**
+     * 记录性能指标
+     */
+    private logMetrics(): void {
+        console.debug('性能指标:', {
+            ...this.metrics,
+            cacheStats: this.nameCache.getStats()
+        });
     }
     
     /**
@@ -224,11 +304,14 @@ export class DecorationManager {
                 return;
             }
             
+            // 创建防抖处理函数
+            const debouncedProcessFiles = debounceFn(() => {
+                this.processFilesPanel();
+            }, 150);
+
             // 创建观察器监听文件浏览器的变化
-            const observer = new MutationObserver((mutations) => {
-                // 总是尝试处理文件面板，因为Obsidian可能会动态更新DOM
-                // 而不会触发明显的节点添加
-                setTimeout(() => this.processFilesPanel(), 50);
+            const observer = new MutationObserver(() => {
+                debouncedProcessFiles();
             });
             
             // 开始观察，监听更多的变化类型
@@ -256,7 +339,7 @@ export class DecorationManager {
                         if (targetEl.classList.contains('nav-file-title') || 
                             targetEl.closest('.nav-file-title') || 
                             targetEl.querySelector('.nav-file-title')) {
-                            setTimeout(() => this.processFilesPanel(), 50);
+                            debouncedProcessFiles();
                             break;
                         }
                     }
@@ -280,34 +363,52 @@ export class DecorationManager {
     
     /**
      * 应用文件元素装饰
-     * 为DOM元素添加data-displayed-filename属性来修改显示
-     * 不再使用CSS规则覆盖，而是使用数据属性和单一全局样式
+     * 使用分批处理机制来优化大量文件的处理
      */
     public applyFileDecorations(files: TFile[]): void {
-        try {
-            // 处理所有文件，确保文件面板中的文件都能正确显示
-            for (const file of files) {
-                try {
-                    const originalName = file.basename;
-                    const newName = this.getUpdatedFileName(originalName);
-                    
-                    if (newName && newName !== originalName) {
-                        // 更新名称映射
-                        this.updateNameMapping(originalName, newName);
+        const BATCH_SIZE = 100; // 每批处理100个文件
+        let processedCount = 0;
+        
+        const processBatch = () => {
+            try {
+                const startIndex = processedCount;
+                const endIndex = Math.min(startIndex + BATCH_SIZE, files.length);
+                const batch = files.slice(startIndex, endIndex);
+                
+                // 处理当前批次的文件
+                for (const file of batch) {
+                    try {
+                        const originalName = file.basename;
+                        const newName = this.getUpdatedFileName(originalName);
                         
-                        // 找到并更新DOM元素
-                        this.updateFileElements(file.path, newName);
+                        if (newName && newName !== originalName) {
+                            // 更新名称映射
+                            this.updateNameMapping(originalName, newName);
+                            
+                            // 找到并更新DOM元素
+                            this.updateFileElements(file.path, newName);
+                        }
+                    } catch (error) {
+                        console.error(`处理文件失败: ${file.path}`, error);
                     }
-                } catch (error) {
-                    console.error(`处理文件失败: ${file.path}`, error);
                 }
+                
+                processedCount = endIndex;
+                
+                // 如果还有未处理的文件，继续下一批
+                if (processedCount < files.length) {
+                    requestIdleCallback(processBatch);
+                } else {
+                    // 所有文件处理完成后，处理文件面板
+                    this.processFilesPanel();
+                }
+            } catch (error) {
+                console.error('批量处理文件装饰失败:', error);
             }
-            
-            // 额外处理文件面板
-            this.processFilesPanel();
-        } catch (error) {
-            console.error('应用文件装饰失败:', error);
-        }
+        };
+        
+        // 开始第一批处理
+        requestIdleCallback(processBatch);
     }
     
     /**
@@ -431,25 +532,95 @@ export class DecorationManager {
     }
     
     /**
-     * 更新名称映射
+     * 更新名称映射关系
      */
     public updateNameMapping(originalName: string, displayName: string): void {
-        this.nameMapping.set(displayName, originalName);
-        this.nameMapping.set(originalName, originalName); // 自身映射，保证查找时能找到
+        this.nameCache.set(originalName, displayName);
     }
     
     /**
      * 查找原始文件名
      */
     public findOriginalFileName(displayName: string): string | null {
-        return this.nameMapping.get(displayName) || null;
+        return this.nameCache.get(displayName);
     }
     
     /**
-     * 清空名称映射
+     * 清理名称映射
      */
     public clearNameMapping(): void {
-        this.nameMapping.clear();
+        this.nameCache.clear();
+    }
+    
+    /**
+     * 处理单个元素的装饰
+     */
+    private processElement(element: ViewportElement): void {
+        const startTime = performance.now();
+        
+        try {
+            // 获取元素内容
+            const content = element.element.textContent;
+            if (!content) return;
+            
+            // 检查缓存
+            let newName = this.nameCache.get(content);
+            if (!newName) {
+                newName = this.getUpdatedFileName(content);
+                if (newName && newName !== content) {
+                    this.nameCache.set(content, newName);
+                }
+            }
+            
+            if (!newName || newName === content) return;
+            
+            // 使用 requestAnimationFrame 优化DOM更新
+            requestAnimationFrame(() => {
+                this.updateElementDisplay(element.element, content, newName!);
+            });
+        } finally {
+            // 更新性能指标
+            const processTime = performance.now() - startTime;
+            this.updateMetrics(processTime);
+        }
+    }
+    
+    /**
+     * 更新元素显示
+     */
+    private updateElementDisplay(element: HTMLElement, originalText: string, newName: string): void {
+        if (element.dataset.originalText === originalText) return;
+        
+        // 保存原始文本
+        DOMUtils.setDataset(element, {
+            originalText
+        });
+        
+        // 创建装饰部件
+        const widget = new FilenameDecorationWidget(
+            newName,
+            originalText,
+            this.config.showOriginalNameOnHover
+        );
+        
+        // 使用 DocumentFragment 优化DOM操作
+        const fragment = document.createDocumentFragment();
+        fragment.appendChild(widget.toDOM());
+        
+        // 清空并更新元素内容
+        while (element.firstChild) {
+            element.removeChild(element.firstChild);
+        }
+        element.appendChild(fragment);
+    }
+    
+    /**
+     * 更新性能指标
+     */
+    private updateMetrics(processTime: number): void {
+        this.metrics.totalProcessed++;
+        this.metrics.lastProcessTime = processTime;
+        this.metrics.avgProcessTime = (this.metrics.avgProcessTime * (this.metrics.totalProcessed - 1) + processTime) / this.metrics.totalProcessed;
     }
     
     /**
@@ -459,30 +630,23 @@ export class DecorationManager {
         this.clearFileDecorations();
         this.clearNameMapping();
         
-        // 销毁EditorViewport
+        if (this.cleanupTimer) {
+            clearInterval(this.cleanupTimer);
+            this.cleanupTimer = null;
+        }
+        
         if (this.editorViewport) {
             this.editorViewport.destroy();
             this.editorViewport = null;
-        }
-        
-        // 销毁文件浏览器观察器
-        try {
-            const fileExplorer = document.querySelector('.nav-files-container');
-            if (fileExplorer) {
-                // 我们无法直接访问已注册的MutationObserver
-                // 使用直接的DOM方法清理
-                document.querySelectorAll('.nav-file-title[data-displayed-filename]').forEach(el => {
-                    el.removeAttribute('data-displayed-filename');
-                });
-            }
-        } catch (error) {
-            console.error('清理文件浏览器样式失败:', error);
         }
         
         if (this.styleEl) {
             this.styleEl.remove();
             this.styleEl = null;
         }
+        
+        // 记录最终性能指标
+        this.logMetrics();
     }
     
     /**

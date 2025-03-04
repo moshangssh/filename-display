@@ -10,8 +10,6 @@ import { RegexCache } from '../utils/regexCache';
 export class FileNameDisplaySettingTab extends PluginSettingTab {
     plugin: FileDisplayPlugin;
     private regexTestElement: HTMLElement | null = null;
-    private regexStatsElement: HTMLElement | null = null;
-    private styleElement: HTMLStyleElement | null = null;
 
     constructor(app: App, plugin: FileDisplayPlugin) {
         super(app, plugin);
@@ -141,113 +139,9 @@ export class FileNameDisplaySettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                     this.plugin.updateFileDisplay();
                 }));
-                
-        // 添加一个分隔线
-        containerEl.createEl('hr');
-        
-        // 添加正则缓存设置标题
-        containerEl.createEl('h3', { text: '正则表达式缓存设置' });
-        
-        // 启用正则缓存
-        new Setting(containerEl)
-            .setName('启用正则表达式缓存')
-            .setDesc('将常用的正则表达式缓存到IndexedDB中，提高性能')
-            .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.enableRegexCaching)
-                .onChange(async (value) => {
-                    this.plugin.settings.enableRegexCaching = value;
-                    await this.plugin.saveSettings();
-                    
-                    // 显示提示
-                    new Notice(value ? '已启用正则表达式缓存' : '已禁用正则表达式缓存');
-                    
-                    // 刷新缓存统计信息
-                    this.updateRegexCacheStats();
-                }));
-        
-        // 设置最大缓存数量
-        new Setting(containerEl)
-            .setName('最大缓存数量')
-            .setDesc('设置正则表达式缓存的最大数量')
-            .addSlider(slider => slider
-                .setLimits(10, 100, 10)
-                .setValue(this.plugin.settings.maxRegexCacheSize)
-                .setDynamicTooltip()
-                .onChange(async (value) => {
-                    this.plugin.settings.maxRegexCacheSize = value;
-                    await this.plugin.saveSettings();
-                }));
-        
-        // 添加缓存管理按钮
-        new Setting(containerEl)
-            .setName('管理正则表达式缓存')
-            .setDesc('查看和管理缓存中的正则表达式')
-            .addButton(button => button
-                .setButtonText('清空缓存')
-                .onClick(async () => {
-                    // 清空缓存
-                    RegexCache.getInstance().clear();
-                    new Notice('正则表达式缓存已清空');
-                    
-                    // 刷新缓存统计信息
-                    this.updateRegexCacheStats();
-                }))
-            .addButton(button => button
-                .setButtonText('刷新统计')
-                .onClick(() => {
-                    this.updateRegexCacheStats();
-                }));
-                
-        // 创建缓存统计信息显示容器
-        this.regexStatsElement = containerEl.createDiv({ cls: 'regex-cache-stats' });
-        this.regexStatsElement.style.marginBottom = '1em';
-        
-        // 初始更新缓存统计信息
-        this.updateRegexCacheStats();
-        
+
         // 添加自定义样式
         this.addCustomStyles();
-    }
-    
-    /**
-     * 更新正则缓存统计信息
-     */
-    private async updateRegexCacheStats(): Promise<void> {
-        if (!this.regexStatsElement) return;
-        
-        try {
-            const stats = await RegexCache.getInstance().getStats();
-            
-            let html = '<div class="regex-stats-container">';
-            html += `<div class="regex-stats-item">内存缓存大小: <strong>${stats.memoryCacheSize}</strong></div>`;
-            html += `<div class="regex-stats-item">最大缓存大小: <strong>${stats.maxCacheSize}</strong></div>`;
-            html += `<div class="regex-stats-item">缓存状态: <strong>${stats.cacheEnabled ? '已启用' : '已禁用'}</strong></div>`;
-            html += `<div class="regex-stats-item">初始化状态: <strong>${stats.isInitialized ? '已完成' : '未完成'}</strong></div>`;
-            
-            if (stats.mostUsedPatterns.length > 0) {
-                html += '<div class="regex-stats-section">最常用的正则表达式模式:</div>';
-                html += '<ul class="regex-patterns-list">';
-                
-                for (const pattern of stats.mostUsedPatterns) {
-                    const displayPattern = pattern.pattern.length > 30 
-                        ? pattern.pattern.substring(0, 30) + '...' 
-                        : pattern.pattern;
-                    const flags = pattern.flags || '无';
-                    html += `<li><code>${displayPattern}</code> [标志: ${flags}] (使用次数: ${pattern.useCount})</li>`;
-                }
-                
-                html += '</ul>';
-            } else {
-                html += '<div class="regex-stats-empty">暂无缓存的正则表达式</div>';
-            }
-            
-            html += '</div>';
-            
-            this.regexStatsElement.innerHTML = html;
-        } catch (error) {
-            console.error('获取缓存统计信息失败:', error);
-            this.regexStatsElement.innerHTML = '<div class="regex-stats-error">获取缓存统计信息失败</div>';
-        }
     }
 
     /**
@@ -309,8 +203,8 @@ export class FileNameDisplaySettingTab extends PluginSettingTab {
      */
     private addCustomStyles(): void {
         // 添加自定义CSS
-        this.styleElement = document.createElement('style');
-        this.styleElement.textContent = `
+        const styleElement = document.createElement('style');
+        styleElement.textContent = `
             .regex-result {
                 padding: 8px 12px;
                 border-radius: 4px;
@@ -333,55 +227,10 @@ export class FileNameDisplaySettingTab extends PluginSettingTab {
                 margin-right: 6px;
                 font-weight: bold;
             }
-            
-            /* 正则缓存统计样式 */
-            .regex-stats-container {
-                padding: 10px;
-                background-color: var(--background-secondary);
-                border-radius: 6px;
-                margin-top: 12px;
-            }
-            .regex-stats-item {
-                margin-bottom: 6px;
-            }
-            .regex-stats-section {
-                font-weight: bold;
-                margin-top: 10px;
-                margin-bottom: 6px;
-                padding-bottom: 3px;
-                border-bottom: 1px solid var(--background-modifier-border);
-            }
-            .regex-patterns-list {
-                margin: 0;
-                padding-left: 20px;
-            }
-            .regex-patterns-list li {
-                margin-bottom: 4px;
-            }
-            .regex-stats-empty {
-                font-style: italic;
-                color: var(--text-muted);
-                margin-top: 10px;
-            }
-            .regex-stats-error {
-                color: var(--text-error);
-                font-weight: bold;
-            }
         `;
-        document.head.appendChild(this.styleElement);
-    }
-    
-    /**
-     * 当设置面板隐藏时调用
-     */
-    hide(): void {
-        // 清理资源
-        if (this.styleElement) {
-            this.styleElement.remove();
-            this.styleElement = null;
-        }
+        document.head.appendChild(styleElement);
         
-        // 调用父类方法
-        super.hide();
+        // 确保在隐藏设置面板时移除样式
+        this.plugin.register(() => styleElement.remove());
     }
 }  
