@@ -1,8 +1,55 @@
-import { debounceRxJS, createDebouncedObservable } from './debounceRxJS';
+/**
+ * 防抖函数集成模块
+ * 提供统一的防抖函数接口
+ */
+
+type DebouncedFunction<T extends (...args: any[]) => any> = T & {
+    cancel: () => void;
+};
+
+/**
+ * 创建防抖函数
+ * 使用原生JavaScript实现
+ */
+export function debounce<T extends (...args: any[]) => any>(
+    func: T,
+    wait: number = 300,
+    immediate: boolean = false,
+    name?: string
+): DebouncedFunction<T> {
+    let timeout: NodeJS.Timeout | null = null;
+    let result: any;
+
+    const debounced = function(this: any, ...args: any[]) {
+        const context = this;
+
+        const later = function() {
+            timeout = null;
+            if (!immediate) result = func.apply(context, args);
+        };
+
+        const callNow = immediate && !timeout;
+
+        if (timeout) clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+
+        if (callNow) result = func.apply(context, args);
+
+        return result;
+    } as T;
+
+    (debounced as DebouncedFunction<T>).cancel = function() {
+        if (timeout) {
+            clearTimeout(timeout);
+            timeout = null;
+        }
+    };
+
+    return debounced as DebouncedFunction<T>;
+}
 
 /**
  * 统一的防抖函数接口
- * 使用RxJS实现
  * 
  * @param func 要执行的函数
  * @param wait 等待时间(毫秒)
@@ -15,11 +62,8 @@ export function debounceFn<T extends (...args: any[]) => any>(
     wait: number,
     immediate = false,
     name?: string
-): {
-    (...args: Parameters<T>): ReturnType<T> | undefined;
-    cancel: () => void;
-} {
-    return debounceRxJS(func, wait, immediate, name);
+): DebouncedFunction<T> {
+    return debounce(func, wait, immediate, name);
 }
 
 /**
@@ -37,11 +81,6 @@ export function createUnifiedDebouncedFunction<T extends (...args: any[]) => any
     name: string,
     wait: number,
     immediate = false
-): {
-    (...args: Parameters<T>): ReturnType<T> | undefined;
-    cancel: () => void;
-} {
+): DebouncedFunction<T> {
     return debounceFn(func, wait, immediate, name);
-}
-
-export { createDebouncedObservable }; 
+} 

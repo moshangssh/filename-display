@@ -5,9 +5,7 @@ import { processMarkdownLinks } from './src/extensions/markdownProcessor';
 import { FileNameDisplaySettingTab } from './src/ui/settingsTab';
 import { DecorationManager } from './src/services/decorationManager';
 import { RegexCache } from './src/utils/regexCache';
-import { FileEventType } from './src/services/eventStreamService';
-import { Subscription, timer } from 'rxjs';
-import { throttleTime, retryWhen, tap, delayWhen, take } from 'rxjs/operators';
+import { FileEventType } from './src/services/eventBus';
 import { widgetStyles } from './src/styles/widgetStyles';
 
 export default class FileDisplayPlugin extends Plugin {
@@ -21,8 +19,8 @@ export default class FileDisplayPlugin extends Plugin {
 	private lastUpdateTime = Date.now();
 	private domOperationsReduced = 0;
 	
-	// 事件流订阅
-	private eventSubscriptions: Subscription[] = [];
+	// 事件取消订阅函数
+	private unsubscribes: Array<() => void> = [];
 
 	async onload() {
 		// 加载设置
@@ -58,7 +56,7 @@ export default class FileDisplayPlugin extends Plugin {
 		// 设置选项卡
 		this.addSettingTab(new FileNameDisplaySettingTab(this.app, this));
 
-		// 订阅合并的事件流，替代传统的事件监听
+		// 订阅文件事件
 		this.setupEventSubscriptions();
 
 		// 监听文件打开事件
@@ -116,12 +114,11 @@ export default class FileDisplayPlugin extends Plugin {
 		this.updateFileDisplay();
 		
 		// 记录插件加载完成
-		console.log('文件名显示插件已加载 - 优化版本 (RxJS事件流)');
+		console.log('文件名显示插件已加载 - 优化版本 (原生事件系统)');
 	}
 	
 	/**
-	 * 设置事件流订阅
-	 * 使用RxJS处理文件事件
+	 * 设置事件订阅
 	 */
 	private setupEventSubscriptions() {
 		// 清理可能存在的旧订阅
@@ -130,102 +127,39 @@ export default class FileDisplayPlugin extends Plugin {
 		// 订阅激活文件夹的所有事件
 		const folderPath = this.settings.activeFolder;
 		if (folderPath) {
-			// 对激活文件夹的Markdown文件事件进行订阅
-			const folderSubscription = this.fileManager
-				.getFolderEventStream(folderPath)
-				.pipe(
-					// 额外的节流，避免密集更新
-					throttleTime(800),
-					// 错误处理和自动重试
-					retryWhen(errors => 
-						errors.pipe(
-							tap(err => {
-								console.error('文件夹事件流错误:', err);
-								new Notice('文件夹监听出现错误，正在尝试恢复...');
-							}),
-							delayWhen((_, index) => timer(Math.min(1000 * Math.pow(2, index), 10000))),
-							take(3)
-						)
-					)
-				)
-				.subscribe({
-					next: event => {
-						console.log(`处理文件事件: ${event.type} - ${event.file.path}`);
-						this.updateFileDisplay();
-					},
-					error: err => {
-						console.error('文件夹事件流发生严重错误:', err);
-						new Notice('文件夹监听发生错误，请重启插件');
-					},
-					complete: () => {
-						console.log('文件夹事件流已完成');
-					}
-				});
+			// 订阅文件夹事件
+			const unsubscribe = this.fileManager.onFolderEvents(folderPath, event => {
+				console.log(`处理文件事件: ${event.type} - ${event.file.path}`);
+				this.updateFileDisplay();
+			});
 			
-			this.eventSubscriptions.push(folderSubscription);
+			this.unsubscribes.push(unsubscribe);
 		}
 		
-		// 全局Markdown文件事件订阅
-		const mdSubscription = this.fileManager
-			.getFileTypeEventStream('md')
-			.pipe(
-				throttleTime(1000),
-				// 错误处理和自动重试
-				retryWhen(errors => 
-					errors.pipe(
-						tap(err => {
-							console.error('Markdown文件事件流错误:', err);
-							new Notice('Markdown文件监听出现错误，正在尝试恢复...');
-						}),
-						delayWhen((_, index) => timer(Math.min(1000 * Math.pow(2, index), 10000))),
-						take(3)
-					)
-				)
-			)
-			.subscribe({
-				next: event => {
-					if (event.type === FileEventType.RENAME) {
-						console.log(`重命名事件: ${event.file.path} (原路径: ${event.oldPath})`);
-					}
-					this.updateFileDisplay();
-				},
-				error: err => {
-					console.error('Markdown文件事件流发生严重错误:', err);
-					new Notice('Markdown文件监听发生错误，请重启插件');
-				},
-				complete: () => {
-					console.log('Markdown文件事件流已完成');
-				}
-			});
+		// 订阅Markdown文件事件
+		const unsubscribe = this.fileManager.onFileTypeEvents('md', event => {
+			if (event.type === FileEventType.RENAME) {
+				console.log(`重命名事件: ${event.file.path} (原路径: ${event.oldPath})`);
+			}
+			this.updateFileDisplay();
+		});
 		
-		this.eventSubscriptions.push(mdSubscription);
+		this.unsubscribes.push(unsubscribe);
 	}
 	
 	/**
 	 * 清理事件订阅
 	 */
 	private clearEventSubscriptions() {
-		// 遍历并清理每个订阅
-		this.eventSubscriptions.forEach(subscription => {
-			if (subscription && !subscription.closed) {
-				subscription.unsubscribe();
-			}
-		});
-		
-		// 清空订阅数组
-		this.eventSubscriptions = [];
-		
-		// 额外安全检查 - 确保所有订阅都被清理
-		if (this.eventSubscriptions.length > 0) {
-			console.warn('仍有未清理的订阅');
-		}
+		this.unsubscribes.forEach(unsubscribe => unsubscribe());
+		this.unsubscribes = [];
 	}
 
 	onunload() {
 		// 清理事件订阅
 		this.clearEventSubscriptions();
 		
-		// 清理文件管理器订阅
+		// 清理文件管理器
 		if (this.fileManager) {
 			this.fileManager.destroy();
 		}
@@ -330,7 +264,7 @@ export default class FileDisplayPlugin extends Plugin {
 			
 			if (this.updateCount % 10 === 0) {
 				// 估算DOM操作减少比例
-				this.domOperationsReduced = 80; // 根据视口优化和RxJS双重优化的预期减少量
+				this.domOperationsReduced = 80; // 根据视口优化的预期减少量
 				
 				console.log(`更新文件显示耗时: ${duration.toFixed(2)}ms，文件数: ${files.length}，DOM操作减少: ~${this.domOperationsReduced}%`);
 				

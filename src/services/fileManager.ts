@@ -1,7 +1,5 @@
 import { App, TFile, TFolder, normalizePath } from 'obsidian';
-import { EventStreamService, FileEventType, FileEvent } from './eventStreamService';
-import { Observable } from 'rxjs';
-import { tap } from 'rxjs/operators';
+import { EventBus, FileEventType, FileEvent } from './eventBus';
 
 /**
  * 文件管理器配置接口
@@ -15,78 +13,77 @@ export interface FileManagerConfig {
  * 负责文件的检索和处理
  */
 export class FileManager {
-    private eventStreamService: EventStreamService;
-    private subscription: any;
+    private eventBus: EventBus;
+    private unsubscribes: Array<() => void> = [];
 
     constructor(
         private app: App,
         private config: FileManagerConfig
     ) {
-        // 初始化事件流服务
-        this.eventStreamService = new EventStreamService({
-            throttleTimeMs: 300,  // 节流时间
-            debounceTimeMs: 500   // 去抖时间
+        // 初始化事件总线
+        this.eventBus = new EventBus({
+            throttleTimeMs: 300,
+            debounceTimeMs: 500
         });
         
-        // 监听文件变更事件并转发到事件流
+        // 监听文件变更事件
         this.app.vault.on('modify', (file) => {
-            this.eventStreamService.emitModify(file);
+            this.eventBus.emit({
+                type: FileEventType.MODIFY,
+                file
+            });
         });
         
         this.app.vault.on('create', (file) => {
-            this.eventStreamService.emitCreate(file);
+            this.eventBus.emit({
+                type: FileEventType.CREATE,
+                file
+            });
         });
         
         this.app.vault.on('delete', (file) => {
-            this.eventStreamService.emitDelete(file);
+            this.eventBus.emit({
+                type: FileEventType.DELETE,
+                file
+            });
         });
         
         this.app.vault.on('rename', (file, oldPath) => {
-            this.eventStreamService.emitRename(file, oldPath);
-        });
-        
-        // 为了保持向后兼容，在每次处理完事件后通知传统监听器
-        this.subscription = this.eventStreamService.getCombinedStream()
-            .pipe(
-                tap((event: FileEvent) => {
-                    // 输出调试信息
-                    console.log(`[文件事件流] 类型: ${event.type}, 文件: ${event.file.path}`);
-                })
-            )
-            .subscribe(() => {
-                // 事件流已经可以被直接订阅，不需要额外通知
+            this.eventBus.emit({
+                type: FileEventType.RENAME,
+                file,
+                oldPath
             });
+        });
     }
 
     /**
-     * 获取文件事件流
-     * 允许直接订阅经过节流和去重的事件
+     * 注册文件事件监听器
      */
-    public getFileEventStream(): Observable<FileEvent> {
-        return this.eventStreamService.getCombinedStream();
+    public onFileEvent(type: FileEventType, callback: (event: FileEvent) => void): () => void {
+        const unsubscribe = this.eventBus.on(type, callback);
+        this.unsubscribes.push(unsubscribe);
+        return unsubscribe;
     }
     
     /**
-     * 获取指定文件夹下的事件流
+     * 获取指定文件夹的事件监听器
      */
-    public getFolderEventStream(folderPath: string): Observable<FileEvent> {
-        return this.eventStreamService.getFolderStream(folderPath);
+    public onFolderEvents(folderPath: string, callback: (event: FileEvent) => void): () => void {
+        const unsubscribe = this.eventBus.getFolderListener(folderPath, callback);
+        this.unsubscribes.push(unsubscribe);
+        return unsubscribe;
     }
     
     /**
-     * 获取指定文件类型的事件流
+     * 获取指定文件类型的事件监听器
      */
-    public getFileTypeEventStream(extension: string): Observable<FileEvent> {
-        return this.eventStreamService.getFileTypeStream(extension);
+    public onFileTypeEvents(extension: string, callback: (event: FileEvent) => void): () => void {
+        const unsubscribe = this.eventBus.getFileTypeListener(extension, callback);
+        this.unsubscribes.push(unsubscribe);
+        return unsubscribe;
     }
-    
-    /**
-     * 更新配置
-     */
-    public updateConfig(config: Partial<FileManagerConfig>): void {
-        this.config = { ...this.config, ...config };
-    }
-    
+
     /**
      * 获取当前活动文件夹
      */
@@ -118,7 +115,7 @@ export class FileManager {
     /**
      * 通过文件名查找文件
      */
-    public findFileByName(fileName: string): TFile | null {
+    private findFileByName(fileName: string): TFile | null {
         const folder = this.getActiveFolder();
         const files = this.getFiles(folder);
         return files.find(file => file.basename === fileName) || null;
@@ -127,7 +124,7 @@ export class FileManager {
     /**
      * 打开指定文件
      */
-    public async openFile(file: TFile, newLeaf: boolean = true): Promise<void> {
+    private async openFile(file: TFile, newLeaf: boolean = true): Promise<void> {
         try {
             const leaf = this.app.workspace.getLeaf(newLeaf);
             await leaf.openFile(file);
@@ -150,13 +147,14 @@ export class FileManager {
     }
     
     /**
-     * 销毁服务
-     * 清理订阅以避免内存泄漏
+     * 销毁并清理资源
      */
     public destroy(): void {
-        if (this.subscription) {
-            this.subscription.unsubscribe();
-            this.subscription = null;
-        }
+        // 清理所有订阅
+        this.unsubscribes.forEach(unsubscribe => unsubscribe());
+        this.unsubscribes = [];
+        
+        // 销毁事件总线
+        this.eventBus.destroy();
     }
 }  
