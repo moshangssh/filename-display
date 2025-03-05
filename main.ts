@@ -1,5 +1,5 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFolder, TFile, normalizePath } from 'obsidian';
-import { FileDisplayPluginSettings, DEFAULT_SETTINGS } from './src/types';
+import { FileDisplayPluginSettings, DEFAULT_SETTINGS } from './src/types/index';
 import { FileManager } from './src/services/fileManager';
 import { processMarkdownLinks } from './src/extensions/markdownProcessor';
 import { FileNameDisplaySettingTab } from './src/ui/settingsTab';
