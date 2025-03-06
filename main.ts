@@ -7,17 +7,20 @@ import { DecorationManager } from './src/services/decorationManager';
 import { RegexCache } from './src/utils/regexCache';
 import { FileEventType } from './src/services/eventBus';
 import { widgetStyles } from './src/styles/widgetStyles';
+import { PerformanceMonitor } from './src/utils/performanceMonitor';
+import { DOMObserverService } from './src/services/legacyAdapters';
+import { LinkClickHandlerService } from './src/services/linkClickHandlerService';
+import { UnifiedDOMObserver } from './src/services/unifiedDOMObserver';
 
 export default class FileDisplayPlugin extends Plugin {
 	settings: FileDisplayPluginSettings;
 	private fileManager: FileManager;
 	private decorationManager: DecorationManager;
+	private domObserver: DOMObserverService;
+	private linkClickHandler: LinkClickHandlerService;
+	private performanceMonitor: PerformanceMonitor;
 	private editorExtension: any[];
-	
-	// 性能监控
-	private updateCount = 0;
-	private lastUpdateTime = Date.now();
-	private domOperationsReduced = 0;
+	private unifiedObserver: UnifiedDOMObserver;
 	
 	// 事件取消订阅函数
 	private unsubscribes: Array<() => void> = [];
@@ -26,7 +29,44 @@ export default class FileDisplayPlugin extends Plugin {
 		// 加载设置
 		await this.loadSettings();
 		
+		// 初始化性能监控器
+		this.performanceMonitor = new PerformanceMonitor();
+		
 		// 初始化服务
+		this.initServices();
+		
+		// 设置选项卡
+		this.addSettingTab(new FileNameDisplaySettingTab(this.app, this));
+
+		// 设置事件监听
+		this.setupEventHandlers();
+		
+		// 添加编辑器扩展
+		this.registerEditorExtension(this.editorExtension);
+
+		// 添加Markdown后处理器
+		this.registerMarkdownPostProcessor((el, ctx) => {
+			processMarkdownLinks(el, this.settings, this.getUpdatedFileName.bind(this));
+		});
+
+		// 初始更新显示
+		this.updateFileDisplay();
+		
+		// 记录插件加载完成
+		console.log('文件名显示插件已加载 - 优化版本 (原生事件系统)');
+	}
+	
+	/**
+	 * 初始化各种服务
+	 */
+	private initServices(): void {
+		// 初始化统一DOM观察系统（最先初始化，以便其他服务使用）
+		this.unifiedObserver = new UnifiedDOMObserver(this.app);
+		
+		// 设置全局实例，以便适配器类访问
+		window.activeUnifiedObserver = this.unifiedObserver;
+		
+		// 初始化文件管理器
 		this.fileManager = new FileManager(
 			this.app,
 			{
@@ -34,7 +74,7 @@ export default class FileDisplayPlugin extends Plugin {
 			}
 		);
 		
-		// 初始化新的装饰管理器，传入app实例用于视口管理
+		// 初始化装饰管理器
 		this.decorationManager = new DecorationManager(
 			this.app,
 			{
@@ -42,6 +82,17 @@ export default class FileDisplayPlugin extends Plugin {
 				captureGroup: this.settings.captureGroup,
 				showOriginalNameOnHover: this.settings.showOriginalNameOnHover
 			}
+		);
+		
+		// 初始化DOM观察器（使用适配器版本，内部使用统一观察器）
+		this.domObserver = new DOMObserverService(
+			this.updateFileDisplay.bind(this)
+		);
+		
+		// 初始化链接点击处理器
+		this.linkClickHandler = new LinkClickHandlerService(
+			this.decorationManager,
+			this.openFileByName.bind(this)
 		);
 		
 		// 更新正则缓存设置
@@ -52,13 +103,18 @@ export default class FileDisplayPlugin extends Plugin {
 			this.decorationManager.createEditorViewPlugin(),
 			widgetStyles
 		];
+	}
+	
+	/**
+	 * 设置事件监听器
+	 */
+	private setupEventHandlers(): void {
+		// 注册链接点击处理器
+		this.register(this.linkClickHandler.register());
 		
-		// 设置选项卡
-		this.addSettingTab(new FileNameDisplaySettingTab(this.app, this));
-
-		// 订阅文件事件
-		this.setupEventSubscriptions();
-
+		// 注册DOM观察器
+		this.register(this.domObserver.observe());
+		
 		// 监听文件打开事件
 		this.registerEvent(
 			this.app.workspace.on('file-open', () => {
@@ -66,55 +122,8 @@ export default class FileDisplayPlugin extends Plugin {
 			})
 		);
 		
-		// 添加编辑器扩展
-		this.registerEditorExtension(this.editorExtension);
-
-		// 添加Markdown后处理器
-		this.registerMarkdownPostProcessor((el, ctx) => {
-			processMarkdownLinks(el, this.settings, this.getUpdatedFileName.bind(this));
-		});
-
-		// 添加链接点击事件处理
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			const target = evt.target as HTMLElement;
-			if (target.matches('.internal-link, .cm-hmd-internal-link, .filename-display')) {
-				// 检查是否在装饰链接上点击
-				
-				// 获取原始文本 - 首先尝试dataset
-				let originalText = '';
-				if (target.dataset.originalText) {
-					originalText = target.dataset.originalText;
-				} 
-				// 如果没有，尝试找父元素的数据
-				else if (target.parentElement?.dataset.originalText) {
-					originalText = target.parentElement.dataset.originalText;
-				}
-				// 如果还是没有，使用文本内容
-				else {
-					originalText = target.textContent || '';
-				}
-				
-				if (!originalText) return;
-				
-				// 查找原始文件名
-				const originalName = this.decorationManager.findOriginalFileName(originalText);
-				if (originalName) {
-					// 阻止默认行为
-					evt.preventDefault();
-					// 打开正确的文件
-					this.openFileByName(originalName);
-				}
-			}
-		});
-
-		// 观察DOM变化，用于处理动态加载的文件树项目
-		this.setupMutationObserver();
-
-		// 初始更新显示
-		this.updateFileDisplay();
-		
-		// 记录插件加载完成
-		console.log('文件名显示插件已加载 - 优化版本 (原生事件系统)');
+		// 设置文件事件订阅
+		this.setupEventSubscriptions();
 	}
 	
 	/**
@@ -156,9 +165,20 @@ export default class FileDisplayPlugin extends Plugin {
 	}
 
 	onunload() {
+		// 性能监控器记录
+		this.performanceMonitor.logStats();
+		
 		// 清理事件订阅
 		this.clearEventSubscriptions();
 		
+		// 清理服务
+		this.cleanupServices();
+	}
+	
+	/**
+	 * 清理所有服务资源
+	 */
+	private cleanupServices(): void {
 		// 清理文件管理器
 		if (this.fileManager) {
 			this.fileManager.destroy();
@@ -167,16 +187,22 @@ export default class FileDisplayPlugin extends Plugin {
 		// 关闭数据库连接
 		RegexCache.getInstance().clear();
 		
-		// 清理装饰管理器
+		// 移除所有DOM修改
 		if (this.decorationManager) {
+			this.decorationManager.clearFileDecorations();
 			this.decorationManager.destroy();
 		}
 		
-		// 移除所有DOM修改
-		this.decorationManager?.clearFileDecorations();
+		// 清理DOM观察器
+		if (this.domObserver) {
+			this.domObserver.disconnect();
+		}
 		
-		// 输出性能改进统计 
-		console.log(`文件名显示性能统计: DOM操作减少约 ${this.domOperationsReduced}%, 优化后处理了 ${this.updateCount} 次更新`);
+		// 清理统一DOM观察系统
+		if (this.unifiedObserver) {
+			this.unifiedObserver.destroy();
+			window.activeUnifiedObserver = null;
+		}
 	}
 
 	// 获取更新后的文件名
@@ -184,48 +210,11 @@ export default class FileDisplayPlugin extends Plugin {
 		return this.decorationManager.getUpdatedFileName(originalName);
 	}
 
-	// 设置DOM变化观察器，以便在文件树动态更新时应用装饰
-	private setupMutationObserver() {
-		const observer = new MutationObserver((mutations) => {
-			let needUpdate = false;
-			
-			for (const mutation of mutations) {
-				if (mutation.type === 'childList') {
-					// 检查新增的节点是否包含文件条目
-					for (const node of Array.from(mutation.addedNodes)) {
-						if (node instanceof HTMLElement) {
-							const hasFileItems = node.querySelector('.nav-file-title') !== null;
-							if (hasFileItems) {
-								needUpdate = true;
-								break;
-							}
-						}
-					}
-				}
-				
-				if (needUpdate) break;
-			}
-			
-			if (needUpdate) {
-				this.updateFileDisplay();
-			}
-		});
-
-		// 观察文件树容器的变化
-		const fileExplorer = document.querySelector('.nav-files-container');
-		if (fileExplorer) {
-			observer.observe(fileExplorer, { childList: true, subtree: true });
-		}
-		
-		// 确保在卸载插件时断开观察器
-		this.register(() => observer.disconnect());
-	}
-
 	// 更新文件显示
 	async updateFileDisplay() {
+		this.performanceMonitor.startMeasure();
+		
 		try {
-			const startTime = performance.now();
-			
 			if (!this.settings.enablePlugin) {
 				this.decorationManager.clearFileDecorations();
 				return;
@@ -249,31 +238,22 @@ export default class FileDisplayPlugin extends Plugin {
 				captureGroup: this.settings.captureGroup,
 				showOriginalNameOnHover: this.settings.showOriginalNameOnHover
 			});
-			
-			// 获取所有文件
+
+			// 获取文件夹下所有文件
 			const files = this.fileManager.getFiles(folder);
-			
-			// 应用装饰
+			if (!files || files.length === 0) {
+				return;
+			}
+
+			// 应用文件装饰
 			this.decorationManager.applyFileDecorations(files);
 			
-			// 性能监控
-			this.updateCount++;
-			const endTime = performance.now();
-			const duration = endTime - startTime;
-			const now = Date.now();
-			
-			if (this.updateCount % 10 === 0) {
-				// 估算DOM操作减少比例
-				this.domOperationsReduced = 80; // 根据视口优化的预期减少量
-				
-				console.log(`更新文件显示耗时: ${duration.toFixed(2)}ms，文件数: ${files.length}，DOM操作减少: ~${this.domOperationsReduced}%`);
-				
-				// 重置时间
-				this.lastUpdateTime = now;
-			}
+			// 刷新编辑器装饰
+			this.refreshEditorDecorations();
 		} catch (error) {
-			console.error('更新文件显示失败:', error);
-			new Notice(`更新文件显示失败: 请检查文件夹路径是否正确`);
+			console.error('更新文件显示时出错:', error);
+		} finally {
+			this.performanceMonitor.endMeasure();
 		}
 	}
 
@@ -284,7 +264,7 @@ export default class FileDisplayPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 		
-		// 更新正则缓存
+		// 更新正则缓存设置
 		RegexCache.getInstance().updateSettings();
 		
 		// 更新装饰管理器配置
@@ -294,25 +274,41 @@ export default class FileDisplayPlugin extends Plugin {
 			showOriginalNameOnHover: this.settings.showOriginalNameOnHover
 		});
 		
-		// 重新设置事件订阅
-		this.setupEventSubscriptions();
+		// 文件夹变化时，重新初始化文件管理器
+		if (this.fileManager && this.settings.activeFolder) {
+			// 由于没有updateConfig，创建一个新实例
+			this.fileManager = new FileManager(
+				this.app,
+				{
+					activeFolder: this.settings.activeFolder
+				}
+			);
+			
+			// 重新设置事件订阅
+			this.setupEventSubscriptions();
+		}
 		
 		// 更新文件显示
-		this.updateFileDisplay();
+		await this.updateFileDisplay();
 	}
-	
+
+	/**
+	 * 打开指定文件名的文件
+	 * @param fileName 文件名（不含扩展名）
+	 */
 	private async openFileByName(fileName: string) {
 		try {
 			await this.fileManager.openFileByName(fileName);
 		} catch (error) {
 			console.error('打开文件失败:', error);
-			new Notice(`无法找到或打开文件: ${fileName}`);
+			new Notice(`无法打开文件: ${fileName}`);
 		}
 	}
-	
+
+	/**
+	 * 刷新编辑器装饰
+	 */
 	public refreshEditorDecorations() {
-		// 手动刷新编辑器装饰
-		// 用于应用实时更改
 		this.app.workspace.updateOptions();
 	}
 }

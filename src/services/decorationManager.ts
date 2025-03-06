@@ -535,21 +535,7 @@ export class DecorationManager {
      * 更新名称映射关系
      */
     public updateNameMapping(originalName: string, displayName: string): void {
-        this.nameCache.set(originalName, displayName);
-    }
-    
-    /**
-     * 查找原始文件名
-     */
-    public findOriginalFileName(displayName: string): string | null {
-        return this.nameCache.get(displayName);
-    }
-    
-    /**
-     * 清理名称映射
-     */
-    public clearNameMapping(): void {
-        this.nameCache.clear();
+        this.nameCache.set(displayName, originalName);
     }
     
     /**
@@ -770,5 +756,20 @@ export class DecorationManager {
         } catch (error) {
             console.error('处理文件面板失败:', error);
         }
+    }
+    
+    /**
+     * 查找与显示名称对应的原始文件名
+     */
+    public findOriginalFileName(displayName: string): string | null {
+        // 从缓存中查找
+        return this.nameCache.get(displayName);
+    }
+    
+    /**
+     * 清理名称映射
+     */
+    public clearNameMapping(): void {
+        this.nameCache.clear();
     }
 } 
