@@ -1,13 +1,16 @@
-import { TAbstractFile } from 'obsidian';
+import { TFile } from 'obsidian';
+import { debounceFn } from '../utils/debounceIntegration';
 
 /**
- * 事件类型枚举
+ * 文件事件类型枚举
  */
 export enum FileEventType {
     CREATE = 'create',
     MODIFY = 'modify',
     DELETE = 'delete',
-    RENAME = 'rename'
+    RENAME = 'rename',
+    MOVE = 'move',
+    ANY = 'any'
 }
 
 /**
@@ -15,9 +18,14 @@ export enum FileEventType {
  */
 export interface FileEvent {
     type: FileEventType;
-    file: TAbstractFile;
+    file: TFile;
     oldPath?: string;
 }
+
+/**
+ * 事件回调函数类型
+ */
+export type EventCallback = (event: FileEvent) => void;
 
 /**
  * 事件总线配置
@@ -27,52 +35,36 @@ export interface EventBusConfig {
     debounceTimeMs: number;
 }
 
-type EventCallback = (event: FileEvent) => void;
-
-/**
- * 防抖函数
- */
-function debounce(fn: Function, delay: number): Function {
-    let timer: NodeJS.Timeout | null = null;
-    return function(...args: any[]) {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-            fn.apply(this, args);
-            timer = null;
-        }, delay);
-    };
-}
-
 /**
  * 节流函数
  */
 function throttle(fn: Function, delay: number): Function {
-    let lastTime = 0;
+    let lastCall = 0;
     return function(...args: any[]) {
         const now = Date.now();
-        if (now - lastTime >= delay) {
-            fn.apply(this, args);
-            lastTime = now;
-        }
+        if (now - lastCall < delay) return;
+        lastCall = now;
+        return fn.apply(this, args);
     };
 }
 
 /**
- * 事件总线类
+ * 事件总线
+ * 集中管理文件事件的发布与订阅
  */
 export class EventBus {
     private listeners: Map<FileEventType, Set<EventCallback>> = new Map();
     private config: EventBusConfig;
     
-    constructor(config: EventBusConfig = {
-        throttleTimeMs: 300,
-        debounceTimeMs: 500
-    }) {
+    constructor(config: EventBusConfig = { throttleTimeMs: 300, debounceTimeMs: 500 }) {
         this.config = config;
-        
-        // 初始化事件类型映射
+        this.initializeListeners();
+    }
+    
+    private initializeListeners(): void {
+        // 初始化每种事件类型的监听器集合
         Object.values(FileEventType).forEach(type => {
-            this.listeners.set(type as FileEventType, new Set());
+            this.listeners.set(type, new Set());
         });
     }
     
@@ -88,7 +80,7 @@ export class EventBus {
         if (type === FileEventType.CREATE || type === FileEventType.MODIFY) {
             wrappedCallback = throttle(callback, this.config.throttleTimeMs) as EventCallback;
         } else {
-            wrappedCallback = debounce(callback, this.config.debounceTimeMs) as EventCallback;
+            wrappedCallback = debounceFn(callback, this.config.debounceTimeMs) as EventCallback;
         }
         
         listeners.add(wrappedCallback);
@@ -100,70 +92,52 @@ export class EventBus {
     }
     
     /**
-     * 发送事件
+     * 触发文件事件
      */
     public emit(event: FileEvent): void {
-        const listeners = this.listeners.get(event.type);
-        if (!listeners) return;
+        // 获取特定事件类型的监听器
+        const typeListeners = this.listeners.get(event.type);
+        // 获取通用事件类型的监听器
+        const anyListeners = this.listeners.get(FileEventType.ANY);
         
-        listeners.forEach(callback => {
+        // 组合所有要通知的监听器
+        const allCallbacks = new Set<EventCallback>();
+        
+        if (typeListeners) {
+            typeListeners.forEach(cb => allCallbacks.add(cb));
+        }
+        
+        if (anyListeners) {
+            anyListeners.forEach(cb => allCallbacks.add(cb));
+        }
+        
+        // 通知所有监听器
+        for (const callback of allCallbacks) {
             try {
                 callback(event);
             } catch (error) {
-                console.error(`事件处理错误 [${event.type}]:`, error);
+                console.error('事件处理器执行失败:', error);
             }
-        });
-    }
-    
-    /**
-     * 获取特定文件夹的事件监听器
-     */
-    public getFolderListener(folderPath: string, callback: EventCallback): () => void {
-        const wrappedCallback = (event: FileEvent) => {
-            if (event.file.path.startsWith(folderPath)) {
-                callback(event);
-            }
-        };
-        
-        // 为所有事件类型注册监听器
-        const unsubscribes = Object.values(FileEventType).map(type => 
-            this.on(type as FileEventType, wrappedCallback)
-        );
-        
-        // 返回组合的取消订阅函数
-        return () => unsubscribes.forEach(unsubscribe => unsubscribe());
-    }
-    
-    /**
-     * 获取特定文件类型的事件监听器
-     */
-    public getFileTypeListener(extension: string, callback: EventCallback): () => void {
-        const wrappedCallback = (event: FileEvent) => {
-            if (event.file.path.endsWith(`.${extension}`)) {
-                callback(event);
-            }
-        };
-        
-        // 为所有事件类型注册监听器
-        const unsubscribes = Object.values(FileEventType).map(type => 
-            this.on(type as FileEventType, wrappedCallback)
-        );
-        
-        // 返回组合的取消订阅函数
-        return () => unsubscribes.forEach(unsubscribe => unsubscribe());
-    }
-    
-    /**
-     * 更新配置
-     */
-    public updateConfig(config: Partial<EventBusConfig>): void {
-        this.config = { ...this.config, ...config };
+        }
     }
     
     /**
      * 清理所有监听器
      */
-    public destroy(): void {
-        this.listeners.clear();
+    public clear(): void {
+        this.listeners.forEach(listeners => listeners.clear());
+    }
+    
+    /**
+     * 获取监听器统计信息
+     */
+    public getStats(): { [key in FileEventType]?: number } {
+        const result: { [key in FileEventType]?: number } = {};
+        
+        this.listeners.forEach((listeners, type) => {
+            result[type] = listeners.size;
+        });
+        
+        return result;
     }
 } 

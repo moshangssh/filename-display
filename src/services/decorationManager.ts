@@ -2,11 +2,13 @@ import { ViewPlugin, DecorationSet, Decoration, EditorView, ViewUpdate, WidgetTy
 import { RangeSetBuilder } from '@codemirror/state';
 import { TFile, App } from 'obsidian';
 import { RegexCache } from '../utils/regexCache';
-import { EditorViewport, ViewportElement } from './editorViewport';
+import { EditorViewport, ViewportElement } from './legacyAdapters';
 import { BaseWidget } from '../ui/linkWidget';
 import { DOMUtils } from '../utils/domUtils';
 import { createGlobalStyles } from '../styles/widgetStyles';
 import { debounceFn } from '../utils/debounceIntegration';
+import { CacheService } from './cacheService';
+import { NameTransformer } from './nameTransformer';
 
 /**
  * 文件名显示配置接口
@@ -53,104 +55,40 @@ export class FilenameDecorationWidget extends BaseWidget {
 }
 
 /**
- * LRU缓存实现
- */
-class LRUCache<K, V> {
-    private cache: Map<K, V>;
-    private timestamps: Map<K, number>;
-    private readonly maxSize: number;
-    private hits: number = 0;
-    private misses: number = 0;
-    
-    constructor(maxSize: number) {
-        this.maxSize = maxSize;
-        this.cache = new Map();
-        this.timestamps = new Map();
-    }
-    
-    set(key: K, value: V): void {
-        this.timestamps.set(key, Date.now());
-        
-        if (this.cache.size >= this.maxSize) {
-            this.evictOldest();
-        }
-        
-        this.cache.set(key, value);
-    }
-    
-    get(key: K): V | null {
-        const value = this.cache.get(key);
-        if (value !== undefined) {
-            this.hits++;
-            this.timestamps.set(key, Date.now());
-            return value;
-        }
-        this.misses++;
-        return null;
-    }
-    
-    private evictOldest(): void {
-        let oldestKey: K | null = null;
-        let oldestTime = Infinity;
-        
-        for (const [key, time] of this.timestamps) {
-            if (time < oldestTime) {
-                oldestTime = time;
-                oldestKey = key;
-            }
-        }
-        
-        if (oldestKey) {
-            this.cache.delete(oldestKey);
-            this.timestamps.delete(oldestKey);
-        }
-    }
-    
-    clear(): void {
-        this.cache.clear();
-        this.timestamps.clear();
-        this.hits = 0;
-        this.misses = 0;
-    }
-    
-    getStats(): { hits: number; misses: number; hitRate: number } {
-        const total = this.hits + this.misses;
-        return {
-            hits: this.hits,
-            misses: this.misses,
-            hitRate: total > 0 ? this.hits / total : 0
-        };
-    }
-}
-
-/**
  * 文件名装饰管理器
  * 使用CodeMirror 6 Decoration系统来管理文件名显示
  */
 export class DecorationManager {
     private config: DecorationManagerConfig;
-    private readonly nameCache: LRUCache<string, string>;
+    private readonly nameCache: CacheService<string, string>;
     private styleEl: HTMLStyleElement | null = null;
     private editorViewport: EditorViewport | null = null;
     private app: App;
     private readonly CLEANUP_INTERVAL = 1000 * 60 * 5; // 5分钟清理一次
     private cleanupTimer: NodeJS.Timeout | null = null;
+    private nameTransformer: NameTransformer;
     
     // 性能监控
     private metrics = {
         totalProcessed: 0,
         lastBatchSize: 0,
         lastProcessTime: 0,
-        avgProcessTime: 0
+        avgProcessTime: 0,
+        maxProcessTime: 0
     };
     
     constructor(app: App, config: DecorationManagerConfig) {
         this.app = app;
         this.config = { ...config };
-        this.nameCache = new LRUCache<string, string>(1000);
+        this.nameCache = new CacheService<string, string>(1000);
+        this.nameTransformer = new NameTransformer({
+            fileNamePattern: this.config.fileNamePattern,
+            captureGroup: this.config.captureGroup
+        });
         
         this.createStyleElement();
         this.setupEditorViewport();
+        this.setupFileExplorerObserver();
         this.setupPeriodicCleanup();
         
         // 延迟初始化文件浏览器
@@ -163,11 +101,8 @@ export class DecorationManager {
      * 设置编辑器视口监听
      */
     private setupEditorViewport(): void {
-        // 创建视口管理器
         this.editorViewport = new EditorViewport(this.app);
-        
-        // 注册视口变化监听器
-        this.editorViewport.addChangeListener((visibleElements) => {
+        this.editorViewport.addChangeListener((visibleElements: ViewportElement[]) => {
             this.handleViewportChange(visibleElements);
         });
     }
@@ -176,13 +111,10 @@ export class DecorationManager {
      * 处理视口变化事件
      */
     private handleViewportChange(visibleElements: ViewportElement[]): void {
-        // 记录性能指标
-        this.metrics.lastBatchSize = visibleElements.length;
-        this.metrics.totalProcessed += visibleElements.length;
-        
-        // 仅处理可见元素，大幅减少DOM操作
         for (const element of visibleElements) {
-            this.processElement(element);
+            if (element.visible) {
+                this.processElement(element);
+            }
         }
     }
     
@@ -240,54 +172,19 @@ export class DecorationManager {
      */
     public updateConfig(config: Partial<DecorationManagerConfig>): void {
         this.config = { ...this.config, ...config };
+        
+        // 同步更新NameTransformer配置
+        this.nameTransformer.updateConfig({
+            fileNamePattern: this.config.fileNamePattern,
+            captureGroup: this.config.captureGroup
+        });
     }
     
     /**
      * 根据配置的规则转换文件名
      */
     public getUpdatedFileName(originalName: string): string | null {
-        try {
-            // 移除文件扩展名
-            const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
-            
-            // 获取正则表达式缓存实例
-            const regexCache = RegexCache.getInstance();
-            
-            // 验证正则表达式模式是否有效
-            if (!regexCache.isValidRegex(this.config.fileNamePattern)) {
-                console.error(`无效的正则表达式模式: ${this.config.fileNamePattern}`);
-                return this.getFallbackName(nameWithoutExt);
-            }
-            
-            // 使用配置的正则表达式进行匹配
-            const regex = regexCache.get(this.config.fileNamePattern);
-            const match = nameWithoutExt.match(regex);
-            
-            // 验证捕获组索引是否有效
-            if (match && this.config.captureGroup >= 0 && this.config.captureGroup < match.length) {
-                const result = match[this.config.captureGroup];
-                // 确保结果不为空
-                return result?.trim() || this.getFallbackName(nameWithoutExt);
-            }
-            
-            // 如果匹配失败或捕获组无效，使用回退名称
-            return this.getFallbackName(nameWithoutExt);
-        } catch (error) {
-            console.error(`处理文件名时出错: ${originalName}`, error);
-            return originalName; // 发生错误时返回原始文件名
-        }
-    }
-    
-    /**
-     * 获取回退的显示名称
-     */
-    private getFallbackName(originalName: string): string {
-        // 如果原始名称过长，截取合适长度
-        const MAX_LENGTH = 30;
-        if (originalName.length > MAX_LENGTH) {
-            return originalName.substring(0, MAX_LENGTH - 3) + '...';
-        }
-        return originalName;
+        return this.nameTransformer.transformFileName(originalName);
     }
     
     /**
@@ -607,6 +504,9 @@ export class DecorationManager {
         this.metrics.totalProcessed++;
         this.metrics.lastProcessTime = processTime;
         this.metrics.avgProcessTime = (this.metrics.avgProcessTime * (this.metrics.totalProcessed - 1) + processTime) / this.metrics.totalProcessed;
+        if (processTime > this.metrics.maxProcessTime) {
+            this.metrics.maxProcessTime = processTime;
+        }
     }
     
     /**

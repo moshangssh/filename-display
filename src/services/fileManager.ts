@@ -28,32 +28,40 @@ export class FileManager {
         
         // 监听文件变更事件
         this.app.vault.on('modify', (file) => {
-            this.eventBus.emit({
-                type: FileEventType.MODIFY,
-                file
-            });
+            if (file instanceof TFile) {
+                this.eventBus.emit({
+                    type: FileEventType.MODIFY,
+                    file
+                });
+            }
         });
         
         this.app.vault.on('create', (file) => {
-            this.eventBus.emit({
-                type: FileEventType.CREATE,
-                file
-            });
+            if (file instanceof TFile) {
+                this.eventBus.emit({
+                    type: FileEventType.CREATE,
+                    file
+                });
+            }
         });
         
         this.app.vault.on('delete', (file) => {
-            this.eventBus.emit({
-                type: FileEventType.DELETE,
-                file
-            });
+            if (file instanceof TFile) {
+                this.eventBus.emit({
+                    type: FileEventType.DELETE,
+                    file
+                });
+            }
         });
         
         this.app.vault.on('rename', (file, oldPath) => {
-            this.eventBus.emit({
-                type: FileEventType.RENAME,
-                file,
-                oldPath
-            });
+            if (file instanceof TFile) {
+                this.eventBus.emit({
+                    type: FileEventType.RENAME,
+                    file,
+                    oldPath
+                });
+            }
         });
     }
 
@@ -70,18 +78,46 @@ export class FileManager {
      * 获取指定文件夹的事件监听器
      */
     public onFolderEvents(folderPath: string, callback: (event: FileEvent) => void): () => void {
-        const unsubscribe = this.eventBus.getFolderListener(folderPath, callback);
-        this.unsubscribes.push(unsubscribe);
-        return unsubscribe;
+        // 创建一个过滤器包装回调，只处理特定文件夹中的文件
+        const folderCallback = (event: FileEvent) => {
+            if (event.file.path.startsWith(folderPath)) {
+                callback(event);
+            }
+        };
+
+        // 为所有事件类型注册监听器
+        const unsubscribes = [
+            this.onFileEvent(FileEventType.CREATE, folderCallback),
+            this.onFileEvent(FileEventType.MODIFY, folderCallback),
+            this.onFileEvent(FileEventType.DELETE, folderCallback),
+            this.onFileEvent(FileEventType.RENAME, folderCallback)
+        ];
+        
+        // 返回一个清理函数
+        return () => unsubscribes.forEach(unsub => unsub());
     }
     
     /**
      * 获取指定文件类型的事件监听器
      */
     public onFileTypeEvents(extension: string, callback: (event: FileEvent) => void): () => void {
-        const unsubscribe = this.eventBus.getFileTypeListener(extension, callback);
-        this.unsubscribes.push(unsubscribe);
-        return unsubscribe;
+        // 创建一个过滤器包装回调，只处理特定扩展名的文件
+        const typeCallback = (event: FileEvent) => {
+            if (event.file.path.endsWith(`.${extension}`)) {
+                callback(event);
+            }
+        };
+        
+        // 为所有事件类型注册监听器
+        const unsubscribes = [
+            this.onFileEvent(FileEventType.CREATE, typeCallback),
+            this.onFileEvent(FileEventType.MODIFY, typeCallback),
+            this.onFileEvent(FileEventType.DELETE, typeCallback),
+            this.onFileEvent(FileEventType.RENAME, typeCallback)
+        ];
+        
+        // 返回一个清理函数
+        return () => unsubscribes.forEach(unsub => unsub());
     }
 
     /**
@@ -155,6 +191,6 @@ export class FileManager {
         this.unsubscribes = [];
         
         // 销毁事件总线
-        this.eventBus.destroy();
+        this.eventBus.clear();
     }
 }  

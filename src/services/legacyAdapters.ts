@@ -16,11 +16,8 @@ export interface VisibleElement {
     visible: boolean;
 }
 
-export interface ViewportElement {
-    id: string;
-    element: HTMLElement;
-    path: string;
-    visible: boolean;
+export interface ViewportElement extends VisibleElement {
+    // ViewportElement现在完全继承VisibleElement，减少代码重复
 }
 
 export type VisibilityChangeListener = (visibleElements: VisibleElement[]) => void;
@@ -73,15 +70,18 @@ export class DOMObserverService {
 }
 
 /**
- * VisibilityTracker适配器
+ * 通用视图元素适配器基类
+ * 减少代码重复，由VisibilityTracker和EditorViewport继承
  */
-export class VisibilityTracker {
-    private app: App;
-    private observer: UnifiedDOMObserver | null;
-    private changeListeners: Set<VisibilityChangeListener> = new Set();
+abstract class BaseElementAdapter<T extends VisibleElement> {
+    protected app: App;
+    protected observer: UnifiedDOMObserver | null;
+    protected changeListeners: Set<(elements: T[]) => void> = new Set();
+    protected elementType: string;
     
-    constructor(app: App) {
+    constructor(app: App, elementType: string) {
         this.app = app;
+        this.elementType = elementType;
         this.observer = getObserver();
         
         if (this.observer) {
@@ -89,10 +89,40 @@ export class VisibilityTracker {
         }
     }
     
-    private handleUnifiedChange(elements: ObservedElement[]): void {
+    protected abstract handleUnifiedChange(elements: ObservedElement[]): void;
+    
+    public scanCurrentView(): void {
+        this.observer?.scanCurrentView();
+    }
+    
+    public clearElements(): void {
+        this.observer?.clearElements();
+    }
+    
+    public recalculateVisibility(): void {
+        this.observer?.recalculateVisibility();
+    }
+    
+    public destroy(): void {
+        if (this.observer) {
+            this.observer.removeVisibilityChangeListener(this.handleUnifiedChange.bind(this));
+        }
+        this.changeListeners.clear();
+    }
+}
+
+/**
+ * VisibilityTracker适配器
+ */
+export class VisibilityTracker extends BaseElementAdapter<VisibleElement> {
+    constructor(app: App) {
+        super(app, 'internal-link');
+    }
+    
+    protected handleUnifiedChange(elements: ObservedElement[]): void {
         // 转换为旧版格式，仅保留内部链接
         const visibleElements: VisibleElement[] = elements
-            .filter(el => el.type === 'internal-link')
+            .filter(el => el.type === this.elementType)
             .map(el => ({
                 id: el.id,
                 element: el.element,
@@ -101,32 +131,22 @@ export class VisibilityTracker {
             }));
         
         // 通知旧版监听器
-        for (const listener of this.changeListeners) {
-            listener(visibleElements);
-        }
-    }
-    
-    public scanCurrentView(): void {
-        this.observer?.scanCurrentView();
+        this.changeListeners.forEach(listener => listener(visibleElements));
     }
     
     public scanElements(container: HTMLElement, selector: string, path: string): void {
-        this.observer?.scanElements(container, selector, path, 'internal-link');
+        this.observer?.scanElements(container, selector, path, this.elementType);
     }
     
     public trackElement(element: VisibleElement): void {
         this.observer?.trackElement({
             ...element,
-            type: 'internal-link'
+            type: this.elementType
         });
     }
     
     public untrackElement(id: string): void {
         this.observer?.untrackElement(id);
-    }
-    
-    public clearElements(): void {
-        this.observer?.clearElements();
     }
     
     public addChangeListener(listener: VisibilityChangeListener): void {
@@ -137,13 +157,9 @@ export class VisibilityTracker {
         this.changeListeners.delete(listener);
     }
     
-    public recalculateVisibility(): void {
-        this.observer?.recalculateVisibility();
-    }
-    
     public getVisibleElements(): VisibleElement[] {
         if (this.observer) {
-            return this.observer.getVisibleElements('internal-link')
+            return this.observer.getVisibleElements(this.elementType)
                 .map(el => ({
                     id: el.id,
                     element: el.element,
@@ -165,34 +181,18 @@ export class VisibilityTracker {
         }
         return { trackCount: 0, visibleCount: 0, totalObserved: 0 };
     }
-    
-    public destroy(): void {
-        if (this.observer) {
-            this.observer.removeVisibilityChangeListener(this.handleUnifiedChange.bind(this));
-        }
-        this.changeListeners.clear();
-    }
 }
 
 /**
  * EditorViewport适配器
  */
-export class EditorViewport {
-    private app: App;
-    private observer: UnifiedDOMObserver | null;
-    private changeListeners: Set<ViewportChangeListener> = new Set();
-    
+export class EditorViewport extends BaseElementAdapter<ViewportElement> {
     constructor(app: App) {
-        this.app = app;
-        this.observer = getObserver();
-        
-        if (this.observer) {
-            this.observer.addVisibilityChangeListener(this.handleUnifiedChange.bind(this));
-        }
+        super(app, 'viewport-element');
     }
     
-    private handleUnifiedChange(elements: ObservedElement[]): void {
-        // 转换为旧版格式，包含所有元素
+    protected handleUnifiedChange(elements: ObservedElement[]): void {
+        // 转换为旧版格式
         const viewportElements: ViewportElement[] = elements.map(el => ({
             id: el.id,
             element: el.element,
@@ -200,28 +200,18 @@ export class EditorViewport {
             visible: el.visible
         }));
         
-        for (const listener of this.changeListeners) {
-            listener(viewportElements);
-        }
-    }
-    
-    public scanCurrentView(): void {
-        this.observer?.scanCurrentView();
+        this.changeListeners.forEach(listener => listener(viewportElements));
     }
     
     public registerElement(element: ViewportElement): void {
         this.observer?.trackElement({
             ...element,
-            type: 'viewport-element'
+            type: this.elementType
         });
     }
     
     public unregisterElement(id: string): void {
         this.observer?.untrackElement(id);
-    }
-    
-    public clearElements(): void {
-        this.observer?.clearElements();
     }
     
     public addChangeListener(listener: ViewportChangeListener): void {
@@ -233,7 +223,7 @@ export class EditorViewport {
     }
     
     public recalculateViewport(): void {
-        this.observer?.recalculateVisibility();
+        this.recalculateVisibility();
     }
     
     public getVisibleElements(): ViewportElement[] {
@@ -247,12 +237,5 @@ export class EditorViewport {
                 }));
         }
         return [];
-    }
-    
-    public destroy(): void {
-        if (this.observer) {
-            this.observer.removeVisibilityChangeListener(this.handleUnifiedChange.bind(this));
-        }
-        this.changeListeners.clear();
     }
 } 
