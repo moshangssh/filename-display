@@ -425,12 +425,32 @@ export class UnifiedDOMObserver {
             this.mutationObserver.disconnect();
             this.mutationObserver = null;
         }
+
+        // 移除所有事件监听器
+        const boundResize = this.recalculateVisibility.bind(this);
+        window.removeEventListener('resize', boundResize);
         
-        // 移除事件监听
-        window.removeEventListener('resize', this.recalculateVisibility.bind(this));
+        // 移除工作区事件监听器
+        this.app.workspace.off('active-leaf-change', this.handleActiveLeafChange.bind(this));
+        this.app.workspace.off('file-open', () => this.scanCurrentView());
+        this.app.workspace.off('editor-change', () => this.scanCurrentView());
         
-        // 清空监听器
+        // 清空监听器集合
         this.visibilityChangeListeners.clear();
         this.domChangeListeners.clear();
+        
+        // 重置性能统计数据
+        this.updateCount = 0;
+        this.totalElementsObserved = 0;
+        
+        // 清理全局引用
+        if (window.activeUnifiedObserver === this) {
+            window.activeUnifiedObserver = null;
+        }
+        
+        // 清空内部数据结构
+        this.elements = new Map();
+        this.visibleElements = [];
+        this.activeLeaf = null;
     }
 } 
