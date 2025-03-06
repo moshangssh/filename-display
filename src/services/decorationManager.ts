@@ -77,6 +77,27 @@ export class DecorationManager {
         maxProcessTime: 0
     };
     
+    // 用于存储已处理过的元素集合
+    private processedElements = new WeakSet<HTMLElement>();
+    
+    // 用于存储元素的文件路径
+    private elementPathCache = new WeakMap<HTMLElement, string>();
+    
+    // 使用MutationObserver处理DOM变化
+    private fileExplorerObserver: MutationObserver | null = null;
+    
+    // 记录上次处理的时间戳
+    private lastProcessTimestamp = 0;
+    
+    // 处理间隔阈值（单位：毫秒）
+    private readonly PROCESS_THROTTLE_INTERVAL = 50;
+    
+    // 记录是否有待处理的更新
+    private hasPendingUpdates = false;
+    
+    // 请求更新的ID，用于取消已调度但尚未执行的更新
+    private requestUpdateId: number | null = null;
+    
     constructor(app: App, config: DecorationManagerConfig) {
         this.app = app;
         this.config = { ...config };
@@ -209,33 +230,233 @@ export class DecorationManager {
                 return;
             }
             
-            // 使用全局统一观察器
-            if (window.activeUnifiedObserver) {
-                // 使用统一DOM观察器的observeDOM方法
-                window.activeUnifiedObserver.observeDOM(fileExplorer as HTMLElement, {
-                    childList: true,
-                    subtree: true,
-                    attributes: true,
-                    characterData: true
-                });
-                
-                // 添加DOM变更监听器
-                window.activeUnifiedObserver.addDOMChangeListener(() => {
-                    this.processFilesPanel();
-                });
-                
-                // 初始处理所有现有文件
-                this.processFilesPanel();
-            } else {
-                // 如果统一观察器不可用，则记录错误
-                console.warn('统一DOM观察器不可用，无法观察文件浏览器');
-                
-                // 仍然进行初始处理
-                this.processFilesPanel();
+            // 如果已经存在observer，先断开连接
+            if (this.fileExplorerObserver) {
+                this.fileExplorerObserver.disconnect();
             }
+            
+            // 创建新的MutationObserver
+            this.fileExplorerObserver = new MutationObserver(this.handleFileExplorerMutation.bind(this));
+            
+            // 观察文件浏览器的变化
+            this.fileExplorerObserver.observe(fileExplorer, {
+                childList: true,
+                subtree: true,
+                attributes: false,
+                characterData: true
+            });
+            
+            // 初始处理所有现有文件
+            this.requestProcessFilesPanel();
         } catch (error) {
             console.error('设置文件浏览器观察器失败:', error);
         }
+    }
+    
+    /**
+     * 处理文件浏览器DOM变化
+     */
+    private handleFileExplorerMutation(mutations: MutationRecord[]): void {
+        // 如果没有变化，直接返回
+        if (mutations.length === 0) return;
+        
+        // 检查是否有需要处理的变化
+        const hasRelevantChange = mutations.some(mutation => {
+            // 仅处理添加节点或文本内容变化
+            return mutation.type === 'childList' || mutation.type === 'characterData';
+        });
+        
+        if (hasRelevantChange) {
+            this.requestProcessFilesPanel();
+        }
+    }
+    
+    /**
+     * 请求处理文件面板（节流处理）
+     */
+    private requestProcessFilesPanel(): void {
+        // 标记有待处理的更新
+        this.hasPendingUpdates = true;
+        
+        // 如果已经有调度的更新，不再创建新的
+        if (this.requestUpdateId !== null) return;
+        
+        // 检查是否可以立即处理
+        const now = Date.now();
+        const timeSinceLastProcess = now - this.lastProcessTimestamp;
+        
+        if (timeSinceLastProcess >= this.PROCESS_THROTTLE_INTERVAL) {
+            // 可以立即处理
+            this.processFilesPanel();
+        } else {
+            // 需要延迟处理
+            const delay = this.PROCESS_THROTTLE_INTERVAL - timeSinceLastProcess;
+            this.requestUpdateId = window.setTimeout(() => {
+                this.requestUpdateId = null;
+                if (this.hasPendingUpdates) {
+                    this.processFilesPanel();
+                }
+            }, delay) as unknown as number;
+        }
+    }
+    
+    /**
+     * 处理文件面板
+     * 优化后的实现，使用批处理和缓存，避免重复处理
+     */
+    private processFilesPanel(): void {
+        try {
+            // 重置标志
+            this.hasPendingUpdates = false;
+            this.lastProcessTimestamp = Date.now();
+            
+            // 获取所有文件标题内容元素
+            const fileTitleContents = document.querySelectorAll('.nav-file-title-content');
+            
+            // 1. 收集需要更新的元素及其新文件名
+            const pendingUpdates: Array<{
+                element: HTMLElement, 
+                originalName: string, 
+                newName: string
+            }> = [];
+            
+            // 预处理阶段 - 确定哪些元素需要更新
+            for (const titleEl of Array.from(fileTitleContents)) {
+                // 跳过已处理的元素（除非强制重新处理）
+                if (this.processedElements.has(titleEl as HTMLElement)) continue;
+                
+                if (!titleEl.textContent) continue;
+                
+                // 获取原始文件名
+                const fileName = titleEl.textContent;
+                
+                // 获取更新后的文件名
+                const newName = this.getUpdatedFileName(fileName);
+                if (!newName || newName === fileName) {
+                    // 标记为已处理
+                    this.processedElements.add(titleEl as HTMLElement);
+                    continue;
+                }
+                
+                // 添加到待更新队列
+                pendingUpdates.push({
+                    element: titleEl as HTMLElement,
+                    originalName: fileName,
+                    newName: newName
+                });
+            }
+            
+            // 如果没有需要更新的元素，直接返回
+            if (pendingUpdates.length === 0) return;
+            
+            // 2. 使用requestAnimationFrame批量应用DOM更新
+            window.requestAnimationFrame(() => {
+                // 收集文件路径更新
+                const pathUpdates: Array<{
+                    element: HTMLElement,
+                    path: string
+                }> = [];
+                
+                // 使用DocumentFragment存储临时操作结果
+                const fragment = document.createDocumentFragment();
+                const tempElements = new Map<HTMLElement, HTMLElement>();
+                
+                // 处理每个待更新项
+                for (const update of pendingUpdates) {
+                    const { element, originalName, newName } = update;
+                    
+                    // 创建临时克隆进行处理，避免频繁触发DOM重排
+                    const tempElement = element.cloneNode(true) as HTMLElement;
+                    tempElements.set(element, tempElement);
+                    
+                    // 在临时元素上设置数据属性
+                    DOMUtils.setAttributes(tempElement, {
+                        'data-displayed-filename': newName
+                    });
+                    
+                    // 更新映射
+                    this.updateNameMapping(originalName, newName);
+                    
+                    // 处理navFileTitle相关路径设置
+                    const navFileTitle = element.closest('.nav-file-title');
+                    if (navFileTitle) {
+                        // 检查缓存中是否已有路径信息
+                        let filePath = this.elementPathCache.get(navFileTitle as HTMLElement);
+                        
+                        if (!filePath) {
+                            // 尝试从元素获取路径
+                            filePath = navFileTitle.getAttribute('data-path') || undefined;
+                            
+                            if (!filePath) {
+                                const parent = navFileTitle.closest('.nav-file');
+                                if (parent) {
+                                    const possiblePath = parent.getAttribute('data-path') || undefined;
+                                    if (possiblePath) {
+                                        filePath = possiblePath;
+                                        
+                                        // 将路径更新收集起来，一起批量处理
+                                        pathUpdates.push({
+                                            element: navFileTitle as HTMLElement,
+                                            path: possiblePath
+                                        });
+                                        
+                                        // 缓存路径以避免重复查询
+                                        this.elementPathCache.set(navFileTitle as HTMLElement, possiblePath);
+                                    }
+                                }
+                            } else {
+                                // 缓存已有的路径
+                                this.elementPathCache.set(navFileTitle as HTMLElement, filePath);
+                            }
+                        }
+                    }
+                    
+                    // 标记为已处理
+                    this.processedElements.add(element);
+                }
+                
+                // 执行批量DOM更新
+                const performBatchUpdate = () => {
+                    // 1. 应用文件名显示更新
+                    tempElements.forEach((tempElement, originalElement) => {
+                        // 将tempElement的数据属性同步到原始元素
+                        DOMUtils.setAttributes(originalElement, {
+                            'data-displayed-filename': tempElement.getAttribute('data-displayed-filename') || ''
+                        });
+                    });
+                    
+                    // 2. 应用路径更新
+                    pathUpdates.forEach(update => {
+                        DOMUtils.setAttributes(update.element, {
+                            'data-path': update.path
+                        });
+                    });
+                };
+                
+                // 执行批量更新
+                performBatchUpdate();
+                
+                // 将已处理元素数量记录到性能指标
+                this.metrics.lastBatchSize = pendingUpdates.length;
+                this.metrics.totalProcessed += pendingUpdates.length;
+            });
+        } catch (error) {
+            console.error('处理文件面板失败:', error);
+        }
+    }
+    
+    /**
+     * 清理缓存和标记，强制重新处理所有元素
+     */
+    public forceRefreshFilePanel(): void {
+        // 清除已处理元素的缓存
+        this.processedElements = new WeakSet<HTMLElement>();
+        
+        // 清除路径缓存
+        this.elementPathCache = new WeakMap<HTMLElement, string>();
+        
+        // 请求处理
+        this.requestProcessFilesPanel();
     }
     
     /**
@@ -587,55 +808,6 @@ export class DecorationManager {
                 decorations: v => v.decorations
             }
         );
-    }
-    
-    /**
-     * 处理文件面板中的所有文件
-     */
-    private processFilesPanel(): void {
-        try {
-            // 获取所有文件标题内容元素
-            const fileTitleContents = document.querySelectorAll('.nav-file-title-content');
-            
-            for (const titleEl of Array.from(fileTitleContents)) {
-                if (!titleEl.textContent) continue;
-                
-                // 获取原始文件名
-                const fileName = titleEl.textContent;
-                
-                // 获取更新后的文件名
-                const newName = this.getUpdatedFileName(fileName);
-                if (!newName || newName === fileName) continue;
-                
-                // 直接在内容元素上设置属性
-                DOMUtils.setAttributes(titleEl as HTMLElement, {
-                    'data-displayed-filename': newName
-                });
-                
-                // 更新映射
-                this.updateNameMapping(fileName, newName);
-                
-                // 同时更新父元素（为了兼容性）
-                const navFileTitle = titleEl.closest('.nav-file-title');
-                if (navFileTitle) {
-                    // 尝试找到文件路径
-                    const filePath = navFileTitle.getAttribute('data-path');
-                    if (!filePath) {
-                        const parent = navFileTitle.closest('.nav-file');
-                        if (parent) {
-                            const possiblePath = parent.getAttribute('data-path');
-                            if (possiblePath) {
-                                DOMUtils.setAttributes(navFileTitle as HTMLElement, {
-                                    'data-path': possiblePath
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('处理文件面板失败:', error);
-        }
     }
     
     /**
