@@ -82,6 +82,15 @@ export class PerformanceMonitor {
     private domOperationsReduced = 0;
     private totalProcessTime = 0;
     private startTime = 0;
+    private editorViewport: any = null; // EditorViewport实例
+    
+    /**
+     * 设置EditorViewport实例
+     * @param viewport EditorViewport实例
+     */
+    public setEditorViewport(viewport: any): void {
+        this.editorViewport = viewport;
+    }
     
     /**
      * 开始测量性能
@@ -109,15 +118,18 @@ export class PerformanceMonitor {
      * 记录详细的性能指标
      */
     private logDetailedMetrics(lastDuration: number): void {
-        // 估算DOM操作减少比例 (基于视口优化)
-        this.domOperationsReduced = 80; 
-        
-        console.log(`性能指标 - 批次 #${this.updateCount}: 
-            - 最近操作耗时: ${lastDuration.toFixed(2)}ms
-            - 平均操作耗时: ${(this.totalProcessTime / this.updateCount).toFixed(2)}ms
-            - DOM操作减少率: ~${this.domOperationsReduced}%`);
-            
-        // 更新时间戳
+        // 计算实际的DOM操作减少比例
+        const visibleRatio = this.editorViewport ?
+            this.editorViewport.getVisibilityRatio() : 0;
+
+        // 基于可见比例计算DOM操作减少率
+        this.domOperationsReduced = Math.round((1 - visibleRatio) * 100);
+
+        console.log(`性能指标 - 批次 #${this.updateCount}:
+- 最近操作耗时: ${lastDuration.toFixed(2)}ms
+- 平均操作耗时: ${(this.totalProcessTime / this.updateCount).toFixed(2)}ms
+- DOM操作减少率: ~${this.domOperationsReduced}%`);
+
         this.lastUpdateTime = Date.now();
     }
     

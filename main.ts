@@ -103,6 +103,19 @@ export default class FileDisplayPlugin extends Plugin {
 			this.decorationManager.createEditorViewPlugin(),
 			widgetStyles
 		];
+		
+		// 在服务初始化完成后，将视口对象传递给性能监控器
+		this.app.workspace.onLayoutReady(() => {
+			// 需要等待 decorationManager 完全初始化及其 editorViewport 创建完成
+			setTimeout(() => {
+				if (this.decorationManager && this.performanceMonitor) {
+					const viewport = this.decorationManager.getEditorViewport();
+					if (viewport) {
+						this.performanceMonitor.setEditorViewport(viewport);
+					}
+				}
+			}, 500); // 给予足够时间完成初始化
+		});
 	}
 	
 	/**

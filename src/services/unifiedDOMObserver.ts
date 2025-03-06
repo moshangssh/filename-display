@@ -392,6 +392,23 @@ export class UnifiedDOMObserver {
     }
     
     /**
+     * 获取可见元素与总元素的比例
+     * @param type 可选的元素类型过滤
+     * @returns 可见比例，范围从0到1
+     */
+    public getVisibilityRatio(type?: string): number {
+        const totalElements = type 
+            ? Array.from(this.elements.values()).filter(el => el.type === type).length
+            : this.elements.size;
+            
+        const visibleCount = type
+            ? this.visibleElements.filter(el => el.type === type).length
+            : this.visibleElements.length;
+            
+        return totalElements > 0 ? visibleCount / totalElements : 0;
+    }
+    
+    /**
      * 销毁观察器并清理资源
      */
     public destroy(): void {

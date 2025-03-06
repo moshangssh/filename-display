@@ -108,6 +108,14 @@ export class DecorationManager {
     }
     
     /**
+     * 获取编辑器视口实例
+     * @returns EditorViewport实例
+     */
+    public getEditorViewport(): EditorViewport | null {
+        return this.editorViewport;
+    }
+    
+    /**
      * 处理视口变化事件
      */
     private handleViewportChange(visibleElements: ViewportElement[]): void {

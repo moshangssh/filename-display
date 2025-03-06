@@ -238,4 +238,15 @@ export class EditorViewport extends BaseElementAdapter<ViewportElement> {
         }
         return [];
     }
+    
+    /**
+     * 获取可见元素与总元素的比例
+     * @returns 可见比例，范围从0到1
+     */
+    public getVisibilityRatio(): number {
+        if (this.observer) {
+            return this.observer.getVisibilityRatio(this.elementType);
+        }
+        return 0;
+    }
 } 
