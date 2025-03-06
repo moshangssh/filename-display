@@ -10,6 +10,12 @@ type DebouncedFunction<T extends (...args: any[]) => any> = T & {
 /**
  * 创建防抖函数
  * 使用原生JavaScript实现
+ * 
+ * @param func 要执行的函数 
+ * @param wait 等待时间(毫秒)，默认300ms
+ * @param immediate 是否立即执行第一次调用
+ * @param name 可选的函数名称(用于性能监控)
+ * @returns 防抖处理后的函数
  */
 export function debounce<T extends (...args: any[]) => any>(
     func: T,
@@ -48,39 +54,17 @@ export function debounce<T extends (...args: any[]) => any>(
     return debounced as DebouncedFunction<T>;
 }
 
-/**
- * 统一的防抖函数接口
- * 
- * @param func 要执行的函数
- * @param wait 等待时间(毫秒)
- * @param immediate 是否立即执行第一次调用
- * @param name 可选的函数名称(用于性能监控)
- * @returns 防抖处理后的函数
- */
-export function debounceFn<T extends (...args: any[]) => any>(
-    func: T,
-    wait: number,
-    immediate = false,
-    name?: string
-): DebouncedFunction<T> {
-    return debounce(func, wait, immediate, name);
-}
+// 导出同一个实现供所有地方使用
+// debounceFn函数接口 - 保持与原有实现兼容
+export const debounceFn = debounce;
 
-/**
- * 创建统一的防抖函数包装器
- * 保持与helpers.ts中createDebouncedFunction相同的接口
- * 
- * @param func 要执行的函数
- * @param name 函数名(用于日志和性能监控)
- * @param wait 等待时间(毫秒)
- * @param immediate 是否立即执行第一次调用
- * @returns 防抖处理后的函数
- */
+// createUnifiedDebouncedFunction接口 - 保持与helpers.ts中createDebouncedFunction相同的接口
+// 参数顺序不同：(func, name, wait, immediate) vs (func, wait, immediate, name)
 export function createUnifiedDebouncedFunction<T extends (...args: any[]) => any>(
     func: T,
     name: string,
     wait: number,
     immediate = false
 ): DebouncedFunction<T> {
-    return debounceFn(func, wait, immediate, name);
+    return debounce(func, wait, immediate, name);
 } 

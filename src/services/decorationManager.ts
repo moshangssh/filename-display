@@ -197,61 +197,33 @@ export class DecorationManager {
             const fileExplorer = document.querySelector('.nav-files-container');
             if (!fileExplorer) {
                 // 如果找不到，设置更长的延迟重试
-                setTimeout(() => this.setupFileExplorerObserver(), 2000);
+                setTimeout(() => this.setupFileExplorerObserver(), 1000);
                 return;
             }
             
-            // 创建防抖处理函数
-            const debouncedProcessFiles = debounceFn(() => {
-                this.processFilesPanel();
-            }, 150);
-
-            // 创建观察器监听文件浏览器的变化
-            const observer = new MutationObserver(() => {
-                debouncedProcessFiles();
-            });
-            
-            // 开始观察，监听更多的变化类型
-            observer.observe(fileExplorer, {
-                childList: true,
-                subtree: true,
-                attributes: true,
-                characterData: true // 监听文本变化
-            });
-            
-            // 初始处理所有现有文件
-            this.processFilesPanel();
-            
-            // 添加多个延迟处理，应对不同加载情况
-            setTimeout(() => this.processFilesPanel(), 500);
-            setTimeout(() => this.processFilesPanel(), 1000);
-            setTimeout(() => this.processFilesPanel(), 3000);
-            
-            // 另外观察整个文档的变化，捕获可能的视图变化
-            const docObserver = new MutationObserver((mutations) => {
-                // 查找潜在的文件标题相关变化
-                for (const mutation of mutations) {
-                    if (mutation.target instanceof HTMLElement) {
-                        const targetEl = mutation.target;
-                        if (targetEl.classList.contains('nav-file-title') || 
-                            targetEl.closest('.nav-file-title') || 
-                            targetEl.querySelector('.nav-file-title')) {
-                            debouncedProcessFiles();
-                            break;
-                        }
-                    }
-                }
-            });
-            
-            // 针对整个应用容器应用观察
-            const appContainer = document.querySelector('.app-container');
-            if (appContainer) {
-                docObserver.observe(appContainer, { 
-                    childList: true, 
+            // 使用全局统一观察器
+            if (window.activeUnifiedObserver) {
+                // 使用统一DOM观察器的observeDOM方法
+                window.activeUnifiedObserver.observeDOM(fileExplorer as HTMLElement, {
+                    childList: true,
                     subtree: true,
                     attributes: true,
-                    attributeFilter: ['class', 'data-path']
+                    characterData: true
                 });
+                
+                // 添加DOM变更监听器
+                window.activeUnifiedObserver.addDOMChangeListener(() => {
+                    this.processFilesPanel();
+                });
+                
+                // 初始处理所有现有文件
+                this.processFilesPanel();
+            } else {
+                // 如果统一观察器不可用，则记录错误
+                console.warn('统一DOM观察器不可用，无法观察文件浏览器');
+                
+                // 仍然进行初始处理
+                this.processFilesPanel();
             }
         } catch (error) {
             console.error('设置文件浏览器观察器失败:', error);
