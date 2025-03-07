@@ -6,3 +6,9 @@ available in the app when your plugin is enabled.
 If your plugin does not need CSS, delete this file.
 
 */
+
+.filename-display-error {
+    color: var(--text-error) !important;
+    text-decoration: underline wavy var(--text-error);
+    cursor: help;
+}
