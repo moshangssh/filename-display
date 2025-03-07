@@ -89,6 +89,8 @@ export default class FilenameDisplayPlugin extends Plugin {
         // 监听布局变更事件
         this.registerEvent(
             this.app.workspace.on('layout-change', () => {
+                // 重新设置观察器并更新所有文件显示
+                this.fileDisplayService.resetObservers();
                 this.fileDisplayService.updateAllFilesDisplay();
             })
         );
@@ -98,6 +100,7 @@ export default class FilenameDisplayPlugin extends Plugin {
     }
 
     onunload() {
+        // 恢复所有显示名称并清理资源
         this.fileDisplayService.restoreAllDisplayNames();
     }
 
