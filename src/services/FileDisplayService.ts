@@ -173,6 +173,9 @@ export class FileDisplayService {
         const originalName = titleEl.textContent || file.basename;
         this.fileDisplayCache.saveOriginalName(file.path, originalName);
         
+        // 使用 WeakMap 保存元素与文件路径和原始名称的关系
+        this.fileDisplayCache.saveElementData(titleEl, file.path, originalName);
+        
         // 处理文件名获取显示名称
         const processResult = this.processFile(file);
         if (processResult.success && processResult.displayName) {
@@ -196,6 +199,14 @@ export class FileDisplayService {
     
     // 恢复单个元素的显示名称
     private restoreDisplayName(titleEl: HTMLElement): void {
+        // 首先尝试从 WeakMap 中获取信息
+        const elementData = this.fileDisplayCache.getElementData(titleEl);
+        if (elementData) {
+            titleEl.textContent = elementData.originalName;
+            return;
+        }
+        
+        // 如果 WeakMap 中没有，回退到使用 path 属性查找
         const filePath = titleEl.getAttribute('data-path');
         if (filePath) {
             const originalName = this.fileDisplayCache.getOriginalName(filePath);
@@ -232,6 +243,9 @@ export class FileDisplayService {
 
         if (clearCache) {
             this.fileDisplayCache.clearAll();
+        } else {
+            // 如果不是完全清除缓存，至少清理过期的缓存
+            this.fileDisplayCache.clearExpired();
         }
 
         // 获取所有可见文件
@@ -278,10 +292,20 @@ export class FileDisplayService {
             const items = Array.from(explorer.view.containerEl.querySelectorAll('.nav-file-title'));
             
             items.forEach(item => {
-                const path = item.getAttribute('data-path');
-                if (path && originalNames.has(path)) {
-                    const titleEl = item.querySelector('.nav-file-title-content');
-                    if (titleEl) {
+                const titleEl = item.querySelector('.nav-file-title-content');
+                if (titleEl) {
+                    // 首先尝试使用 WeakMap 恢复
+                    const elementData = this.fileDisplayCache.getElementData(titleEl as HTMLElement);
+                    if (elementData) {
+                        titleEl.textContent = elementData.originalName;
+                        titleEl.removeClass('filename-display-error');
+                        titleEl.removeAttribute('aria-label');
+                        return;
+                    }
+                    
+                    // 如果 WeakMap 中没有，回退到使用 path 属性
+                    const path = item.getAttribute('data-path');
+                    if (path && originalNames.has(path)) {
                         const originalName = originalNames.get(path);
                         titleEl.textContent = originalName || '';
                         titleEl.removeClass('filename-display-error');
@@ -296,5 +320,10 @@ export class FileDisplayService {
     public resetObservers(): void {
         this.fileExplorerObserver.stopObserving();
         this.fileExplorerObserver.setupObservers();
+    }
+    
+    // 获取缓存实例
+    public getCache(): FileDisplayCache {
+        return this.fileDisplayCache;
     }
 } 

@@ -32,6 +32,12 @@ export default class FilenameDisplayPlugin extends Plugin {
     onunload() {
         // 恢复所有显示名称并清理资源
         this.fileDisplayService.restoreAllDisplayNames();
+        
+        // 获取缓存实例并停止定期清理
+        const cache = this.fileDisplayService.getCache();
+        if (cache) {
+            cache.stopPeriodicCleanup();
+        }
     }
 
     async loadSettings() {
