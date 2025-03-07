@@ -4,6 +4,7 @@ export interface FilenameDisplaySettings {
     pattern: string;
     useYamlTitleWhenAvailable: boolean;
     preferFrontmatterTitle: boolean;
+    enabledFolders: string[];
 }
 
 export interface IFilenameDisplayPlugin extends Plugin {

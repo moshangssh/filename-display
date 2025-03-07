@@ -1,4 +1,4 @@
-import { Notice, TFile, TAbstractFile, Vault, MarkdownView } from 'obsidian';
+import { Notice, TFile, TAbstractFile, Vault, MarkdownView, normalizePath } from 'obsidian';
 import type { FilenameDisplaySettings, IFilenameDisplayPlugin, FileDisplayResult } from '../types';
 
 export class FileDisplayService {
@@ -167,8 +167,36 @@ export class FileDisplayService {
         }
     }
 
-    // 新增：处理指定文件并缓存结果
+    // 新增：检查文件是否在指定的生效目录中
+    private isFileInEnabledFolder(file: TFile): boolean {
+        // 如果没有指定生效目录，则对所有文件生效
+        if (!this.plugin.settings.enabledFolders || this.plugin.settings.enabledFolders.length === 0) {
+            return true;
+        }
+        
+        // 获取文件的规范化路径
+        const filePath = normalizePath(file.path);
+        
+        // 检查文件是否在任一指定的生效目录中
+        return this.plugin.settings.enabledFolders.some(folder => {
+            const normalizedFolder = normalizePath(folder);
+            // 检查文件路径是否以文件夹路径开头，或者文件夹路径是否为空（表示根目录）
+            return normalizedFolder === '' || filePath === normalizedFolder || 
+                   filePath.startsWith(normalizedFolder + '/');
+        });
+    }
+
+    // 修改processFile方法，添加目录检查
     private processFile(file: TFile): FileDisplayResult {
+        // 检查文件是否在指定的生效目录中
+        if (!this.isFileInEnabledFolder(file)) {
+            // 如果不在生效目录中，返回原始文件名
+            return { 
+                success: true, 
+                displayName: file.basename 
+            };
+        }
+        
         // 如果缓存中有此文件的处理结果，直接返回
         if (this.fileDisplayCache.has(file.path)) {
             return { 
@@ -302,10 +330,20 @@ export class FileDisplayService {
         });
     }
 
-    // 新增：更新单个文件元素的显示
+    // 修改：更新单个文件元素的显示
     private updateFileElement(titleEl: HTMLElement, file: TFile): void {
+        // 保存原始显示名称，用于插件卸载时恢复
         if (!this.originalDisplayNames.has(file.path)) {
             this.originalDisplayNames.set(file.path, titleEl.textContent || '');
+        }
+        
+        // 检查文件是否在指定的生效目录中
+        if (!this.isFileInEnabledFolder(file)) {
+            // 如果不在生效目录中，使用原始文件名
+            titleEl.textContent = file.basename;
+            titleEl.removeClass('filename-display-error');
+            titleEl.removeAttribute('aria-label');
+            return;
         }
         
         // 使用缓存或处理文件
