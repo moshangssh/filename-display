@@ -102,9 +102,21 @@ export class FilenameParser {
         // 检查文件路径是否在指定目录中
         const filePath = file.path;
         return this.plugin.settings.enabledFolders.some(folder => {
+            // 空字符串应该匹配所有路径
+            if (folder.trim() === '') {
+                return true;
+            }
+            
             const normalizedFolder = normalizePath(folder);
-            return filePath === normalizedFolder || 
-                   filePath.startsWith(normalizedFolder + '/');
+            
+            // 检查文件是否就是该文件夹
+            if (filePath === normalizedFolder) {
+                return true;
+            }
+            
+            // 检查文件是否在该文件夹内（确保以路径分隔符结尾以避免前缀匹配错误）
+            // 例如："folder" 不应该匹配 "folder2/file.md"，但应该匹配 "folder/file.md"
+            return filePath.startsWith(normalizedFolder + '/');
         });
     }
 } 

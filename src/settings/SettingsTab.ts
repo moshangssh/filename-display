@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting, Plugin, normalizePath } from 'obsidian';
+import { App, PluginSettingTab, Setting, Plugin, normalizePath, Notice } from 'obsidian';
 import type { FilenameDisplaySettings } from '../types';
 
 interface IFilenameDisplayPlugin extends Plugin {
@@ -81,13 +81,36 @@ export class FilenameDisplaySettingTab extends PluginSettingTab {
                         }, (button) => {
                             button.addEventListener('click', async () => {
                                 const value = textComponent.getValue().trim();
+                                
+                                // 处理空值情况 - 空值表示对所有文件夹生效
+                                if (value === '' && !this.plugin.settings.enabledFolders.includes('')) {
+                                    // 清空之前所有的路径设置（因为空值覆盖所有）
+                                    this.plugin.settings.enabledFolders = [''];
+                                    new Notice('已设置为对所有文件夹生效');
+                                    await this.plugin.saveSettings();
+                                    this.plugin.updateAllFilesDisplay();
+                                    
+                                    // 重新渲染文件夹列表
+                                    this.renderFolderList(folderListContainer);
+                                    return;
+                                }
+                                
+                                // 处理常规路径
                                 if (value) {
                                     // 使用normalizePath处理路径
                                     const normalizedPath = normalizePath(value);
                                     
                                     // 检查路径是否已存在
                                     if (!this.plugin.settings.enabledFolders.includes(normalizedPath)) {
+                                        // 如果有空字符串（全局生效），则先移除它
+                                        const emptyIndex = this.plugin.settings.enabledFolders.indexOf('');
+                                        if (emptyIndex !== -1) {
+                                            this.plugin.settings.enabledFolders.splice(emptyIndex, 1);
+                                        }
+                                        
+                                        // 添加新路径
                                         this.plugin.settings.enabledFolders.push(normalizedPath);
+                                        new Notice(`已添加生效目录：${normalizedPath}`);
                                         await this.plugin.saveSettings();
                                         this.plugin.updateAllFilesDisplay();
                                         
@@ -96,6 +119,8 @@ export class FilenameDisplaySettingTab extends PluginSettingTab {
                                         
                                         // 重新渲染文件夹列表
                                         this.renderFolderList(folderListContainer);
+                                    } else {
+                                        new Notice(`目录已存在：${normalizedPath}`);
                                     }
                                 }
                             });
@@ -116,6 +141,15 @@ export class FilenameDisplaySettingTab extends PluginSettingTab {
             return;
         }
         
+        // 检查是否有空字符串表示全局生效
+        if (this.plugin.settings.enabledFolders.includes('')) {
+            containerEl.createEl('div', {
+                text: '当前设置为对所有文件夹生效。',
+                attr: { style: 'margin: 10px 0; font-weight: bold; color: var(--text-accent);' }
+            });
+            return;
+        }
+        
         const listEl = containerEl.createEl('ul', {
             attr: { style: 'list-style-type: none; padding: 0;' }
         });
@@ -126,7 +160,7 @@ export class FilenameDisplaySettingTab extends PluginSettingTab {
             });
             
             listItem.createEl('span', {
-                text: folder,
+                text: folder || '所有文件夹',
                 attr: { style: 'flex-grow: 1;' }
             });
             
@@ -140,6 +174,7 @@ export class FilenameDisplaySettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                     this.plugin.updateAllFilesDisplay();
                     this.renderFolderList(containerEl);
+                    new Notice(`已删除目录：${folder || '所有文件夹'}`);
                 });
             });
         });

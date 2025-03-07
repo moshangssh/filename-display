@@ -161,19 +161,26 @@ export class FileDisplayService {
         }
     }
     
-    // 更新文件元素的显示
+    // 更新文件元素显示
     private updateFileElement(titleEl: HTMLElement, file: TFile): void {
-        // 保存原始名称用于以后恢复
-        this.fileDisplayCache.saveOriginalName(file.path, titleEl.textContent || file.basename);
+        if (!this.filenameParser.isFileInEnabledFolder(file)) {
+            // 如果文件不在启用的文件夹中，恢复为原始名称
+            this.restoreDisplayName(titleEl);
+            return;
+        }
+
+        // 获取原始显示名称并存储
+        const originalName = titleEl.textContent || file.basename;
+        this.fileDisplayCache.saveOriginalName(file.path, originalName);
         
-        const result = this.processFile(file);
-        
-        if (result.success && result.displayName) {
-            titleEl.textContent = result.displayName;
+        // 处理文件名获取显示名称
+        const processResult = this.processFile(file);
+        if (processResult.success && processResult.displayName) {
+            titleEl.textContent = processResult.displayName;
             titleEl.removeClass('filename-display-error');
             
             // 如果显示名称与实际文件名不同，设置工具提示
-            if (result.displayName !== file.basename) {
+            if (processResult.displayName !== file.basename) {
                 titleEl.setAttribute('aria-label', file.basename);
             } else {
                 titleEl.removeAttribute('aria-label');
@@ -181,8 +188,19 @@ export class FileDisplayService {
         } else {
             // 如果处理出错，显示错误样式
             titleEl.addClass('filename-display-error');
-            if (result.error) {
-                titleEl.setAttribute('aria-label', result.error);
+            if (processResult.error) {
+                titleEl.setAttribute('aria-label', processResult.error);
+            }
+        }
+    }
+    
+    // 恢复单个元素的显示名称
+    private restoreDisplayName(titleEl: HTMLElement): void {
+        const filePath = titleEl.getAttribute('data-path');
+        if (filePath) {
+            const originalName = this.fileDisplayCache.getOriginalName(filePath);
+            if (originalName) {
+                titleEl.textContent = originalName;
             }
         }
     }
@@ -216,9 +234,14 @@ export class FileDisplayService {
             this.fileDisplayCache.clearAll();
         }
 
-        // 使用工作区API获取所有可见文件
+        // 获取所有可见文件
         const files = this.getVisibleFiles();
-        this.batchProcessor.addToProcessQueue(files);
+        
+        // 筛选出在启用目录中的文件
+        const enabledFiles = files.filter(file => this.filenameParser.isFileInEnabledFolder(file));
+        
+        // 只处理在启用目录中的文件
+        this.batchProcessor.addToProcessQueue(enabledFiles);
     }
     
     // 获取可见文件
