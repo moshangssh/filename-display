@@ -2,7 +2,7 @@ import { App, Editor, MarkdownView, Notice, Plugin, TFile } from 'obsidian';
 import { FilenameDisplaySettings } from './types';
 import { DEFAULT_SETTINGS } from './constants';
 import { FilenameDisplaySettingTab } from './settings/SettingsTab';
-import { FileDisplayService } from './services/FileDisplayService';
+import { FileDisplayService } from './services';
 
 export default class FilenameDisplayPlugin extends Plugin {
     settings: FilenameDisplaySettings;
@@ -10,28 +10,11 @@ export default class FilenameDisplayPlugin extends Plugin {
 
     async onload() {
         await this.loadSettings();
+        // 创建文件显示服务
         this.fileDisplayService = new FileDisplayService(this);
 
         // 添加设置标签页
         this.addSettingTab(new FilenameDisplaySettingTab(this.app, this));
-
-        // 监听文件创建事件
-        this.registerEvent(
-            this.app.vault.on('create', (file) => {
-                if (file instanceof TFile) {
-                    this.fileDisplayService.updateFileExplorerDisplay(file);
-                }
-            })
-        );
-
-        // 监听文件重命名事件
-        this.registerEvent(
-            this.app.vault.on('rename', (file) => {
-                if (file instanceof TFile) {
-                    this.fileDisplayService.updateFileExplorerDisplay(file);
-                }
-            })
-        );
 
         // 监听布局变更事件
         this.registerEvent(
