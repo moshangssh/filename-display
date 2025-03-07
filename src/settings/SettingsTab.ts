@@ -32,5 +32,27 @@ export class FilenameDisplaySettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                     this.plugin.updateAllFilesDisplay();
                 }));
+        
+        new Setting(containerEl)
+            .setName('使用YAML前置元数据标题')
+            .setDesc('当文件包含YAML前置元数据标题时，使用该标题代替文件名')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.useYamlTitleWhenAvailable)
+                .onChange(async (value) => {
+                    this.plugin.settings.useYamlTitleWhenAvailable = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.updateAllFilesDisplay();
+                }));
+        
+        new Setting(containerEl)
+            .setName('优先使用元数据标题')
+            .setDesc('当同时存在元数据标题和文件名匹配时，优先使用元数据标题')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.preferFrontmatterTitle)
+                .onChange(async (value) => {
+                    this.plugin.settings.preferFrontmatterTitle = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.updateAllFilesDisplay();
+                }));
     }
 } 
