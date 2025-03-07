@@ -15,8 +15,9 @@ export interface IFilenameDisplayPlugin extends Plugin {
 
 export interface FileDisplayResult {
     success: boolean;
+    displayName: string;
     error?: string;
-    displayName?: string;
+    fromCache?: boolean;
 }
 
 export interface FileCacheWithFrontmatter {

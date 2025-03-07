@@ -24,7 +24,7 @@ export class FilenameParser {
                 metadata?.frontmatter && 
                 'title' in metadata.frontmatter) {
                 
-                baseText = String(metadata.frontmatter.title);
+                baseText = String(metadata.frontmatter.title).trim();
                 fromFrontmatter = true;
                 
                 // 如果配置为优先使用元数据标题，直接返回
@@ -40,6 +40,7 @@ export class FilenameParser {
                 
                 // 如果正则提取成功，使用提取结果
                 if (regexResult.success && regexResult.displayName) {
+                    // 缓存提取结果
                     return regexResult;
                 }
             }
@@ -52,7 +53,8 @@ export class FilenameParser {
             // 最后的后备选项：使用原始文件名
             return { 
                 success: true, 
-                displayName: file.basename 
+                displayName: file.basename,
+                fromCache: true
             };
         } catch (e) {
             const error = e instanceof Error ? e.message : String(e);

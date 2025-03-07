@@ -36,6 +36,7 @@ export class FileDisplayService {
         this.plugin.app.workspace.onLayoutReady(() => {
             this.fileExplorerObserver.setupObservers();
             this.setupVaultEventListeners();
+            this.setupMetadataEventListeners();
             this.updateAllFilesDisplay();
         });
     }
@@ -86,25 +87,44 @@ export class FileDisplayService {
         );
     }
     
+    // 设置元数据事件监听器
+    private setupMetadataEventListeners(): void {
+        // 监听元数据缓存变更
+        this.plugin.registerEvent(
+            this.plugin.app.metadataCache.on('changed', (file) => {
+                if (file instanceof TFile) {
+                    // 检查是否需要更新显示
+                    const metadata = this.plugin.app.metadataCache.getFileCache(file);
+                    if (metadata?.frontmatter && 'title' in metadata.frontmatter) {
+                        this.updateFileExplorerDisplay(file);
+                    }
+                }
+            })
+        );
+    }
+    
     // 处理文件以获取显示名称
     private processFile(file: TFile): FileDisplayResult {
-        // 检查文件是否在指定的生效目录中
+        // 检查文件是否在启用的文件夹中
         if (!this.filenameParser.isFileInEnabledFolder(file)) {
-            // 如果不在生效目录中，返回原始文件名
-            return { 
-                success: true, 
-                displayName: file.basename 
+            return {
+                success: false,
+                error: '文件不在启用的文件夹中',
+                displayName: file.basename
             };
         }
-        
-        // 如果缓存中有此文件的处理结果，直接返回
+
+        // 检查缓存
         if (this.fileDisplayCache.hasDisplayName(file.path)) {
-            return { 
-                success: true, 
-                displayName: this.fileDisplayCache.getDisplayName(file.path) 
-            };
+            const cachedName = this.fileDisplayCache.getDisplayName(file.path);
+            if (cachedName) {
+                return {
+                    success: true,
+                    displayName: cachedName
+                };
+            }
         }
-        
+
         // 使用metadataCache获取文件元数据，处理文件名
         const result = this.filenameParser.getDisplayNameFromMetadata(file);
         if (result.success && result.displayName) {
