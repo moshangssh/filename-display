@@ -19,11 +19,13 @@ export class FilenameParser {
             let baseText = file.basename;
             let fromFrontmatter = false;
             
-            // 如果启用了YAML前置元数据标题功能，并且文件有元数据标题
-            if (this.plugin.settings.useYamlTitleWhenAvailable && 
+            // 检查是否有前置元数据标题
+            const hasFrontmatterTitle = this.plugin.settings.useYamlTitleWhenAvailable && 
                 metadata?.frontmatter && 
-                'title' in metadata.frontmatter) {
+                'title' in metadata.frontmatter;
                 
+            // 处理前置元数据标题
+            if (hasFrontmatterTitle && metadata?.frontmatter) {
                 baseText = String(metadata.frontmatter.title).trim();
                 fromFrontmatter = true;
                 
@@ -33,29 +35,21 @@ export class FilenameParser {
                 }
             }
             
-            // 如果未从前置元数据获取标题，或者配置为不优先使用元数据标题
-            if (!fromFrontmatter || !this.plugin.settings.preferFrontmatterTitle) {
-                // 应用正则提取文件名
+            // 尝试使用正则表达式提取文件名（如果不优先使用前置元数据标题或没有前置元数据标题）
+            if (!this.plugin.settings.preferFrontmatterTitle || !fromFrontmatter) {
                 const regexResult = this.extractDisplayName(file.basename);
-                
-                // 如果正则提取成功，使用提取结果
                 if (regexResult.success && regexResult.displayName) {
-                    // 缓存提取结果
                     return regexResult;
                 }
             }
             
-            // 如果上述都没有匹配到，但有从前置元数据获取的标题，使用该标题
+            // 如果上述都未提取成功，但有前置元数据标题，则使用它
             if (fromFrontmatter) {
                 return { success: true, displayName: baseText };
             }
             
-            // 最后的后备选项：使用原始文件名
-            return { 
-                success: true, 
-                displayName: file.basename,
-                fromCache: true
-            };
+            // 最后，返回使用文件名作为显示名
+            return { success: false, displayName: file.basename, error: '未能从文件名中提取显示名' };
         } catch (e) {
             const error = e instanceof Error ? e.message : String(e);
             return { 

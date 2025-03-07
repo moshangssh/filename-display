@@ -38,25 +38,39 @@ export class FileDisplayCache {
     
     // 限制缓存大小
     private enforceCacheSizeLimit(): void {
-        // 如果缓存超过限制，移除最旧的条目
-        if (this.fileDisplayCache.size > this.MAX_CACHE_SIZE) {
-            const entriesToRemove = this.fileDisplayCache.size - this.MAX_CACHE_SIZE;
-            const entries = Array.from(this.fileDisplayCache.entries())
-                .sort((a, b) => a[1].timestamp - b[1].timestamp); // 按时间戳排序
-            
-            for (let i = 0; i < entriesToRemove; i++) {
-                const [path] = entries[i];
-                this.deletePath(path);
-            }
-        }
+        // 限制fileDisplayCache大小，按时间戳排序
+        this.limitMapCache(
+            this.fileDisplayCache,
+            this.MAX_CACHE_SIZE,
+            (entries) => entries.sort((a, b) => a[1].timestamp - b[1].timestamp),
+            (path) => this.deletePath(path)
+        );
         
-        // 同样限制 originalDisplayNames 的大小
+        // 限制originalDisplayNames大小
         if (this.originalDisplayNames.size > this.MAX_CACHE_SIZE) {
             const entriesToRemove = this.originalDisplayNames.size - this.MAX_CACHE_SIZE;
             const entries = Array.from(this.originalDisplayNames.keys());
             
             for (let i = 0; i < entriesToRemove; i++) {
                 this.originalDisplayNames.delete(entries[i]);
+            }
+        }
+    }
+    
+    // 通用方法：限制Map缓存大小
+    private limitMapCache<T, V>(
+        cache: Map<T, V>, 
+        maxSize: number,
+        sortFn: (entries: [T, V][]) => [T, V][],
+        deleteFn: (key: T) => void
+    ): void {
+        if (cache.size > maxSize) {
+            const entriesToRemove = cache.size - maxSize;
+            const entries = sortFn(Array.from(cache.entries()));
+            
+            for (let i = 0; i < entriesToRemove; i++) {
+                const key = entries[i][0];
+                deleteFn(key);
             }
         }
     }

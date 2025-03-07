@@ -241,21 +241,21 @@ export class FileDisplayService {
         const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
         if (fileExplorers.length === 0) return;
 
+        // 根据参数决定是清除所有缓存还是只清除过期缓存
         if (clearCache) {
             this.fileDisplayCache.clearAll();
         } else {
-            // 如果不是完全清除缓存，至少清理过期的缓存
             this.fileDisplayCache.clearExpired();
         }
 
-        // 获取所有可见文件
-        const files = this.getVisibleFiles();
+        // 获取所有可见的、在启用目录中的文件
+        const files = this.getVisibleFiles()
+            .filter(file => this.filenameParser.isFileInEnabledFolder(file));
         
-        // 筛选出在启用目录中的文件
-        const enabledFiles = files.filter(file => this.filenameParser.isFileInEnabledFolder(file));
-        
-        // 只处理在启用目录中的文件
-        this.batchProcessor.addToProcessQueue(enabledFiles);
+        // 批量处理文件
+        if (files.length > 0) {
+            this.batchProcessor.addToProcessQueue(files);
+        }
     }
     
     // 获取可见文件
