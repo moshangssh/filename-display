@@ -62,15 +62,62 @@ export class FilenameParser {
 
     // 使用正则表达式提取文件名
     public extractDisplayName(filename: string): FileDisplayResult {
+        if (!filename || typeof filename !== 'string') {
+            return { 
+                success: false, 
+                error: `无效的文件名: ${filename}`,
+                displayName: String(filename || '') 
+            };
+        }
+
         try {
-            const regex = new RegExp(this.plugin.settings.pattern);
+            // 验证正则表达式的有效性
+            let regex: RegExp;
+            try {
+                regex = new RegExp(this.plugin.settings.pattern);
+            } catch (regexError) {
+                const error = regexError instanceof Error ? regexError.message : String(regexError);
+                return { 
+                    success: false, 
+                    error: `正则表达式无效: ${error}`,
+                    displayName: filename 
+                };
+            }
+
+            // 执行正则匹配
             const match = filename.match(regex);
-            if (match && match[1]) {
+            if (!match) {
+                return { 
+                    success: false, 
+                    error: `没有匹配的内容: ${regex.toString()}`,
+                    displayName: filename 
+                };
+            }
+
+            // 优先使用捕获组
+            if (match[1]) {
+                if (match[1].trim().length === 0) {
+                    return { 
+                        success: false, 
+                        error: '匹配结果为空字符串',
+                        displayName: filename 
+                    };
+                }
                 return { success: true, displayName: match[1] };
             }
-            if (match && match[0]) {
+            
+            // 回退到完整匹配
+            if (match[0]) {
+                if (match[0].trim().length === 0) {
+                    return { 
+                        success: false, 
+                        error: '匹配结果为空字符串',
+                        displayName: filename 
+                    };
+                }
                 return { success: true, displayName: match[0] };
             }
+            
             return { 
                 success: false, 
                 error: '无匹配结果',
@@ -78,6 +125,7 @@ export class FilenameParser {
             };
         } catch (e) {
             const error = e instanceof Error ? e.message : String(e);
+            console.error('文件名解析错误:', error);
             return { 
                 success: false, 
                 error: `正则处理错误: ${error}`,

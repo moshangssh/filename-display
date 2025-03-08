@@ -17,16 +17,17 @@ export class FileDisplayCache {
     private readonly CLEANUP_INTERVAL = 10 * 60 * 1000; // 10分钟执行一次清理
     private readonly MAX_CACHE_SIZE = 1000; // 最大缓存条目数
     
-    constructor() {
+    constructor(registerTimerCallback?: (timer: NodeJS.Timeout) => void) {
         // 初始化缓存并设置定期清理
-        this.startPeriodicCleanup();
+        this.startPeriodicCleanup(registerTimerCallback);
     }
     
     // 开始定期清理计时器
-    private startPeriodicCleanup(): void {
+    private startPeriodicCleanup(registerTimerCallback?: (timer: NodeJS.Timeout) => void): void {
         // 如果已有计时器，先清除
         if (this.cleanupTimer) {
             clearInterval(this.cleanupTimer);
+            this.cleanupTimer = null;
         }
         
         // 设置定期清理
@@ -34,6 +35,11 @@ export class FileDisplayCache {
             this.clearExpired();
             this.enforceCacheSizeLimit();
         }, this.CLEANUP_INTERVAL);
+        
+        // 如果提供了回调函数，注册定时器以便跟踪
+        if (registerTimerCallback && this.cleanupTimer) {
+            registerTimerCallback(this.cleanupTimer);
+        }
     }
     
     // 限制缓存大小

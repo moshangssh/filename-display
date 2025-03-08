@@ -31,12 +31,26 @@ export default class FilenameDisplayPlugin extends Plugin {
 
     onunload() {
         // 恢复所有显示名称并清理资源
-        this.fileDisplayService.restoreAllDisplayNames();
+        console.log('卸载Filename Display插件...');
         
-        // 获取缓存实例并停止定期清理
-        const cache = this.fileDisplayService.getCache();
-        if (cache) {
-            cache.stopPeriodicCleanup();
+        try {
+            // 恢复所有原始显示名称
+            this.fileDisplayService.restoreAllDisplayNames();
+            
+            // 获取缓存实例并停止定期清理
+            const cache = this.fileDisplayService.getCache();
+            if (cache) {
+                cache.stopPeriodicCleanup();
+            }
+            
+            // 清理所有事件监听器和观察器
+            if (this.fileDisplayService) {
+                this.fileDisplayService.dispose();
+            }
+            
+            console.log('Filename Display插件已成功卸载并清理所有资源');
+        } catch (error) {
+            console.error('卸载Filename Display插件时出错:', error);
         }
     }
 

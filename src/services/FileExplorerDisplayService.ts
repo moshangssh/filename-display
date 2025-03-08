@@ -78,7 +78,7 @@ export class FileExplorerDisplayService {
         const processResult = this.processFile(file);
         if (processResult.success && processResult.displayName) {
             titleEl.textContent = processResult.displayName;
-            titleEl.removeClass('filename-display-error');
+            titleEl.classList.remove('filename-display-error');
             
             // 如果显示名称与实际文件名不同，设置工具提示
             if (processResult.displayName !== file.basename) {
@@ -88,7 +88,7 @@ export class FileExplorerDisplayService {
             }
         } else {
             // 如果处理出错，显示错误样式
-            titleEl.addClass('filename-display-error');
+            titleEl.classList.add('filename-display-error');
             if (processResult.error) {
                 titleEl.setAttribute('aria-label', processResult.error);
             }
@@ -116,43 +116,54 @@ export class FileExplorerDisplayService {
     
     // 更新文件资源管理器中的文件显示
     public async updateFileExplorerDisplay(file: TFile): Promise<void> {
-        // 使用工作区API获取文件资源管理器
-        const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
-        if (fileExplorers.length === 0) return;
-        
-        // 遍历所有文件资源管理器
-        fileExplorers.forEach((explorer) => {
-            // 查找与文件路径匹配的元素
-            const fileItem = explorer.view.containerEl.querySelector(`.nav-file-title[data-path="${file.path}"]`);
-            if (fileItem) {
-                const titleEl = fileItem.querySelector('.nav-file-title-content');
-                if (titleEl) {
-                    this.updateFileElement(titleEl as HTMLElement, file);
+        try {
+            // 使用工作区API获取文件资源管理器
+            const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
+            if (fileExplorers.length === 0) return;
+            
+            // 利用Obsidian的fileManager来获取文件实例
+            const fileManager = this.plugin.app.fileManager;
+            
+            // 遍历所有文件资源管理器
+            for (const explorer of fileExplorers) {
+                const fileItemSelector = `.nav-file-title[data-path="${CSS.escape(file.path)}"]`;
+                const fileItem = explorer.view.containerEl.querySelector(fileItemSelector);
+                
+                if (fileItem) {
+                    const titleEl = fileItem.querySelector('.nav-file-title-content');
+                    if (titleEl) {
+                        this.updateFileElement(titleEl as HTMLElement, file);
+                    }
                 }
             }
-        });
+        } catch (error) {
+            console.error('更新文件显示时出错:', error);
+        }
     }
     
     // 恢复所有原始显示名称
     public restoreAllDisplayNames(): void {
-        this.fileExplorerObserver.stopObserving();
-        
-        const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
-        const originalNames = this.fileDisplayCache.getAllOriginalNames();
-        
-        fileExplorers.forEach((explorer) => {
-            const items = Array.from(explorer.view.containerEl.querySelectorAll('.nav-file-title'));
+        try {
+            this.fileExplorerObserver.stopObserving();
             
-            items.forEach(item => {
-                const titleEl = item.querySelector('.nav-file-title-content');
-                if (titleEl) {
+            const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
+            const originalNames = this.fileDisplayCache.getAllOriginalNames();
+            
+            for (const explorer of fileExplorers) {
+                // 使用CSS安全查询
+                const items = Array.from(explorer.view.containerEl.querySelectorAll('.nav-file-title'));
+                
+                for (const item of items) {
+                    const titleEl = item.querySelector('.nav-file-title-content');
+                    if (!titleEl) continue;
+                    
                     // 首先尝试使用 WeakMap 恢复
                     const elementData = this.fileDisplayCache.getElementData(titleEl as HTMLElement);
                     if (elementData) {
                         titleEl.textContent = elementData.originalName;
-                        titleEl.removeClass('filename-display-error');
+                        titleEl.classList.remove('filename-display-error');
                         titleEl.removeAttribute('aria-label');
-                        return;
+                        continue;
                     }
                     
                     // 如果 WeakMap 中没有，回退到使用 path 属性
@@ -160,12 +171,14 @@ export class FileExplorerDisplayService {
                     if (path && originalNames.has(path)) {
                         const originalName = originalNames.get(path);
                         titleEl.textContent = originalName || '';
-                        titleEl.removeClass('filename-display-error');
+                        titleEl.classList.remove('filename-display-error');
                         titleEl.removeAttribute('aria-label');
                     }
                 }
-            });
-        });
+            }
+        } catch (error) {
+            console.error('恢复显示名称时出错:', error);
+        }
     }
     
     // 重置观察器

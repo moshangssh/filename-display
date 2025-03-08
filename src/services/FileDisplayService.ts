@@ -23,13 +23,15 @@ export class FileDisplayService {
     private editorLinkDecorator: EditorLinkDecorator;
     
     private updateTimer: number | null = null;
+    // 存储所有使用的定时器
+    private timers: Set<number | NodeJS.Timeout> = new Set();
 
     constructor(plugin: IFilenameDisplayPlugin) {
         this.plugin = plugin;
         
         // 初始化基础组件
         this.filenameParser = new FilenameParser(plugin);
-        this.fileDisplayCache = new FileDisplayCache();
+        this.fileDisplayCache = new FileDisplayCache((timer) => this.addTimer(timer));
         
         // 初始化处理器服务
         this.fileProcessorService = new FileProcessorService(
@@ -161,6 +163,36 @@ export class FileDisplayService {
         }
     }
     
+    // 添加一个定时器并将其存储到集合中以便清理
+    private addTimer(timer: number | NodeJS.Timeout): void {
+        this.timers.add(timer);
+    }
+
+    // 清理单个定时器
+    private clearTimer(timer: number | NodeJS.Timeout): void {
+        if (typeof timer === 'number') {
+            window.clearTimeout(timer);
+            window.clearInterval(timer);
+        } else {
+            clearTimeout(timer);
+            clearInterval(timer);
+        }
+        this.timers.delete(timer);
+    }
+
+    // 清理所有定时器
+    private clearAllTimers(): void {
+        this.timers.forEach(timer => {
+            this.clearTimer(timer);
+        });
+        this.timers.clear();
+        
+        if (this.updateTimer) {
+            window.clearInterval(this.updateTimer);
+            this.updateTimer = null;
+        }
+    }
+    
     // 恢复所有原始显示名称
     public restoreAllDisplayNames(): void {
         this.fileExplorerDisplayService.restoreAllDisplayNames();
@@ -170,10 +202,8 @@ export class FileDisplayService {
             this.editorLinkDecorator.dispose();
         }
         
-        if (this.updateTimer) {
-            window.clearInterval(this.updateTimer);
-            this.updateTimer = null;
-        }
+        // 清理所有定时器
+        this.clearAllTimers();
     }
     
     // 重置观察器
@@ -184,5 +214,29 @@ export class FileDisplayService {
     // 获取缓存实例
     public getCache(): FileDisplayCache {
         return this.fileDisplayCache;
+    }
+    
+    // 清理所有资源的方法
+    public dispose(): void {
+        // 清理所有定时器
+        this.clearAllTimers();
+        
+        // 停止缓存清理
+        if (this.fileDisplayCache) {
+            this.fileDisplayCache.stopPeriodicCleanup();
+        }
+        
+        // 清理文件资源管理器观察器
+        if (this.fileExplorerDisplayService) {
+            this.fileExplorerDisplayService.resetObservers();
+        }
+        
+        // 清理编辑器装饰器
+        if (this.editorLinkDecorator) {
+            this.editorLinkDecorator.dispose();
+        }
+        
+        // 恢复所有显示名称
+        this.restoreAllDisplayNames();
     }
 } 
