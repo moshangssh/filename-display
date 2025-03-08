@@ -147,8 +147,17 @@ export class FileDisplayService {
         
         // 更新当前编辑器中的链接装饰
         const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-        if (view && view.editor) {
-            this.editorLinkDecorator.updateEditorLinkDecorations(view.editor, view);
+        // 确保视图存在、是编辑模式、且有有效的编辑器
+        if (view && view.editor && 
+            // 确保视图不是预览模式
+            !(view as any).previewMode &&
+            // 确保设置中启用了装饰功能
+            this.plugin.settings.enableEditorLinkDecorations) {
+            try {
+                this.editorLinkDecorator.updateEditorLinkDecorations(view.editor, view);
+            } catch (error) {
+                console.debug("更新编辑器链接装饰时发生错误", error);
+            }
         }
     }
     
@@ -158,7 +167,7 @@ export class FileDisplayService {
         
         // 清理编辑器装饰
         if (this.editorLinkDecorator) {
-            this.editorLinkDecorator.clearDecorations();
+            this.editorLinkDecorator.dispose();
         }
         
         if (this.updateTimer) {

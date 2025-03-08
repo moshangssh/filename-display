@@ -8,6 +8,7 @@ import { FileDisplayCache } from './FileDisplayCache';
 // 创建链接文本替换小部件
 class LinkReplaceWidget extends WidgetType {
     private readonly plugin: IFilenameDisplayPlugin;
+    private clickListener: ((event: MouseEvent) => void) | null = null;
     
     constructor(private readonly displayName: string, private readonly originalPath: string, plugin: IFilenameDisplayPlugin) {
         super();
@@ -23,9 +24,10 @@ class LinkReplaceWidget extends WidgetType {
         span.dataset.originalPath = this.originalPath;
         span.style.cursor = 'pointer';
         
-        // 添加点击事件监听
-        span.addEventListener('click', (event) => {
+        // 创建点击事件监听器函数
+        this.clickListener = (event: MouseEvent) => {
             event.preventDefault();
+            event.stopPropagation(); // 阻止事件冒泡
             // 使用Obsidian API打开链接
             const workspace = this.plugin.app.workspace;
             const path = this.originalPath;
@@ -34,9 +36,20 @@ class LinkReplaceWidget extends WidgetType {
             if (file) {
                 workspace.openLinkText(this.originalPath, '', event.ctrlKey || event.metaKey);
             }
-        });
+        };
+        
+        // 添加点击事件监听
+        span.addEventListener('click', this.clickListener);
         
         return span;
+    }
+
+    destroy(dom: HTMLElement): void {
+        // 在小部件被销毁时清理事件监听器
+        if (this.clickListener && dom instanceof HTMLElement) {
+            dom.removeEventListener('click', this.clickListener);
+            this.clickListener = null;
+        }
     }
 
     ignoreEvent() {
@@ -160,15 +173,35 @@ export class EditorLinkDecorator {
             return;
         }
         
-        // 获取 CodeMirror 编辑器视图
-        // @ts-ignore - 访问私有 API
-        const editorView = view.editor.cm;
-        if (!editorView) return;
+        // 获取编辑器视图 - 使用更健壮的方法
+        try {
+            // 方法1: 尝试直接从编辑器获取
+            if ((editor as any).cm instanceof EditorView) {
+                this.activeEditorView = (editor as any).cm;
+            } 
+            // 方法2: 尝试从视图获取
+            else if ((view as any).editMode?.editor?.cm instanceof EditorView) {
+                this.activeEditorView = (view as any).editMode.editor.cm;
+            }
+            // 方法3: 尝试从内部状态获取 
+            else if ((view as any).editor?.cm instanceof EditorView) {
+                this.activeEditorView = (view as any).editor.cm;
+            }
+            // 如果以上方法都失败，记录此情况但不抛出错误
+            else {
+                console.debug("无法获取 EditorView：当前视图或编辑器的结构与预期不符");
+                return;
+            }
+        } catch (e) {
+            console.debug("获取 EditorView 时出现错误，可能当前不是编辑模式：", e);
+            return;
+        }
         
-        this.activeEditorView = editorView;
+        // 没有找到 EditorView，无法继续
+        if (!this.activeEditorView) return;
         
         // 先清除所有现有的装饰
-        editorView.dispatch({
+        this.activeEditorView.dispatch({
             effects: removeLinkDecoration.of(null)
         });
         
@@ -208,7 +241,7 @@ export class EditorLinkDecorator {
 
         // 应用所有装饰效果
         if (effects.length > 0) {
-            editorView.dispatch({ effects });
+            this.activeEditorView.dispatch({ effects });
         }
     }
 
@@ -258,5 +291,22 @@ export class EditorLinkDecorator {
             success: false,
             displayName: basename
         };
+    }
+
+    // 处置资源，清理所有装饰和引用
+    public dispose(): void {
+        try {
+            // 清除装饰
+            this.clearDecorations();
+            
+            // 清除编辑器视图引用
+            this.activeEditorView = null;
+            
+            // 释放其他资源引用
+            // 注意：不要清除 plugin、filenameParser 和 fileDisplayCache 引用
+            // 因为它们是由外部管理的，我们不负责它们的生命周期
+        } catch (e) {
+            console.debug("清理装饰器资源时出现错误", e);
+        }
     }
 } 
