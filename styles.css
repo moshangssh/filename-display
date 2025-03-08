@@ -12,3 +12,8 @@ If your plugin does not need CSS, delete this file.
     text-decoration: underline wavy var(--text-error);
     cursor: help;
 }
+
+/* 移除编辑视图中双链链接的下划线，保持和阅读视图的一致性 */
+.cm-underline.cm-hmd-internal-link {
+    text-decoration: none !important;
+}

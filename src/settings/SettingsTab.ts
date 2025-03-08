@@ -54,6 +54,17 @@ export class FilenameDisplaySettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                     this.plugin.updateAllFilesDisplay();
                 }));
+        
+        new Setting(containerEl)
+            .setName('启用编辑器链接装饰')
+            .setDesc('在编辑器中显示文档链接的处理后名称（而不是文件名）')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.enableEditorLinkDecorations)
+                .onChange(async (value) => {
+                    this.plugin.settings.enableEditorLinkDecorations = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.updateAllFilesDisplay();
+                }));
                 
         // 新增：指定生效目录设置
         containerEl.createEl('h3', {text: '生效范围设置'});
