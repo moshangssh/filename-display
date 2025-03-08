@@ -7,8 +7,11 @@ import { FileDisplayCache } from './FileDisplayCache';
 
 // 创建链接文本替换小部件
 class LinkReplaceWidget extends WidgetType {
-    constructor(private readonly displayName: string, private readonly originalPath: string) {
+    private readonly plugin: IFilenameDisplayPlugin;
+    
+    constructor(private readonly displayName: string, private readonly originalPath: string, plugin: IFilenameDisplayPlugin) {
         super();
+        this.plugin = plugin;
     }
 
     toDOM() {
@@ -24,10 +27,10 @@ class LinkReplaceWidget extends WidgetType {
         span.addEventListener('click', (event) => {
             event.preventDefault();
             // 使用Obsidian API打开链接
-            const workspace = (window as any).app.workspace;
+            const workspace = this.plugin.app.workspace;
             const path = this.originalPath;
-            const file = (window as any).app.vault.getAbstractFileByPath(path) || 
-                        (window as any).app.metadataCache.getFirstLinkpathDest(path, '');
+            const file = this.plugin.app.vault.getAbstractFileByPath(path) || 
+                        this.plugin.app.metadataCache.getFirstLinkpathDest(path, '');
             if (file) {
                 workspace.openLinkText(this.originalPath, '', event.ctrlKey || event.metaKey);
             }
@@ -42,13 +45,13 @@ class LinkReplaceWidget extends WidgetType {
 }
 
 // 定义状态效果，用于添加和清理装饰效果
-const addLinkDecoration = StateEffect.define<{ from: number; to: number; displayName: string; originalPath: string }>();
-const clearDecorations = StateEffect.define<null>();
+const addLinkDecoration = StateEffect.define<{ from: number; to: number; widget: LinkReplaceWidget }>();
+const removeLinkDecoration = StateEffect.define<null>();
 
 // 状态字段，用于管理所有链接装饰
 const linkDecorationField = StateField.define<DecorationSet>({
     create() {
-        return RangeSet.empty;
+        return Decoration.none;
     },
     update(decorations, tr) {
         // 处理文档变更
@@ -57,14 +60,14 @@ const linkDecorationField = StateField.define<DecorationSet>({
         // 处理装饰效果
         for (const effect of tr.effects) {
             // 清除所有装饰
-            if (effect.is(clearDecorations)) {
-                decorations = RangeSet.empty;
+            if (effect.is(removeLinkDecoration)) {
+                decorations = Decoration.none;
             }
             // 添加新装饰
             else if (effect.is(addLinkDecoration)) {
-                const { from, to, displayName, originalPath } = effect.value;
+                const { from, to, widget } = effect.value;
                 const decoration = Decoration.replace({
-                    widget: new LinkReplaceWidget(displayName, originalPath),
+                    widget: widget,
                     inclusive: false
                 }).range(from, to);
                 decorations = decorations.update({ add: [decoration], sort: true });
@@ -166,7 +169,7 @@ export class EditorLinkDecorator {
         
         // 先清除所有现有的装饰
         editorView.dispatch({
-            effects: clearDecorations.of(null)
+            effects: removeLinkDecoration.of(null)
         });
         
         // 获取编辑器中的内部链接
@@ -199,8 +202,7 @@ export class EditorLinkDecorator {
             effects.push(addLinkDecoration.of({ 
                 from, 
                 to, 
-                displayName: processResult.displayName,
-                originalPath: linkPath
+                widget: new LinkReplaceWidget(processResult.displayName, linkPath, this.plugin)
             }));
         }
 
@@ -214,7 +216,7 @@ export class EditorLinkDecorator {
     public clearDecorations(): void {
         if (this.activeEditorView) {
             this.activeEditorView.dispatch({
-                effects: clearDecorations.of(null)
+                effects: removeLinkDecoration.of(null)
             });
         }
     }

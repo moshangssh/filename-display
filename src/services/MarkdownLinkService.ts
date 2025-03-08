@@ -3,6 +3,23 @@ import type { IFilenameDisplayPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from './FilenameParser';
 import { FileDisplayCache } from './FileDisplayCache';
 
+// 判断是否为开发环境，只有在开发环境下才输出日志
+const isDev = process.env.NODE_ENV === 'development';
+
+// 日志工具函数
+function log(...args: any[]): void {
+    if (isDev) {
+        console.log(...args);
+    }
+}
+
+// 错误日志工具函数
+function logError(...args: any[]): void {
+    if (isDev) {
+        console.error(...args);
+    }
+}
+
 export class MarkdownLinkService {
     private plugin: IFilenameDisplayPlugin;
     private filenameParser: FilenameParser;
@@ -22,7 +39,7 @@ export class MarkdownLinkService {
 
     // 设置Markdown后处理器以更新内部链接显示
     private setupMarkdownPostProcessor(): void {
-        console.log('设置 Markdown 后处理器');
+        log('设置 Markdown 后处理器');
         this.plugin.registerMarkdownPostProcessor((element, context) => {
             // 仅在初始加载或后续变更时处理
             this.processMarkdownLinks(element);
@@ -34,7 +51,7 @@ export class MarkdownLinkService {
         // 查找所有内部链接元素
         const linkElements = element.querySelectorAll('a.internal-link');
         if (linkElements.length > 0) {
-            console.log(`找到 ${linkElements.length} 个内部链接`);
+            log(`找到 ${linkElements.length} 个内部链接`);
         } else {
             return; // 没有链接，提前返回
         }
@@ -54,7 +71,7 @@ export class MarkdownLinkService {
                 // 从 href 中提取文件路径
                 const filePath = this.getFilePathFromHref(href);
                 if (!filePath) {
-                    console.log(`无法从 ${href} 提取有效文件路径`);
+                    log(`无法从 ${href} 提取有效文件路径`);
                     continue;
                 }
                 
@@ -67,7 +84,7 @@ export class MarkdownLinkService {
                 
                 if (file instanceof TFile) {
                     // 获取链接显示的文本
-                    console.log(`找到文件: ${file.path}, 显示文本: ${originalLinkText}`);
+                    log(`找到文件: ${file.path}, 显示文本: ${originalLinkText}`);
                     
                     // 在Obsidian中，内部链接通常显示basename，除非用户使用了自定义显示文本
                     // 检查链接文本是否与文件basename匹配
@@ -76,7 +93,7 @@ export class MarkdownLinkService {
                         if (processResult.success && processResult.displayName && 
                             processResult.displayName !== file.basename) {
                             // 更新链接文本
-                            console.log(`更新链接文本: ${originalLinkText} -> ${processResult.displayName}`);
+                            log(`更新链接文本: ${originalLinkText} -> ${processResult.displayName}`);
                             linkEl.textContent = processResult.displayName;
                             
                             // 确保链接保持可点击
@@ -94,11 +111,11 @@ export class MarkdownLinkService {
                             });
                         }
                     } else {
-                        console.log(`链接有自定义文本 "${originalLinkText}"，与文件名 "${file.basename}" 不同，保持不变`);
+                        log(`链接有自定义文本 "${originalLinkText}"，与文件名 "${file.basename}" 不同，保持不变`);
                     }
                 }
             } catch (error) {
-                console.error(`处理链接 "${originalLinkText}" 时出错:`, error);
+                logError(`处理链接 "${originalLinkText}" 时出错:`, error);
             }
         }
     }
@@ -190,26 +207,26 @@ export class MarkdownLinkService {
             }
             
             // 如果以上都没找到，则返回原始路径，让调用方自行判断
-            console.log(`无法在库中找到匹配文件: ${path}，可能是别名或不存在的链接`);
+            log(`无法在库中找到匹配文件: ${path}，可能是别名或不存在的链接`);
             return path;
         } catch (error) {
-            console.error("解析href路径时出错:", error);
+            logError("解析href路径时出错:", error);
             return null;
         }
     }
 
     // 更新指定文件在所有打开的Markdown视图中的内部链接
     public updateMarkdownLinksForFile(targetFile: TFile): void {
-        console.log(`尝试更新文件 ${targetFile.path} 的所有内部链接引用`);
+        log(`尝试更新文件 ${targetFile.path} 的所有内部链接引用`);
         
         // 获取所有打开的Markdown视图
         const markdownViews = this.plugin.app.workspace.getLeavesOfType('markdown');
         if (markdownViews.length === 0) {
-            console.log('没有打开的Markdown视图');
+            log('没有打开的Markdown视图');
             return;
         }
         
-        console.log(`找到 ${markdownViews.length} 个打开的Markdown视图`);
+        log(`找到 ${markdownViews.length} 个打开的Markdown视图`);
         
         for (const view of markdownViews) {
             // 获取视图的内容元素
@@ -220,7 +237,7 @@ export class MarkdownLinkService {
             
             // 查找所有内部链接
             const links = contentEl.querySelectorAll('a.internal-link');
-            console.log(`在视图中找到 ${links.length} 个内部链接`);
+            log(`在视图中找到 ${links.length} 个内部链接`);
             
             for (let i = 0; i < links.length; i++) {
                 const linkEl = links[i] as HTMLElement;
@@ -241,7 +258,7 @@ export class MarkdownLinkService {
                         (filePath.endsWith('.md') && filePath.substring(0, filePath.length - 3) === targetFile.basename);
                     
                     if (pointsToTargetFile) {
-                        console.log(`找到指向目标文件的链接: ${originalLinkText}`);
+                        log(`找到指向目标文件的链接: ${originalLinkText}`);
                         
                         // 如果链接文本与文件基本名称相同
                         if (originalLinkText === targetFile.basename) {
@@ -249,7 +266,7 @@ export class MarkdownLinkService {
                             if (processResult.success && processResult.displayName &&
                                 processResult.displayName !== targetFile.basename) {
                                 // 更新链接文本
-                                console.log(`更新链接文本: ${originalLinkText} -> ${processResult.displayName}`);
+                                log(`更新链接文本: ${originalLinkText} -> ${processResult.displayName}`);
                                 linkEl.textContent = processResult.displayName;
                                 
                                 // 确保链接保持可点击
@@ -269,7 +286,7 @@ export class MarkdownLinkService {
                         }
                     }
                 } catch (error) {
-                    console.error(`更新链接时出错:`, error);
+                    logError(`更新链接时出错:`, error);
                 }
             }
         }
