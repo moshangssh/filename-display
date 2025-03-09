@@ -1,84 +1,50 @@
-import { TFile, TAbstractFile } from 'obsidian';
+import { TFile, TAbstractFile, MarkdownView } from 'obsidian';
 import type { IFilenameDisplayPlugin, FileDisplayResult } from '../types';
-import { FilenameParser } from './FilenameParser';
-import { FileDisplayCache } from './FileDisplayCache';
-import { FileExplorerDisplayService } from './FileExplorerDisplayService';
-import { FileProcessorService } from './FileProcessorService';
-import { MarkdownLinkService } from './MarkdownLinkService';
-import { EventManagerService } from './EventManagerService';
-import { EditorLinkDecorator } from './EditorLinkDecorator';
-import { MarkdownView } from 'obsidian';
+import { 
+    IFileDisplayService, 
+    IFilenameParser, 
+    IFileDisplayCache, 
+    IFileExplorerDisplayService, 
+    IFileProcessorService, 
+    IMarkdownLinkService, 
+    IEditorLinkDecorator, 
+    IEventManagerService, 
+    ITimerService 
+} from './interfaces/IServices';
+import { Logger } from '../utils/logger';
+import { ServiceContainer, SERVICE_TYPES } from './di/ServiceContainer';
+
+// 创建日志记录器
+const logger = new Logger('FileDisplayService');
 
 // 主服务类，协调其他组件
-export class FileDisplayService {
+export class FileDisplayService implements IFileDisplayService {
     private plugin: IFilenameDisplayPlugin;
-    private filenameParser: FilenameParser;
-    private fileDisplayCache: FileDisplayCache;
-    
-    // 专门的服务
-    private fileExplorerDisplayService: FileExplorerDisplayService;
-    private fileProcessorService: FileProcessorService;
-    private markdownLinkService: MarkdownLinkService;
-    private eventManagerService: EventManagerService;
-    private editorLinkDecorator: EditorLinkDecorator;
-    
+    private filenameParser: IFilenameParser;
+    private fileDisplayCache: IFileDisplayCache;
+    private fileExplorerDisplayService: IFileExplorerDisplayService;
+    private fileProcessorService: IFileProcessorService;
+    private markdownLinkService: IMarkdownLinkService;
+    private eventManagerService: IEventManagerService;
+    private editorLinkDecorator: IEditorLinkDecorator;
+    private timerService: ITimerService;
     private updateTimer: number | null = null;
-    // 存储所有使用的定时器
-    private timers: Set<number | NodeJS.Timeout> = new Set();
 
-    constructor(plugin: IFilenameDisplayPlugin) {
+    constructor(
+        plugin: IFilenameDisplayPlugin,
+        container: ServiceContainer
+    ) {
         this.plugin = plugin;
         
-        // 初始化基础组件
-        this.filenameParser = new FilenameParser(plugin);
-        this.fileDisplayCache = new FileDisplayCache((timer) => this.addTimer(timer));
-        
-        // 初始化处理器服务
-        this.fileProcessorService = new FileProcessorService(
-            plugin,
-            this.filenameParser,
-            this.fileDisplayCache,
-            async (file) => this.updateFileExplorerDisplay(file)
-        );
-        
-        // 初始化文件资源管理器显示服务
-        this.fileExplorerDisplayService = new FileExplorerDisplayService(
-            plugin,
-            this.filenameParser,
-            this.fileDisplayCache,
-            () => this.updateAllFilesDisplay(),
-            (file) => this.updateFileExplorerDisplay(file),
-            (nodes) => this.updateAddedNodes(nodes)
-        );
-        
-        // 初始化 Markdown 链接服务
-        this.markdownLinkService = new MarkdownLinkService(
-            plugin,
-            this.filenameParser,
-            this.fileDisplayCache
-        );
-        
-        // 初始化编辑器链接装饰器
-        this.editorLinkDecorator = new EditorLinkDecorator(
-            plugin,
-            this.filenameParser,
-            this.fileDisplayCache
-        );
-        
-        // 初始化事件管理器
-        this.eventManagerService = new EventManagerService(
-            plugin,
-            // 文件创建回调
-            (file) => this.onFileCreate(file),
-            // 文件修改回调
-            (file) => this.onFileModify(file),
-            // 文件重命名回调
-            (file, oldPath) => this.onFileRename(file, oldPath),
-            // 文件删除回调
-            (file) => this.onFileDelete(file),
-            // 元数据变更回调
-            (file) => this.onMetadataChange(file)
-        );
+        // 从服务容器获取服务
+        this.filenameParser = container.get<IFilenameParser>(SERVICE_TYPES.FilenameParser);
+        this.fileDisplayCache = container.get<IFileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
+        this.fileExplorerDisplayService = container.get<IFileExplorerDisplayService>(SERVICE_TYPES.FileExplorerDisplayService);
+        this.fileProcessorService = container.get<IFileProcessorService>(SERVICE_TYPES.FileProcessorService);
+        this.markdownLinkService = container.get<IMarkdownLinkService>(SERVICE_TYPES.MarkdownLinkService);
+        this.editorLinkDecorator = container.get<IEditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator);
+        this.eventManagerService = container.get<IEventManagerService>(SERVICE_TYPES.EventManagerService);
+        this.timerService = container.get<ITimerService>(SERVICE_TYPES.TimerService);
         
         // 改用布局就绪事件初始化
         this.plugin.app.workspace.onLayoutReady(() => {
@@ -90,14 +56,14 @@ export class FileDisplayService {
     }
     
     // 文件创建事件处理
-    private onFileCreate(file: TFile): void {
+    public onFileCreate(file: TFile): void {
         this.fileProcessorService.processFile(file);
         this.updateFileExplorerDisplay(file);
         this.markdownLinkService.updateMarkdownLinksForFile(file);
     }
     
     // 文件修改事件处理
-    private onFileModify(file: TFile): void {
+    public onFileModify(file: TFile): void {
         // 清除该文件的缓存，强制重新处理
         this.fileDisplayCache.deletePath(file.path);
         this.fileProcessorService.processFile(file);
@@ -108,12 +74,12 @@ export class FileDisplayService {
         const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
         if (view && view.editor) {
             // 如果当前编辑的就是修改的文件，或者文件包含对修改文件的链接，都需要刷新装饰
-            this.editorLinkDecorator.updateEditorLinkDecorations(view.editor, view);
+            this.editorLinkDecorator.processLinks();
         }
     }
     
     // 文件重命名事件处理
-    private onFileRename(file: TFile, oldPath: string): void {
+    public onFileRename(file: TFile, oldPath: string): void {
         // 清除旧路径的缓存
         this.fileDisplayCache.deletePath(oldPath);
         // 处理新路径
@@ -123,19 +89,14 @@ export class FileDisplayService {
     }
     
     // 文件删除事件处理
-    private onFileDelete(file: TAbstractFile): void {
+    public onFileDelete(file: TAbstractFile): void {
         // 从缓存中移除已删除的文件
         this.fileDisplayCache.deletePath(file.path);
     }
     
     // 元数据更改事件处理
-    private onMetadataChange(file: TFile): void {
+    public onMetadataChange(file: TFile): void {
         this.updateFileExplorerDisplay(file);
-    }
-    
-    // 更新添加的节点
-    private updateAddedNodes(nodes: Node[]): void {
-        this.fileExplorerDisplayService.updateAddedNodes(nodes);
     }
     
     // 更新文件资源管理器中的文件显示
@@ -156,40 +117,10 @@ export class FileDisplayService {
             // 确保设置中启用了装饰功能
             this.plugin.settings.enableEditorLinkDecorations) {
             try {
-                this.editorLinkDecorator.updateEditorLinkDecorations(view.editor, view);
+                this.editorLinkDecorator.processLinks();
             } catch (error) {
-                console.debug("更新编辑器链接装饰时发生错误", error);
+                logger.error("更新编辑器链接装饰时发生错误", error);
             }
-        }
-    }
-    
-    // 添加一个定时器并将其存储到集合中以便清理
-    private addTimer(timer: number | NodeJS.Timeout): void {
-        this.timers.add(timer);
-    }
-
-    // 清理单个定时器
-    private clearTimer(timer: number | NodeJS.Timeout): void {
-        if (typeof timer === 'number') {
-            window.clearTimeout(timer);
-            window.clearInterval(timer);
-        } else {
-            clearTimeout(timer);
-            clearInterval(timer);
-        }
-        this.timers.delete(timer);
-    }
-
-    // 清理所有定时器
-    private clearAllTimers(): void {
-        this.timers.forEach(timer => {
-            this.clearTimer(timer);
-        });
-        this.timers.clear();
-        
-        if (this.updateTimer) {
-            window.clearInterval(this.updateTimer);
-            this.updateTimer = null;
         }
     }
     
@@ -201,9 +132,6 @@ export class FileDisplayService {
         if (this.editorLinkDecorator) {
             this.editorLinkDecorator.dispose();
         }
-        
-        // 清理所有定时器
-        this.clearAllTimers();
     }
     
     // 重置观察器
@@ -212,14 +140,21 @@ export class FileDisplayService {
     }
     
     // 获取缓存实例
-    public getCache(): FileDisplayCache {
+    public getCache(): IFileDisplayCache {
         return this.fileDisplayCache;
     }
     
     // 清理所有资源的方法
     public dispose(): void {
         // 清理所有定时器
-        this.clearAllTimers();
+        if (this.timerService) {
+            this.timerService.clearAll();
+        }
+        
+        if (this.updateTimer) {
+            window.clearInterval(this.updateTimer);
+            this.updateTimer = null;
+        }
         
         // 停止缓存清理
         if (this.fileDisplayCache) {
@@ -234,6 +169,11 @@ export class FileDisplayService {
         // 清理编辑器装饰器
         if (this.editorLinkDecorator) {
             this.editorLinkDecorator.dispose();
+        }
+        
+        // 清理事件管理器
+        if (this.eventManagerService) {
+            this.eventManagerService.dispose();
         }
         
         // 恢复所有显示名称

@@ -59,7 +59,7 @@ export class FileProcessorService {
     }
     
     // 更新所有文件显示
-    public updateAllFilesDisplay(clearCache: boolean = true): void {
+    public updateAllFilesDisplay(clearCache = true): void {
         // 根据参数决定是清除所有缓存还是只清除过期缓存
         if (clearCache) {
             this.fileDisplayCache.clearAll();

@@ -3,11 +3,11 @@ import { TFile } from 'obsidian';
 // 批处理管理器类，负责处理文件处理队列
 export class BatchProcessor {
     private processQueue: Array<TFile> = [];
-    private processingBatch: boolean = false;
-    private batchSize: number = 50;
+    private processingBatch = false;
+    private batchSize = 50;
     private processFileCallback: (file: TFile) => Promise<void>;
     
-    constructor(processFileCallback: (file: TFile) => Promise<void>, batchSize: number = 50) {
+    constructor(processFileCallback: (file: TFile) => Promise<void>, batchSize = 50) {
         this.processFileCallback = processFileCallback;
         this.batchSize = batchSize;
     }

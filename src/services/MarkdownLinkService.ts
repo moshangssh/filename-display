@@ -1,157 +1,127 @@
 import { MarkdownView, TFile } from 'obsidian';
-import type { IFilenameDisplayPlugin, FileDisplayResult } from '../types';
+import type { IFilenameDisplayPlugin } from '../types';
 import { FilenameParser } from './FilenameParser';
 import { FileDisplayCache } from './FileDisplayCache';
+import { Logger } from '../utils/logger';
+import { LinkHandler, LinkInfo, LinkProcessResult } from './LinkHandler';
 
-// 判断是否为开发环境，只有在开发环境下才输出日志
-const isDev = process.env.NODE_ENV === 'development';
+// 创建服务特定的日志记录器
+const logger = new Logger('MarkdownLinkService');
 
-// 日志工具函数
-function log(...args: any[]): void {
-    if (isDev) {
-        console.log(...args);
-    }
-}
-
-// 错误日志工具函数
-function logError(...args: any[]): void {
-    if (isDev) {
-        console.error(...args);
-    }
-}
-
-export class MarkdownLinkService {
-    private plugin: IFilenameDisplayPlugin;
-    private filenameParser: FilenameParser;
-    private fileDisplayCache: FileDisplayCache;
-
+export class MarkdownLinkService extends LinkHandler {
     constructor(
         plugin: IFilenameDisplayPlugin,
         filenameParser: FilenameParser,
         fileDisplayCache: FileDisplayCache
     ) {
-        this.plugin = plugin;
-        this.filenameParser = filenameParser;
-        this.fileDisplayCache = fileDisplayCache;
-        
+        super(plugin, filenameParser, fileDisplayCache, {
+            enabled: true,
+            processingScope: 'preview',
+            respectCustomLinkText: true
+        });
         this.setupMarkdownPostProcessor();
     }
 
     // 设置Markdown后处理器以更新内部链接显示
     private setupMarkdownPostProcessor(): void {
-        log('设置 Markdown 后处理器');
+        logger.log('设置 Markdown 后处理器');
         this.plugin.registerMarkdownPostProcessor((element, context) => {
             // 仅在初始加载或后续变更时处理
-            this.processMarkdownLinks(element);
+            this.processLinks();
         });
     }
     
-    // 处理Markdown中的内部链接
-    private processMarkdownLinks(element: HTMLElement): void {
-        // 查找所有内部链接元素
-        const linkElements = element.querySelectorAll('a.internal-link');
-        if (linkElements.length > 0) {
-            log(`找到 ${linkElements.length} 个内部链接`);
-        } else {
-            return; // 没有链接，提前返回
+    // 实现抽象方法：收集需要处理的链接
+    protected collectLinks(): LinkInfo[] {
+        const links: LinkInfo[] = [];
+        
+        // 获取所有打开的Markdown视图
+        const markdownViews = this.plugin.app.workspace.getLeavesOfType('markdown');
+        if (markdownViews.length === 0) {
+            logger.log('没有打开的Markdown视图');
+            return links;
         }
         
-        for (let i = 0; i < linkElements.length; i++) {
-            const linkEl = linkElements[i] as HTMLElement;
+        logger.log(`找到 ${markdownViews.length} 个打开的Markdown视图`);
+        
+        // 处理所有视图中的链接
+        for (const leaf of markdownViews) {
+            const view = leaf.view;
+            if (!view || !view.containerEl) continue;
             
-            // 获取链接指向的文件路径
-            const href = linkEl.getAttribute('href');
-            if (!href) continue;
+            // 获取视图的内容元素
+            const contentEl = view.containerEl.querySelector('.markdown-reading-view');
+            if (!contentEl) continue;
             
-            // 获取原始链接文本
-            const originalLinkText = linkEl.textContent;
-            if (!originalLinkText) continue;
+            // 查找所有内部链接元素
+            const linkElements = contentEl.querySelectorAll('a.internal-link');
+            logger.log(`在视图中找到 ${linkElements.length} 个内部链接`);
             
-            try {
+            for (let i = 0; i < linkElements.length; i++) {
+                const linkEl = linkElements[i] as HTMLElement;
+                
+                // 获取链接指向的文件路径
+                const href = linkEl.getAttribute('href');
+                if (!href) continue;
+                
+                // 获取原始链接文本
+                const originalLinkText = linkEl.textContent;
+                if (!originalLinkText) continue;
+                
                 // 从 href 中提取文件路径
                 const filePath = this.getFilePathFromHref(href);
                 if (!filePath) {
-                    log(`无法从 ${href} 提取有效文件路径`);
+                    logger.log(`无法从 ${href} 提取有效文件路径`);
                     continue;
                 }
                 
                 // 查找对应的文件
                 const file = this.plugin.app.vault.getAbstractFileByPath(filePath);
-                if (!file) {
-                    // 已经在getFilePathFromHref中记录了日志
+                if (!(file instanceof TFile)) {
                     continue;
                 }
                 
-                if (file instanceof TFile) {
-                    // 获取链接显示的文本
-                    log(`找到文件: ${file.path}, 显示文本: ${originalLinkText}`);
-                    
-                    // 在Obsidian中，内部链接通常显示basename，除非用户使用了自定义显示文本
-                    // 检查链接文本是否与文件basename匹配
-                    if (originalLinkText === file.basename) {
-                        const processResult = this.processFile(file);
-                        if (processResult.success && processResult.displayName && 
-                            processResult.displayName !== file.basename) {
-                            // 更新链接文本
-                            log(`更新链接文本: ${originalLinkText} -> ${processResult.displayName}`);
-                            linkEl.textContent = processResult.displayName;
-                            
-                            // 确保链接保持可点击
-                            linkEl.style.cursor = 'pointer';
-                            
-                            // 存储原始路径信息
-                            linkEl.dataset.originalPath = filePath;
-                            
-                            // 确保点击事件有效
-                            linkEl.addEventListener('click', (event) => {
-                                const workspace = this.plugin.app.workspace;
-                                const linkPath = linkEl.dataset.originalPath || filePath;
-                                // 使用Obsidian API打开链接
-                                workspace.openLinkText(linkPath, '', event.ctrlKey || event.metaKey);
-                            });
-                        }
-                    } else {
-                        log(`链接有自定义文本 "${originalLinkText}"，与文件名 "${file.basename}" 不同，保持不变`);
-                    }
-                }
-            } catch (error) {
-                logError(`处理链接 "${originalLinkText}" 时出错:`, error);
+                links.push({
+                    text: originalLinkText,
+                    path: filePath,
+                    file: file,
+                    element: linkEl
+                });
             }
         }
+        
+        return links;
     }
-
-    // 处理文件以获取显示名称
-    private processFile(file: TFile): FileDisplayResult {
-        // 检查文件是否在启用的文件夹中
-        if (!this.filenameParser.isFileInEnabledFolder(file)) {
-            return {
-                success: false,
-                error: '文件不在启用的文件夹中',
-                displayName: file.basename
-            };
+    
+    // 实现抽象方法：应用显示名称到链接
+    protected applyDisplayName(linkProcessResult: LinkProcessResult): void {
+        const { originalInfo, displayName } = linkProcessResult;
+        
+        if (!originalInfo.element || !displayName) {
+            return;
         }
-
-        // 检查缓存
-        if (this.fileDisplayCache.hasDisplayName(file.path)) {
-            const cachedName = this.fileDisplayCache.getDisplayName(file.path);
-            if (cachedName) {
-                return {
-                    success: true,
-                    displayName: cachedName
-                };
-            }
-        }
-
-        // 使用metadataCache获取文件元数据，处理文件名
-        const result = this.filenameParser.getDisplayNameFromMetadata(file);
-        if (result.success && result.displayName) {
-            this.fileDisplayCache.setDisplayName(file.path, result.displayName);
-        }
-        return result;
+        
+        // 更新链接文本
+        logger.log(`更新链接文本: ${originalInfo.text} -> ${displayName}`);
+        originalInfo.element.textContent = displayName;
+        
+        // 确保链接保持可点击
+        originalInfo.element.style.cursor = 'pointer';
+        
+        // 存储原始路径信息
+        originalInfo.element.dataset.originalPath = originalInfo.path;
+        
+        // 确保点击事件有效
+        originalInfo.element.addEventListener('click', (event) => {
+            const workspace = this.plugin.app.workspace;
+            const linkPath = originalInfo.element?.dataset.originalPath || originalInfo.path;
+            // 使用Obsidian API打开链接
+            workspace.openLinkText(linkPath, '', event.ctrlKey || event.metaKey);
+        });
     }
 
     // 辅助方法：从 href 属性中提取文件路径
-    private getFilePathFromHref(href: string): string | null {
+    private getFilePathFromHref(href: string): string | undefined {
         try {
             // 移除 # 后的部分（文档内部锚点）
             const parts = href.split('#');
@@ -160,8 +130,8 @@ export class MarkdownLinkService {
             // 解码 URI 组件
             let path = decodeURIComponent(pathPart);
             
-            // 如果路径为空，返回null
-            if (!path) return null;
+            // 如果路径为空，返回undefined
+            if (!path) return undefined;
             
             // 处理相对路径
             if (path.startsWith('./')) {
@@ -207,88 +177,17 @@ export class MarkdownLinkService {
             }
             
             // 如果以上都没找到，则返回原始路径，让调用方自行判断
-            log(`无法在库中找到匹配文件: ${path}，可能是别名或不存在的链接`);
+            logger.log(`无法在库中找到匹配文件: ${path}，可能是别名或不存在的链接`);
             return path;
         } catch (error) {
-            logError("解析href路径时出错:", error);
-            return null;
+            logger.error("解析href路径时出错:", error);
+            return undefined;
         }
     }
 
     // 更新指定文件在所有打开的Markdown视图中的内部链接
     public updateMarkdownLinksForFile(targetFile: TFile): void {
-        log(`尝试更新文件 ${targetFile.path} 的所有内部链接引用`);
-        
-        // 获取所有打开的Markdown视图
-        const markdownViews = this.plugin.app.workspace.getLeavesOfType('markdown');
-        if (markdownViews.length === 0) {
-            log('没有打开的Markdown视图');
-            return;
-        }
-        
-        log(`找到 ${markdownViews.length} 个打开的Markdown视图`);
-        
-        for (const view of markdownViews) {
-            // 获取视图的内容元素
-            const contentEl = view.view.containerEl.querySelector('.markdown-reading-view');
-            if (!contentEl) {
-                continue;
-            }
-            
-            // 查找所有内部链接
-            const links = contentEl.querySelectorAll('a.internal-link');
-            log(`在视图中找到 ${links.length} 个内部链接`);
-            
-            for (let i = 0; i < links.length; i++) {
-                const linkEl = links[i] as HTMLElement;
-                const href = linkEl.getAttribute('href');
-                if (!href) continue;
-                
-                const originalLinkText = linkEl.textContent;
-                if (!originalLinkText) continue;
-                
-                try {
-                    const filePath = this.getFilePathFromHref(href);
-                    if (!filePath) continue;
-                    
-                    // 检查是否指向目标文件的不同方式
-                    const pointsToTargetFile = 
-                        filePath === targetFile.path || 
-                        filePath === targetFile.basename || 
-                        (filePath.endsWith('.md') && filePath.substring(0, filePath.length - 3) === targetFile.basename);
-                    
-                    if (pointsToTargetFile) {
-                        log(`找到指向目标文件的链接: ${originalLinkText}`);
-                        
-                        // 如果链接文本与文件基本名称相同
-                        if (originalLinkText === targetFile.basename) {
-                            const processResult = this.processFile(targetFile);
-                            if (processResult.success && processResult.displayName &&
-                                processResult.displayName !== targetFile.basename) {
-                                // 更新链接文本
-                                log(`更新链接文本: ${originalLinkText} -> ${processResult.displayName}`);
-                                linkEl.textContent = processResult.displayName;
-                                
-                                // 确保链接保持可点击
-                                linkEl.style.cursor = 'pointer';
-                                
-                                // 存储原始路径信息
-                                linkEl.dataset.originalPath = filePath;
-                                
-                                // 确保点击事件有效
-                                linkEl.addEventListener('click', (event) => {
-                                    const workspace = this.plugin.app.workspace;
-                                    const linkPath = linkEl.dataset.originalPath || filePath;
-                                    // 使用Obsidian API打开链接
-                                    workspace.openLinkText(linkPath, '', event.ctrlKey || event.metaKey);
-                                });
-                            }
-                        }
-                    }
-                } catch (error) {
-                    logError(`更新链接时出错:`, error);
-                }
-            }
-        }
+        // 重置处理逻辑，让下一次调用processLinks时更新链接
+        this.processLinks();
     }
 } 

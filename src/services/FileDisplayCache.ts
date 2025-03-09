@@ -13,32 +13,35 @@ export class FileDisplayCache {
         originalName: string;
     }> = new WeakMap();
     private readonly CACHE_EXPIRY = 5 * 60 * 1000; // 5分钟缓存过期
-    private cleanupTimer: NodeJS.Timeout | null = null;
+    private cleanupTimer: NodeJS.Timeout | number | null = null;
     private readonly CLEANUP_INTERVAL = 10 * 60 * 1000; // 10分钟执行一次清理
     private readonly MAX_CACHE_SIZE = 1000; // 最大缓存条目数
     
-    constructor(registerTimerCallback?: (timer: NodeJS.Timeout) => void) {
+    constructor(private timerCallback?: (cleanupCallback: () => void) => number) {
         // 初始化缓存并设置定期清理
-        this.startPeriodicCleanup(registerTimerCallback);
+        this.startPeriodicCleanup();
     }
     
     // 开始定期清理计时器
-    private startPeriodicCleanup(registerTimerCallback?: (timer: NodeJS.Timeout) => void): void {
+    private startPeriodicCleanup(): void {
         // 如果已有计时器，先清除
         if (this.cleanupTimer) {
-            clearInterval(this.cleanupTimer);
+            clearInterval(this.cleanupTimer as number);
             this.cleanupTimer = null;
         }
         
-        // 设置定期清理
-        this.cleanupTimer = setInterval(() => {
+        // 定义清理回调函数
+        const cleanupCallback = () => {
             this.clearExpired();
             this.enforceCacheSizeLimit();
-        }, this.CLEANUP_INTERVAL);
+        };
         
-        // 如果提供了回调函数，注册定时器以便跟踪
-        if (registerTimerCallback && this.cleanupTimer) {
-            registerTimerCallback(this.cleanupTimer);
+        // 如果提供了定时器回调函数，使用它来创建定时器
+        if (this.timerCallback) {
+            this.cleanupTimer = this.timerCallback(cleanupCallback);
+        } else {
+            // 否则使用默认的 setInterval
+            this.cleanupTimer = setInterval(cleanupCallback, this.CLEANUP_INTERVAL);
         }
     }
     
@@ -204,7 +207,7 @@ export class FileDisplayCache {
     // 停止定期清理
     public stopPeriodicCleanup(): void {
         if (this.cleanupTimer) {
-            clearInterval(this.cleanupTimer);
+            clearInterval(this.cleanupTimer as number);
             this.cleanupTimer = null;
         }
     }
