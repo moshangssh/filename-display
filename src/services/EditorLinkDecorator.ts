@@ -1,125 +1,28 @@
 import { Editor, MarkdownView, TFile, editorViewField } from 'obsidian';
-import { EditorView, Decoration, WidgetType, ViewPlugin, ViewUpdate, DecorationSet } from '@codemirror/view';
-import { StateField, StateEffect, RangeSet, Extension } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
+import { Extension } from '@codemirror/state';
 import type { IFilenameDisplayPlugin } from '../types';
 import { FilenameParser } from './FilenameParser';
 import { FileDisplayCache } from './FileDisplayCache';
 import { LinkHandler, LinkInfo, LinkProcessResult } from './LinkHandler';
 import { Logger } from '../utils/logger';
+import { 
+    createLinkDecorationExtension, 
+    LinkReplaceWidget, 
+    addLinkDecoration, 
+    removeLinkDecoration 
+} from '../extensions/editor';
 
 // 创建服务特定的日志记录器
 const logger = new Logger('EditorLinkDecorator');
 
-// 创建链接文本替换小部件
-class LinkReplaceWidget extends WidgetType {
-    private readonly plugin: IFilenameDisplayPlugin;
-    private clickListener: ((event: MouseEvent) => void) | null = null;
-    
-    constructor(private readonly displayName: string, private readonly originalPath: string, plugin: IFilenameDisplayPlugin) {
-        super();
-        this.plugin = plugin;
-    }
-
-    toDOM() {
-        const span = document.createElement('span');
-        span.className = 'cm-link cm-underline cm-hmd-internal-link filename-display-replaced';
-        span.textContent = this.displayName;
-        
-        // 保留链接可点击性
-        span.dataset.originalPath = this.originalPath;
-        span.style.cursor = 'pointer';
-        
-        // 创建点击事件监听器函数
-        this.clickListener = (event: MouseEvent) => {
-            event.preventDefault();
-            event.stopPropagation(); // 阻止事件冒泡
-            // 使用Obsidian API打开链接
-            const workspace = this.plugin.app.workspace;
-            const path = this.originalPath;
-            const file = this.plugin.app.vault.getAbstractFileByPath(path) || 
-                        this.plugin.app.metadataCache.getFirstLinkpathDest(path, '');
-            if (file) {
-                workspace.openLinkText(this.originalPath, '', event.ctrlKey || event.metaKey);
-            }
-        };
-        
-        // 添加点击事件监听
-        span.addEventListener('click', this.clickListener);
-        
-        return span;
-    }
-
-    destroy(dom: HTMLElement): void {
-        // 在小部件被销毁时清理事件监听器
-        if (this.clickListener && dom instanceof HTMLElement) {
-            dom.removeEventListener('click', this.clickListener);
-            this.clickListener = null;
-        }
-    }
-
-    ignoreEvent() {
-        return false;
-    }
-}
-
-// 定义状态效果，用于添加和清理装饰效果
-const addLinkDecoration = StateEffect.define<{ from: number; to: number; widget: LinkReplaceWidget }>();
-const removeLinkDecoration = StateEffect.define<null>();
-
-// 状态字段，用于管理所有链接装饰
-const linkDecorationField = StateField.define<DecorationSet>({
-    create() {
-        return Decoration.none;
-    },
-    update(decorations, tr) {
-        // 处理文档变更
-        decorations = decorations.map(tr.changes);
-        
-        // 处理装饰效果
-        for (const effect of tr.effects) {
-            // 清除所有装饰
-            if (effect.is(removeLinkDecoration)) {
-                decorations = Decoration.none;
-            }
-            // 添加新装饰
-            else if (effect.is(addLinkDecoration)) {
-                const { from, to, widget } = effect.value;
-                const decoration = Decoration.replace({
-                    widget: widget,
-                    inclusive: false
-                }).range(from, to);
-                decorations = decorations.update({ add: [decoration], sort: true });
-            }
-        }
-        
-        return decorations;
-    },
-    provide(field) {
-        return EditorView.decorations.from(field);
-    }
-});
-
-// 创建视图插件，监听编辑器状态变化
-const viewPlugin = ViewPlugin.fromClass(
-    class {
-        constructor(private view: EditorView) {}
-        
-        update(update: ViewUpdate) {
-            // 仅在文档内容变化时触发更新
-            if (update.docChanged) {
-                // 由ViewPlugin通知状态变化，而不是直接处理
-                // 稍后会被EditorLinkDecorator的updateFromDocChange方法处理
-            }
-        }
-    }
-);
-
 export class EditorLinkDecorator extends LinkHandler {
-    private decorationExtension: Extension;
     private activeEditorView: EditorView | null = null;
     private isProcessing: boolean = false;
     private pendingUpdate: boolean = false;
     private currentFile: TFile | null = null;
+    // 添加一个Map来跟踪已处理的链接，包含path属性
+    private processedLinks: Map<string, {from: number, to: number, displayName: string, path: string}> = new Map();
     
     constructor(plugin: IFilenameDisplayPlugin, filenameParser: FilenameParser, fileDisplayCache: FileDisplayCache) {
         super(plugin, filenameParser, fileDisplayCache, {
@@ -128,11 +31,13 @@ export class EditorLinkDecorator extends LinkHandler {
             respectCustomLinkText: true
         });
         
-        // 创建插件实例，包含视图插件和状态字段
-        this.decorationExtension = [linkDecorationField, viewPlugin];
+        // 注册编辑器扩展 - 使用新的扩展模块
+        this.plugin.registerEditorExtension([
+            createLinkDecorationExtension(plugin, (view) => this.onEditorChange(view))
+        ]);
         
-        // 注册编辑器扩展
-        this.plugin.registerEditorExtension([this.decorationExtension]);
+        // 保存装饰器引用，供扩展使用
+        plugin._linkDecorator = this;
         
         // 监听活跃视图变更，这是必要的Obsidian事件
         this.plugin.registerEvent(
@@ -153,6 +58,13 @@ export class EditorLinkDecorator extends LinkHandler {
                 }
             })
         );
+    }
+
+    // 编辑器变更处理，由扩展触发
+    public onEditorChange(view: EditorView): void {
+        if (view === this.activeEditorView) {
+            this.scheduleUpdate();
+        }
     }
 
     // 新增：调度更新处理，避免频繁处理
@@ -209,23 +121,29 @@ export class EditorLinkDecorator extends LinkHandler {
     // 更新编辑器视图引用
     private updateEditorView(editor: Editor, view: MarkdownView): void {
         try {
-            // 方法1: 尝试直接从编辑器获取
-            if ((editor as any).cm instanceof EditorView) {
-                this.activeEditorView = (editor as any).cm;
-            } 
-            // 方法2: 尝试从视图获取
-            else if ((view as any).editMode?.editor?.cm instanceof EditorView) {
+            // 通过非类型安全的方式访问内部 CM 实例
+            // 注：Obsidian 的 API 并未完全暴露 CM 实例，所以我们需要使用这种方式
+            const editorView = (editor as any).cm;
+            if (editorView instanceof EditorView) {
+                this.activeEditorView = editorView;
+                return;
+            }
+            
+            // 备用方法：尝试从视图获取
+            if ((view as any).editMode?.editor?.cm instanceof EditorView) {
                 this.activeEditorView = (view as any).editMode.editor.cm;
+                return;
             }
-            // 方法3: 尝试从内部状态获取 
-            else if ((view as any).editor?.cm instanceof EditorView) {
+            
+            // 第三种方法：尝试获取通过其他字段
+            if ((view as any).editor?.cm instanceof EditorView) {
                 this.activeEditorView = (view as any).editor.cm;
+                return;
             }
-            // 如果以上方法都失败，记录此情况但不抛出错误
-            else {
-                logger.log("无法获取 EditorView：当前视图或编辑器的结构与预期不符");
-                this.activeEditorView = null;
-            }
+            
+            // 如果所有方法都失败，记录错误
+            logger.log("无法获取 EditorView：当前视图或编辑器的结构与预期不符");
+            this.activeEditorView = null;
         } catch (e) {
             logger.log("获取 EditorView 时出现错误，可能当前不是编辑模式：", e);
             this.activeEditorView = null;
@@ -247,60 +165,98 @@ export class EditorLinkDecorator extends LinkHandler {
 
         // 遍历匹配到的所有链接
         while ((match = linkRegex.exec(content)) !== null) {
-            const fullMatch = match[0]; // 完整匹配 [[file]]
-            const linkPath = match[1]; // 链接路径
-            const hasCustomText = !!match[2]; // 是否有自定义文本
+            let linkPath = match[1];
+            let linkText = match[2] || linkPath; // 如果没有自定义文本，使用路径
 
-            // 如果有自定义文本且配置为尊重自定义文本，跳过处理
-            if (hasCustomText && this.config.respectCustomLinkText) continue;
+            // 处理子部分链接（如 [[文件名#标题]]）
+            if (linkPath.includes('#')) {
+                const parts = linkPath.split('#');
+                linkPath = parts[0]; // 仅保留文件部分
+                
+                // 如果没有自定义文本，链接文本应该是不带#部分的
+                if (!match[2]) {
+                    linkText = linkPath;
+                }
+            }
 
-            // 获取文件
+            // 查找链接对应的文件
             const file = this.getFileFromLink(linkPath);
-            if (!file) continue;
 
-            // 创建链接信息
+            // 添加到链接列表
             links.push({
-                text: linkPath,
+                text: linkText,
                 path: linkPath,
                 file: file,
-                from: match.index,
-                to: match.index + fullMatch.length
+                from: match.index + 2, // 跳过 '[['
+                to: match.index + match[0].length - 2 // 去掉结束的 ']]'
             });
         }
-
+        
         return links;
     }
 
-    // 实现抽象方法：应用显示名称到链接装饰
+    // 实现抽象方法：应用显示名称
     protected applyDisplayName(linkProcessResult: LinkProcessResult): void {
-        if (!this.activeEditorView || !linkProcessResult.displayName) {
+        if (!this.activeEditorView || !linkProcessResult.originalInfo.from || !linkProcessResult.originalInfo.to || !linkProcessResult.displayName) {
             return;
         }
         
-        const { from, to } = linkProcessResult.originalInfo;
-        if (from === undefined || to === undefined) {
-            return;
+        const { from, to, path } = linkProcessResult.originalInfo;
+        const displayName = linkProcessResult.displayName;
+        
+        try {
+            // 创建小部件并通过状态效果添加到编辑器
+            const widget = new LinkReplaceWidget(
+                displayName,
+                path,
+                this.plugin
+            );
+            
+            // 将链接信息记录到处理过的链接中，方便后续更新
+            this.processedLinks.set(`${from}-${to}`, {
+                from,
+                to,
+                displayName,
+                path
+            });
+            
+            // 使用状态效果应用装饰
+            this.activeEditorView.dispatch({
+                effects: addLinkDecoration.of({ from, to, widget })
+            });
+        } catch (e) {
+            logger.error(`无法为链接 "${path}" 应用显示名称:`, e);
         }
-
-        // 创建替换小部件
-        const widget = new LinkReplaceWidget(
-            linkProcessResult.displayName,
-            linkProcessResult.originalInfo.path,
-            this.plugin
-        );
-
-        // 分发状态效果，而不是直接修改DOM
-        this.activeEditorView.dispatch({
-            effects: addLinkDecoration.of({ from, to, widget })
-        });
     }
 
     // 清除所有装饰
     public clearDecorations(): void {
         if (this.activeEditorView) {
-            this.activeEditorView.dispatch({
-                effects: removeLinkDecoration.of(null)
-            });
+            try {
+                this.activeEditorView.dispatch({
+                    effects: removeLinkDecoration.of(null)
+                });
+                this.processedLinks.clear();
+            } catch (e) {
+                logger.error("清除链接装饰时出错:", e);
+            }
+        }
+    }
+
+    // 重写链接处理方法，添加清理和重建逻辑
+    public override processLinks(): void {
+        if (!this.activeEditorView || !this.config.enabled) {
+            return;
+        }
+        
+        try {
+            // 清除现有装饰
+            this.clearDecorations();
+            
+            // 使用父类方法处理链接
+            super.processLinks();
+        } catch (e) {
+            logger.error("处理编辑器链接时发生错误:", e);
         }
     }
 
@@ -308,5 +264,7 @@ export class EditorLinkDecorator extends LinkHandler {
     public dispose(): void {
         this.clearDecorations();
         this.activeEditorView = null;
+        this.currentFile = null;
+        this.plugin._linkDecorator = null;
     }
 } 

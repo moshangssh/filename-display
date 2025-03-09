@@ -14,6 +14,9 @@ export interface IFilenameDisplayPlugin extends Plugin {
     saveSettings(): Promise<void>;
     updateAllFilesDisplay(): void;
     registerEditorExtension(extension: Extension[]): void;
+    
+    // 内部使用的属性，用于存储链接装饰器引用
+    _linkDecorator?: any;
 }
 
 export interface FileDisplayResult {

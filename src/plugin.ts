@@ -14,13 +14,31 @@ import { TimerService } from './services/TimerService';
 import { ServiceContainer, SERVICE_TYPES } from './services/di/ServiceContainer';
 import { Logger } from './utils/logger';
 import { errorHandler } from './utils/ErrorHandler';
+import { Extension } from '@codemirror/state';
+import { createEditorExtensions } from './extensions/editor';
 
 const logger = new Logger('FilenameDisplayPlugin');
 
+// 创建 CodeMirror 扩展集合
+function createCombinedExtensions(plugin: FilenameDisplayPlugin): Extension {
+    logger.log('创建 CodeMirror 扩展集合');
+    
+    // 获取服务容器中的服务
+    const container = plugin.serviceContainer;
+    
+    // 收集所有服务的 CodeMirror 扩展
+    const extensions: Extension[] = [];
+    
+    // 将在 registerServices 中把扩展添加到这个数组
+    
+    return extensions;
+}
+
 export default class FilenameDisplayPlugin extends Plugin {
     settings: FilenameDisplaySettings;
-    private serviceContainer: ServiceContainer;
+    serviceContainer: ServiceContainer;
     private fileDisplayService: FileDisplayService;
+    private editorExtensions: Extension[] = [];
 
     async onload() {
         await this.loadSettings();
@@ -46,6 +64,11 @@ export default class FilenameDisplayPlugin extends Plugin {
                 this.fileDisplayService.updateAllFilesDisplay();
             })
         );
+
+        // 注册编辑器扩展
+        if (this.editorExtensions.length > 0) {
+            this.registerEditorExtension(this.editorExtensions);
+        }
 
         // 初始化所有文件的显示
         this.fileDisplayService.updateAllFilesDisplay();
@@ -231,5 +254,13 @@ export default class FilenameDisplayPlugin extends Plugin {
         if (this.fileDisplayService) {
             this.fileDisplayService.updateAllFilesDisplay();
         }
+    }
+
+    registerEditorExtension(extension: Extension[]): void {
+        // 首先添加到内部扩展数组
+        this.editorExtensions = [...this.editorExtensions, ...extension];
+        
+        // 然后调用父类方法注册到 Obsidian
+        super.registerEditorExtension(extension);
     }
 } 
