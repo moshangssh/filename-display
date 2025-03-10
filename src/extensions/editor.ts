@@ -1,7 +1,7 @@
 import { Extension } from '@codemirror/state';
 import { EditorView, Decoration, WidgetType, ViewPlugin, ViewUpdate, DecorationSet } from '@codemirror/view';
 import { StateField, StateEffect, RangeSet } from '@codemirror/state';
-import type { IFilenameDisplayPlugin } from '../types';
+import type { ITitleExtractorPlugin } from '../types';
 import { Logger } from '../utils/logger';
 
 // 创建服务特定的日志记录器
@@ -12,10 +12,10 @@ const logger = new Logger('EditorExtensions');
  * 用于在编辑器中替换链接文本
  */
 export class LinkReplaceWidget extends WidgetType {
-    private readonly plugin: IFilenameDisplayPlugin;
+    private readonly plugin: ITitleExtractorPlugin;
     private clickListener: ((event: MouseEvent) => void) | null = null;
     
-    constructor(private readonly displayName: string, private readonly originalPath: string, plugin: IFilenameDisplayPlugin) {
+    constructor(private readonly displayName: string, private readonly originalPath: string, plugin: ITitleExtractorPlugin) {
         super();
         this.plugin = plugin;
     }
@@ -107,7 +107,7 @@ export const linkDecorationField = StateField.define<DecorationSet>({
  * 创建监视文档变化的扩展
  */
 export function createLinkObserverExtension(
-    plugin: IFilenameDisplayPlugin, 
+    plugin: ITitleExtractorPlugin, 
     onChange: (view: EditorView) => void
 ): Extension {
     return ViewPlugin.fromClass(
@@ -129,7 +129,7 @@ export function createLinkObserverExtension(
  * 这是一个完整的扩展，包含状态字段和视图插件
  */
 export function createLinkDecorationExtension(
-    plugin: IFilenameDisplayPlugin, 
+    plugin: ITitleExtractorPlugin, 
     onChange: (view: EditorView) => void
 ): Extension {
     return [
@@ -141,7 +141,7 @@ export function createLinkDecorationExtension(
 /**
  * 创建所有编辑器扩展的组合
  */
-export function createEditorExtensions(plugin: IFilenameDisplayPlugin): Extension {
+export function createEditorExtensions(plugin: ITitleExtractorPlugin): Extension {
     // 收集所有扩展
     const extensions: Extension[] = [];
     

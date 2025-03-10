@@ -1,7 +1,7 @@
 import { Editor, MarkdownView, TFile, editorViewField } from 'obsidian';
 import { EditorView } from '@codemirror/view';
 import { Extension } from '@codemirror/state';
-import type { IFilenameDisplayPlugin } from '../types';
+import type { ITitleExtractorPlugin } from '../types';
 import { FilenameParser } from './FilenameParser';
 import { FileDisplayCache } from './FileDisplayCache';
 import { LinkHandler, LinkInfo, LinkProcessResult } from './LinkHandler';
@@ -24,7 +24,7 @@ export class EditorLinkDecorator extends LinkHandler {
     // 添加一个Map来跟踪已处理的链接，包含path属性
     private processedLinks: Map<string, {from: number, to: number, displayName: string, path: string}> = new Map();
     
-    constructor(plugin: IFilenameDisplayPlugin, filenameParser: FilenameParser, fileDisplayCache: FileDisplayCache) {
+    constructor(plugin: ITitleExtractorPlugin, filenameParser: FilenameParser, fileDisplayCache: FileDisplayCache) {
         super(plugin, filenameParser, fileDisplayCache, {
             enabled: plugin.settings.enableEditorLinkDecorations,
             processingScope: 'editor',
@@ -94,6 +94,11 @@ export class EditorLinkDecorator extends LinkHandler {
         const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
         const editor = view?.editor;
         
+        // 如果视图或文件变化，清除处理过的链接缓存
+        if (this.currentFile !== view?.file) {
+            this.processedLinks.clear();
+        }
+        
         if (view && editor) {
             this.currentFile = view.file;
             this.updateEditorView(editor, view);
@@ -108,6 +113,8 @@ export class EditorLinkDecorator extends LinkHandler {
         } else {
             this.activeEditorView = null;
             this.currentFile = null;
+            // 清除处理过的链接缓存
+            this.processedLinks.clear();
         }
     }
     
@@ -179,6 +186,22 @@ export class EditorLinkDecorator extends LinkHandler {
                 }
             }
 
+            // 获取匹配的范围
+            const from = match.index + 2; // 跳过 '[['
+            const to = match.index + match[0].length - 2; // 去掉结束的 ']]'
+            
+            // 检查这个链接是否已经处理过，避免重复处理
+            const key = `${from}-${to}`;
+            if (this.processedLinks.has(key)) {
+                const existing = this.processedLinks.get(key);
+                // 如果已处理且路径未变，跳过处理
+                if (existing && existing.path === linkPath) {
+                    continue;
+                }
+                // 如果路径变了，删除旧的处理记录
+                this.processedLinks.delete(key);
+            }
+
             // 查找链接对应的文件
             const file = this.getFileFromLink(linkPath);
 
@@ -187,8 +210,8 @@ export class EditorLinkDecorator extends LinkHandler {
                 text: linkText,
                 path: linkPath,
                 file: file,
-                from: match.index + 2, // 跳过 '[['
-                to: match.index + match[0].length - 2 // 去掉结束的 ']]'
+                from: from,
+                to: to
             });
         }
         
@@ -204,6 +227,13 @@ export class EditorLinkDecorator extends LinkHandler {
         const { from, to, path } = linkProcessResult.originalInfo;
         const displayName = linkProcessResult.displayName;
         
+        // 检查是否已经应用了相同的显示名称，避免重复应用
+        const key = `${from}-${to}`;
+        const existingLink = this.processedLinks.get(key);
+        if (existingLink && existingLink.displayName === displayName) {
+            return; // 如果已经应用了相同的显示名称，则跳过
+        }
+        
         try {
             // 创建小部件并通过状态效果添加到编辑器
             const widget = new LinkReplaceWidget(
@@ -213,7 +243,7 @@ export class EditorLinkDecorator extends LinkHandler {
             );
             
             // 将链接信息记录到处理过的链接中，方便后续更新
-            this.processedLinks.set(`${from}-${to}`, {
+            this.processedLinks.set(key, {
                 from,
                 to,
                 displayName,
@@ -248,15 +278,41 @@ export class EditorLinkDecorator extends LinkHandler {
         if (!this.activeEditorView || !this.config.enabled) {
             return;
         }
-        
+
         try {
-            // 清除现有装饰
+            // 先清理所有装饰，避免重叠问题
             this.clearDecorations();
-            
-            // 使用父类方法处理链接
-            super.processLinks();
+
+            // 收集和处理链接
+            const links = this.collectLinks();
+            if (links.length === 0) {
+                return;
+            }
+
+            // 使用批处理处理链接
+            this.processBatchOfLinks(links, 0);
         } catch (e) {
-            logger.error("处理编辑器链接时发生错误:", e);
+            logger.error("处理编辑器链接时出错:", e);
+        }
+    }
+
+    // 批量处理链接的辅助方法
+    private processBatchOfLinks(links: LinkInfo[], startIndex: number): void {
+        const batch = links.slice(startIndex, startIndex + this.BATCH_SIZE);
+        if (batch.length === 0) return;
+
+        for (const link of batch) {
+            const result = this.processLinkInfo(link);
+            if (result.success && result.shouldUpdate) {
+                this.applyDisplayName(result);
+            }
+        }
+
+        // 如果还有更多链接，安排下一批处理
+        if (startIndex + this.BATCH_SIZE < links.length) {
+            setTimeout(() => {
+                this.processBatchOfLinks(links, startIndex + this.BATCH_SIZE);
+            }, this.BATCH_DELAY);
         }
     }
 

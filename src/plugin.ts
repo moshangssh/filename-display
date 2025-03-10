@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Notice, Plugin, TFile } from 'obsidian';
+import { App, Editor, MarkdownView, Notice, Plugin, TFile, TAbstractFile } from 'obsidian';
 import { TitleExtractorSettings } from './types';
 import { DEFAULT_SETTINGS } from './constants';
 import { TitleExtractorSettingTab } from './settings/SettingsTab';
@@ -61,7 +61,34 @@ export default class TitleExtractorPlugin extends Plugin {
             this.app.workspace.on('layout-change', () => {
                 // 重新设置观察器并更新所有文件显示
                 this.fileDisplayService.resetObservers();
-                this.fileDisplayService.updateAllFilesDisplay();
+                // 使用现有缓存更新，避免重新处理所有文件
+                this.fileDisplayService.updateAllFilesDisplay(false);
+            })
+        );
+        
+        // 监听文件修改事件，确保缓存一致性
+        this.registerEvent(
+            this.app.vault.on('modify', (file: TAbstractFile) => {
+                if (file instanceof TFile && file.extension === 'md') {
+                    // 当文件内容变更时，清除该文件的缓存并重新处理
+                    const cacheService = this.serviceContainer.get<FileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
+                    cacheService.deletePath(file.path);
+                    // 只更新修改的文件
+                    this.fileDisplayService.updateFileExplorerDisplay(file);
+                }
+            })
+        );
+        
+        // 监听文件重命名事件
+        this.registerEvent(
+            this.app.vault.on('rename', (file: TAbstractFile, oldPath: string) => {
+                if (file instanceof TFile && file.extension === 'md') {
+                    // 当文件重命名时，清除旧路径缓存
+                    const cacheService = this.serviceContainer.get<FileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
+                    cacheService.deletePath(oldPath);
+                    // 更新新路径的显示
+                    this.fileDisplayService.updateFileExplorerDisplay(file);
+                }
             })
         );
 
@@ -70,8 +97,14 @@ export default class TitleExtractorPlugin extends Plugin {
             this.registerEditorExtension(this.editorExtensions);
         }
 
-        // 初始化所有文件的显示
-        this.fileDisplayService.updateAllFilesDisplay();
+        // 获取缓存服务，确保缓存已加载
+        const cacheService = this.serviceContainer.get(SERVICE_TYPES.FileDisplayCache);
+        
+        // 初始化所有文件的显示，保留缓存以避免文件名闪烁
+        setTimeout(() => {
+            // 使用短延迟确保DOM已完全加载
+            this.fileDisplayService.updateAllFilesDisplay(false);
+        }, 50);
         
         logger.log('TitleExtrator插件加载完成');
     }
@@ -108,10 +141,13 @@ export default class TitleExtractorPlugin extends Plugin {
         );
         
         // 注册文件显示缓存服务
-        const cacheService = new FileDisplayCache((cleanupFn: () => void) => {
-            const timerService = this.serviceContainer.get<TimerService>(SERVICE_TYPES.TimerService);
-            return timerService.setInterval(cleanupFn, 60000); // 每分钟执行一次
-        });
+        const cacheService = new FileDisplayCache(
+            (cleanupFn: () => void) => {
+                const timerService = this.serviceContainer.get<TimerService>(SERVICE_TYPES.TimerService);
+                return timerService.setInterval(cleanupFn, 60000); // 每分钟执行一次
+            },
+            this // 传入插件实例，使得缓存服务可以访问 app.loadData 和 app.saveData
+        );
         this.serviceContainer.register(
             SERVICE_TYPES.FileDisplayCache, 
             cacheService

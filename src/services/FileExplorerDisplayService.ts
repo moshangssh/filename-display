@@ -1,17 +1,17 @@
 import { TFile } from 'obsidian';
-import type { IFilenameDisplayPlugin, FileDisplayResult } from '../types';
+import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from './FilenameParser';
 import { FileDisplayCache } from './FileDisplayCache';
 import { FileExplorerObserver } from './FileExplorerObserver';
 
 export class FileExplorerDisplayService {
-    private plugin: IFilenameDisplayPlugin;
+    private plugin: ITitleExtractorPlugin;
     private filenameParser: FilenameParser;
     private fileDisplayCache: FileDisplayCache;
     private fileExplorerObserver: FileExplorerObserver;
 
     constructor(
-        plugin: IFilenameDisplayPlugin,
+        plugin: ITitleExtractorPlugin,
         filenameParser: FilenameParser,
         fileDisplayCache: FileDisplayCache,
         updateAllFilesFn: () => void,
@@ -49,9 +49,21 @@ export class FileExplorerDisplayService {
                 if (path) {
                     const file = this.plugin.app.vault.getAbstractFileByPath(path);
                     if (file instanceof TFile) {
-                        const titleEl = fileEl.querySelector('.nav-file-title-content');
+                        // 先检查缓存，如果有缓存直接应用，避免文件名闪烁
+                        const titleEl = fileEl.querySelector('.nav-file-title-content') as HTMLElement;
                         if (titleEl) {
-                            this.updateFileElement(titleEl as HTMLElement, file);
+                            // getDisplayName 现在会进行缓存一致性检查
+                            const cachedDisplayName = this.fileDisplayCache.getDisplayName(path);
+                            if (cachedDisplayName) {
+                                // 如果有有效缓存，立即应用
+                                const originalName = titleEl.textContent || file.basename;
+                                this.fileDisplayCache.saveOriginalName(path, originalName);
+                                this.fileDisplayCache.saveElementData(titleEl, path, originalName);
+                                titleEl.textContent = cachedDisplayName;
+                            } else {
+                                // 否则需要重新处理文件
+                                this.updateFileElement(titleEl, file);
+                            }
                         }
                     }
                 }
@@ -117,27 +129,54 @@ export class FileExplorerDisplayService {
     // 更新文件资源管理器中的文件显示
     public async updateFileExplorerDisplay(file: TFile): Promise<void> {
         try {
-            // 使用工作区API获取文件资源管理器
+            // 首先检查文件是否符合处理条件
+            if (!(file instanceof TFile)) return;
+            
+            // 获取文件资源管理器
             const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
             if (fileExplorers.length === 0) return;
             
-            // 利用Obsidian的fileManager来获取文件实例
-            const fileManager = this.plugin.app.fileManager;
-            
             // 遍历所有文件资源管理器
             for (const explorer of fileExplorers) {
+                // 使用CSS选择器查找文件元素
                 const fileItemSelector = `.nav-file-title[data-path="${CSS.escape(file.path)}"]`;
                 const fileItem = explorer.view.containerEl.querySelector(fileItemSelector);
                 
                 if (fileItem) {
-                    const titleEl = fileItem.querySelector('.nav-file-title-content');
+                    const titleEl = fileItem.querySelector('.nav-file-title-content') as HTMLElement;
                     if (titleEl) {
-                        this.updateFileElement(titleEl as HTMLElement, file);
+                        // 立即检查缓存中是否已有该文件的显示名称并且缓存是否有效
+                        const cachedDisplayName = this.fileDisplayCache.getDisplayName(file.path);
+                        
+                        // getDisplayName 现在会自动进行缓存一致性检查
+                        // 如果返回了缓存的显示名称，说明缓存有效
+                        if (cachedDisplayName) {
+                            // 如果有缓存且有效，并且当前显示不同于缓存，则更新显示
+                            if (titleEl.textContent !== cachedDisplayName) {
+                                // 保存原始名称然后更新显示
+                                const originalName = titleEl.textContent || file.basename;
+                                this.fileDisplayCache.saveOriginalName(file.path, originalName);
+                                this.fileDisplayCache.saveElementData(titleEl, file.path, originalName);
+                                titleEl.textContent = cachedDisplayName;
+                            }
+                            return;
+                        } else {
+                            // 如果没有有效缓存，重新处理文件
+                            const result = this.processFile(file);
+                            if (!result.success) {
+                                // 标记为已处理但不需要更新
+                                this.fileDisplayCache.setDisplayName(file.path, file.basename);
+                                return;
+                            }
+                            
+                            // 更新元素显示
+                            this.updateFileElement(titleEl, file);
+                        }
                     }
                 }
             }
         } catch (error) {
-            console.error('更新文件显示时出错:', error);
+            console.error(`更新文件资源管理器显示错误: ${error}`);
         }
     }
     
