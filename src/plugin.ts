@@ -124,51 +124,6 @@ export default class TitleExctratorPlugin extends Plugin {
             fileProcessorService
         );
         
-        // 分配事件处理器回调函数
-        const handleFileCreate = (file: TFile) => {
-            if (this.fileDisplayService) {
-                this.fileDisplayService.onFileCreate(file);
-            }
-        };
-        
-        const handleFileModify = (file: TFile) => {
-            if (this.fileDisplayService) {
-                this.fileDisplayService.onFileModify(file);
-            }
-        };
-        
-        const handleFileRename = (file: TFile, oldPath: string) => {
-            if (this.fileDisplayService) {
-                this.fileDisplayService.onFileRename(file, oldPath);
-            }
-        };
-        
-        const handleFileDelete = (file: TFile) => {
-            if (this.fileDisplayService) {
-                this.fileDisplayService.onFileDelete(file);
-            }
-        };
-        
-        const handleMetadataChange = (file: TFile) => {
-            if (this.fileDisplayService) {
-                this.fileDisplayService.onMetadataChange(file);
-            }
-        };
-        
-        // 注册事件管理服务
-        const eventManagerService = new EventManagerService(
-            this,
-            handleFileCreate,
-            handleFileModify,
-            handleFileRename,
-            handleFileDelete,
-            handleMetadataChange
-        );
-        this.serviceContainer.register(
-            SERVICE_TYPES.EventManagerService, 
-            eventManagerService
-        );
-        
         // 注册Markdown链接服务
         const markdownLinkService = new MarkdownLinkService(
             this,
@@ -217,13 +172,24 @@ export default class TitleExctratorPlugin extends Plugin {
             SERVICE_TYPES.FileExplorerDisplayService, 
             fileExplorerDisplayService
         );
+
+        // 创建事件管理服务
+        const eventManagerService = new EventManagerService(this);
+        this.serviceContainer.register(
+            SERVICE_TYPES.EventManagerService,
+            eventManagerService
+        );
         
-        // 最后注册主服务
+        // 注册主服务
         const fileDisplayService = new FileDisplayService(this, this.serviceContainer);
         this.serviceContainer.register(
             SERVICE_TYPES.FileDisplayService, 
             fileDisplayService
         );
+        
+        // 设置事件监听器
+        eventManagerService.setupVaultEventListeners();
+        eventManagerService.setupMetadataEventListeners();
     }
 
     onunload() {

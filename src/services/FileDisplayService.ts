@@ -13,35 +13,11 @@ import {
 } from './interfaces/IServices';
 import { Logger } from '../utils/logger';
 import { ServiceContainer, SERVICE_TYPES } from './di/ServiceContainer';
+import { throttle } from '../utils';
+import { FileEventType, FileEvent } from './EventManagerService';
 
 // 创建日志记录器
 const logger = new Logger('FileDisplayService');
-
-// 节流函数，限制函数执行频率
-function throttle<T extends (...args: any[]) => any>(
-    func: T,
-    wait: number
-): (...args: Parameters<T>) => void {
-    let timeout: number | null = null;
-    let lastExec = 0;
-
-    return function(this: any, ...args: Parameters<T>) {
-        const context = this;
-        const now = Date.now();
-        const remaining = wait - (now - lastExec);
-
-        if (remaining <= 0 || remaining > wait) {
-            lastExec = now;
-            func.apply(context, args);
-        } else if (!timeout) {
-            timeout = window.setTimeout(() => {
-                lastExec = Date.now();
-                timeout = null;
-                func.apply(context, args);
-            }, remaining);
-        }
-    };
-}
 
 // 主服务类，协调其他组件
 export class FileDisplayService implements IFileDisplayService {
@@ -51,12 +27,13 @@ export class FileDisplayService implements IFileDisplayService {
     private fileExplorerDisplayService: IFileExplorerDisplayService;
     private fileProcessorService: IFileProcessorService;
     private markdownLinkService: IMarkdownLinkService;
-    private eventManagerService: IEventManagerService;
     private editorLinkDecorator: IEditorLinkDecorator;
     private timerService: ITimerService;
+    private eventManagerService: IEventManagerService;
     private updateTimer: number | null = null;
     private throttledUpdateAllFilesDisplay: (clearCache?: boolean) => void;
     private lastUpdatedFiles: Set<string> = new Set(); // 用于记录上次更新的文件
+    private unsubscribers: (() => void)[] = []; // 存储取消订阅函数
 
     constructor(
         plugin: ITitleExctratorPlugin,
@@ -71,181 +48,198 @@ export class FileDisplayService implements IFileDisplayService {
         this.fileProcessorService = container.get<IFileProcessorService>(SERVICE_TYPES.FileProcessorService);
         this.markdownLinkService = container.get<IMarkdownLinkService>(SERVICE_TYPES.MarkdownLinkService);
         this.editorLinkDecorator = container.get<IEditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator);
-        this.eventManagerService = container.get<IEventManagerService>(SERVICE_TYPES.EventManagerService);
         this.timerService = container.get<ITimerService>(SERVICE_TYPES.TimerService);
+        this.eventManagerService = container.get<IEventManagerService>(SERVICE_TYPES.EventManagerService);
         
-        // 创建节流版本的更新方法（2秒内最多执行一次）
-        this.throttledUpdateAllFilesDisplay = throttle(this.performUpdateAllFilesDisplay.bind(this), 2000);
+        // 使用节流函数包装更新函数，避免短时间内多次更新
+        this.throttledUpdateAllFilesDisplay = throttle(
+            (clearCache?: boolean) => this.performUpdateAllFilesDisplay(clearCache), 
+            3000
+        );
         
-        // 改用布局就绪事件初始化
-        this.plugin.app.workspace.onLayoutReady(() => {
-            this.fileExplorerDisplayService.setupObservers();
-            this.eventManagerService.setupVaultEventListeners();
-            this.eventManagerService.setupMetadataEventListeners();
-            this.updateAllFilesDisplay();
-        });
+        // 设置事件订阅
+        this.setupEventSubscriptions();
     }
     
-    // 文件创建事件处理
-    public onFileCreate(file: TFile): void {
-        this.lastUpdatedFiles.add(file.path);
-        this.fileProcessorService.processFile(file);
-        this.updateFileExplorerDisplay(file);
-        this.markdownLinkService.updateMarkdownLinksForFile(file);
+    // 设置事件订阅
+    private setupEventSubscriptions(): void {
+        logger.log('设置事件订阅...');
+        
+        // 订阅文件创建事件
+        this.unsubscribers.push(
+            this.eventManagerService.subscribe(FileEventType.CREATE, this.handleFileEvent.bind(this))
+        );
+        
+        // 订阅文件修改事件
+        this.unsubscribers.push(
+            this.eventManagerService.subscribe(FileEventType.MODIFY, this.handleFileEvent.bind(this))
+        );
+        
+        // 订阅文件重命名事件
+        this.unsubscribers.push(
+            this.eventManagerService.subscribe(FileEventType.RENAME, this.handleFileEvent.bind(this))
+        );
+        
+        // 订阅文件删除事件
+        this.unsubscribers.push(
+            this.eventManagerService.subscribe(FileEventType.DELETE, this.handleFileEvent.bind(this))
+        );
+        
+        // 订阅元数据变更事件
+        this.unsubscribers.push(
+            this.eventManagerService.subscribe(FileEventType.METADATA, this.handleFileEvent.bind(this))
+        );
+        
+        logger.log('事件订阅设置完成');
     }
     
-    // 文件修改事件处理
-    public onFileModify(file: TFile): void {
-        this.lastUpdatedFiles.add(file.path);
-        // 清除该文件的缓存，强制重新处理
-        this.fileDisplayCache.deletePath(file.path);
-        this.fileProcessorService.processFile(file);
-        this.updateFileExplorerDisplay(file);
-        this.markdownLinkService.updateMarkdownLinksForFile(file);
+    // 处理文件事件
+    private async handleFileEvent(event: FileEvent): Promise<void> {
+        logger.log(`处理文件事件: ${event.type} - 文件: ${event.file.path}`);
         
-        // 检查当前活跃编辑器，如果存在则刷新链接装饰
-        const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-        if (view && view.editor) {
-            // 如果当前编辑的就是修改的文件，或者文件包含对修改文件的链接，都需要刷新装饰
-            this.editorLinkDecorator.processLinks();
+        const file = event.file;
+        
+        switch (event.type) {
+            case FileEventType.CREATE:
+                await this.handleFileOperation(file, 'create');
+                break;
+                
+            case FileEventType.MODIFY:
+                await this.handleFileOperation(file, 'modify');
+                break;
+                
+            case FileEventType.RENAME:
+                await this.handleFileOperation(file, 'rename', event.oldPath);
+                break;
+                
+            case FileEventType.DELETE:
+                await this.handleFileOperation(file, 'delete');
+                break;
+                
+            case FileEventType.METADATA:
+                await this.handleFileOperation(file, 'metadata');
+                break;
+                
+            default:
+                logger.log(`未处理的事件类型: ${event.type}`);
         }
     }
-    
-    // 文件重命名事件处理
-    public onFileRename(file: TFile, oldPath: string): void {
-        this.lastUpdatedFiles.add(file.path);
-        // 清除旧路径的缓存
-        this.fileDisplayCache.deletePath(oldPath);
-        // 处理新路径
-        this.fileProcessorService.processFile(file);
-        this.updateFileExplorerDisplay(file);
-        this.markdownLinkService.updateMarkdownLinksForFile(file);
+
+    // 处理各种文件操作
+    public async handleFileOperation(file: TFile, operation: 'create' | 'modify' | 'rename' | 'delete' | 'metadata', oldPath?: string): Promise<void> {
+        if (file?.path) {
+            this.lastUpdatedFiles.add(file.path);
+        }
+        
+        switch (operation) {
+            case 'create':
+                await this.fileProcessorService.processFile(file);
+                await this.updateFileExplorerDisplay(file);
+                this.markdownLinkService.updateMarkdownLinksForFile(file);
+                break;
+                
+            case 'modify':
+                // 清除该文件的缓存，强制重新处理
+                if (file?.path) {
+                    this.fileDisplayCache.deletePath(file.path);
+                }
+                await this.fileProcessorService.processFile(file);
+                await this.updateFileExplorerDisplay(file);
+                this.markdownLinkService.updateMarkdownLinksForFile(file);
+                
+                // 检查当前活跃编辑器，如果存在则刷新链接装饰
+                const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+                if (view && view.editor) {
+                    this.editorLinkDecorator.processLinks();
+                }
+                break;
+                
+            case 'rename':
+                if (oldPath) {
+                    // 清除旧路径的缓存
+                    this.fileDisplayCache.deletePath(oldPath);
+                }
+                // 处理新路径
+                await this.fileProcessorService.processFile(file);
+                await this.updateFileExplorerDisplay(file);
+                this.markdownLinkService.updateMarkdownLinksForFile(file);
+                break;
+                
+            case 'delete':
+                if (file?.path) {
+                    // 从缓存中删除
+                    this.fileDisplayCache.deletePath(file.path);
+                }
+                break;
+                
+            case 'metadata':
+                if (file?.path) {
+                    // 清除缓存并重新处理
+                    this.fileDisplayCache.deletePath(file.path);
+                    await this.fileProcessorService.processFile(file);
+                    await this.updateFileExplorerDisplay(file);
+                    this.markdownLinkService.updateMarkdownLinksForFile(file);
+                }
+                break;
+        }
     }
-    
-    // 文件删除事件处理
-    public onFileDelete(file: TAbstractFile): void {
-        // 从缓存中移除已删除的文件
-        this.fileDisplayCache.deletePath(file.path);
-    }
-    
-    // 元数据更改事件处理
-    public onMetadataChange(file: TFile): void {
-        this.updateFileExplorerDisplay(file);
-    }
-    
-    // 更新文件资源管理器中的文件显示
+
     public async updateFileExplorerDisplay(file: TFile): Promise<void> {
-        await this.fileExplorerDisplayService.updateFileExplorerDisplay(file);
+        return this.fileExplorerDisplayService.updateFileExplorerDisplay(file);
     }
-    
-    // 更新所有文件的显示
+
     public updateAllFilesDisplay(clearCache: boolean = true): void {
-        // 使用节流版本的方法
         this.throttledUpdateAllFilesDisplay(clearCache);
     }
-    
-    // 实际执行更新的方法
-    private performUpdateAllFilesDisplay(clearCache: boolean = true): void {
-        // 如果有记录的变更文件，只更新这些文件
-        if (this.lastUpdatedFiles.size > 0 && !clearCache) {
-            // 获取记录的变更文件
-            const filesToUpdate = this.plugin.app.vault.getMarkdownFiles()
-                .filter(file => this.lastUpdatedFiles.has(file.path));
-                
-            // 处理这些文件
-            if (filesToUpdate.length > 0) {
-                // 优先处理当前可见的文件
-                const { visibleFiles, otherFiles } = this.fileProcessorService.separateFilesByVisibility(filesToUpdate);
-                
-                if (visibleFiles.length > 0) {
-                    this.fileProcessorService.getBatchProcessor().addToProcessQueue(visibleFiles, true);
-                }
-                
-                if (otherFiles.length > 0) {
-                    this.fileProcessorService.getBatchProcessor().addToProcessQueue(otherFiles, false);
-                }
-                
-                // 更新完成后清空记录
-                this.lastUpdatedFiles.clear();
-                return;
-            }
+
+    private async performUpdateAllFilesDisplay(clearCache: boolean = true): Promise<void> {
+        logger.log('更新所有文件显示...');
+        
+        try {
+            // 直接使用fileProcessorService的方法，它会处理缓存清理
+            this.fileProcessorService.updateAllFilesDisplay(clearCache);
+            
+            // 获取文件数量用于日志
+            const files = this.plugin.app.vault.getMarkdownFiles();
+            logger.log(`已更新所有 ${files.length} 个文件的显示`);
+        } catch (error) {
+            logger.error('更新所有文件显示时发生错误:', error);
         }
-        
-        // 如果没有记录的变更文件或需要清除缓存，执行完整更新
-        this.fileProcessorService.updateAllFilesDisplay(clearCache);
-        
-        // 更新当前编辑器中的链接装饰
-        const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-        // 确保视图存在、是编辑模式、且有有效的编辑器
-        if (view && view.editor && 
-            // 确保视图不是预览模式
-            !(view as any).previewMode &&
-            // 确保设置中启用了装饰功能
-            this.plugin.settings.enableEditorLinkDecorations) {
-            try {
-                this.editorLinkDecorator.processLinks();
-            } catch (error) {
-                logger.error("更新编辑器链接装饰时发生错误", error);
-            }
-        }
-        
-        // 完成后清空记录
-        this.lastUpdatedFiles.clear();
     }
-    
-    // 恢复所有原始显示名称
+
     public restoreAllDisplayNames(): void {
-        this.fileExplorerDisplayService.restoreAllDisplayNames();
-        
-        // 清理编辑器装饰
-        if (this.editorLinkDecorator) {
-            this.editorLinkDecorator.dispose();
+        try {
+            // 恢复文件浏览器中的原始文件名
+            this.fileExplorerDisplayService.restoreAllDisplayNames();
+        } catch (error) {
+            logger.error('恢复所有显示名称时发生错误:', error);
         }
     }
-    
-    // 重置观察器
+
     public resetObservers(): void {
         this.fileExplorerDisplayService.resetObservers();
     }
-    
-    // 获取缓存实例
+
     public getCache(): IFileDisplayCache {
         return this.fileDisplayCache;
     }
-    
-    // 清理所有资源的方法
+
     public dispose(): void {
-        // 清理所有定时器
-        if (this.timerService) {
-            this.timerService.clearAll();
-        }
+        logger.log('释放 FileDisplayService 资源...');
         
-        if (this.updateTimer) {
-            window.clearInterval(this.updateTimer);
+        // 取消所有事件订阅
+        this.unsubscribers.forEach(unsubscribe => unsubscribe());
+        this.unsubscribers = [];
+        
+        // 清理定时器资源
+        if (this.updateTimer !== null) {
+            this.timerService.clearTimeout(this.updateTimer);
             this.updateTimer = null;
         }
         
-        // 停止缓存清理
-        if (this.fileDisplayCache) {
-            this.fileDisplayCache.stopPeriodicCleanup();
-        }
+        // 清空上次更新文件集合
+        this.lastUpdatedFiles.clear();
         
-        // 清理文件资源管理器观察器
-        if (this.fileExplorerDisplayService) {
-            this.fileExplorerDisplayService.resetObservers();
-        }
-        
-        // 清理编辑器装饰器
-        if (this.editorLinkDecorator) {
-            this.editorLinkDecorator.dispose();
-        }
-        
-        // 清理事件管理器
-        if (this.eventManagerService) {
-            this.eventManagerService.dispose();
-        }
-        
-        // 恢复所有显示名称
-        this.restoreAllDisplayNames();
+        logger.log('FileDisplayService 资源已释放');
     }
 } 

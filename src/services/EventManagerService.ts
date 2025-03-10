@@ -1,83 +1,225 @@
 import { TFile, TAbstractFile } from 'obsidian';
-import type { IFilenameDisplayPlugin } from '../types';
+import type { ITitleExctratorPlugin } from '../types';
+import { Logger } from '../utils/logger';
+import { IEventManagerService } from './interfaces/IServices';
 
-export class EventManagerService {
-    private plugin: IFilenameDisplayPlugin;
+const logger = new Logger('EventManagerService');
+
+// 定义事件类型
+export enum FileEventType {
+    CREATE = 'file_create',
+    MODIFY = 'file_modify',
+    RENAME = 'file_rename',
+    DELETE = 'file_delete',
+    METADATA = 'file_metadata',
+    DISPLAY_UPDATE = 'display_update',
+    EXPLORER_REFRESH = 'explorer_refresh'
+}
+
+// 定义事件接口
+export interface FileEvent {
+    type: FileEventType;
+    file: TFile;
+    oldPath?: string;
+    data?: any;
+}
+
+// 定义订阅者回调函数类型
+export type EventCallback = (event: FileEvent) => Promise<void> | void;
+
+export class EventManagerService implements IEventManagerService {
+    private plugin: ITitleExctratorPlugin;
+    private eventHandlers: Map<string, any[]> = new Map();
+    private subscribers: Map<FileEventType, Set<EventCallback>> = new Map();
     
-    // 回调函数类型
-    private onFileCreateFn: (file: TFile) => void;
-    private onFileModifyFn: (file: TFile) => void;
-    private onFileRenameFn: (file: TFile, oldPath: string) => void;
-    private onFileDeleteFn: (file: TAbstractFile) => void;
-    private onMetadataChangeFn: (file: TFile) => void;
-
-    constructor(
-        plugin: IFilenameDisplayPlugin,
-        onFileCreateFn: (file: TFile) => void,
-        onFileModifyFn: (file: TFile) => void,
-        onFileRenameFn: (file: TFile, oldPath: string) => void,
-        onFileDeleteFn: (file: TAbstractFile) => void,
-        onMetadataChangeFn: (file: TFile) => void
-    ) {
+    constructor(plugin: ITitleExctratorPlugin) {
         this.plugin = plugin;
+        logger.log('事件管理器初始化');
+
+        // 初始化事件类型订阅集合
+        Object.values(FileEventType).forEach(eventType => {
+            this.subscribers.set(eventType as FileEventType, new Set());
+        });
+    }
+    
+    // 订阅事件
+    public subscribe(eventType: FileEventType, callback: EventCallback): () => void {
+        logger.log(`订阅事件：${eventType}`);
+        const callbacks = this.subscribers.get(eventType);
+        if (!callbacks) {
+            throw new Error(`未知的事件类型: ${eventType}`);
+        }
         
-        this.onFileCreateFn = onFileCreateFn;
-        this.onFileModifyFn = onFileModifyFn;
-        this.onFileRenameFn = onFileRenameFn;
-        this.onFileDeleteFn = onFileDeleteFn;
-        this.onMetadataChangeFn = onMetadataChangeFn;
+        callbacks.add(callback);
+        
+        // 返回取消订阅函数
+        return () => {
+            this.unsubscribe(eventType, callback);
+        };
+    }
+    
+    // 取消订阅
+    public unsubscribe(eventType: FileEventType, callback: EventCallback): void {
+        logger.log(`取消订阅事件：${eventType}`);
+        const callbacks = this.subscribers.get(eventType);
+        if (callbacks) {
+            callbacks.delete(callback);
+        }
+    }
+    
+    // 分发事件
+    public async dispatch(event: FileEvent): Promise<void> {
+        logger.log(`分发事件: ${event.type} - 文件: ${event.file.path}`);
+        const callbacks = this.subscribers.get(event.type);
+        
+        if (!callbacks || callbacks.size === 0) {
+            logger.log(`没有订阅者处理事件: ${event.type}`);
+            return;
+        }
+        
+        logger.log(`找到 ${callbacks.size} 个订阅者处理事件: ${event.type}`);
+        
+        // 并行执行所有回调，但捕获潜在错误
+        const promises = Array.from(callbacks).map(async (callback) => {
+            try {
+                const result = callback(event);
+                if (result instanceof Promise) {
+                    await result;
+                }
+            } catch (error) {
+                logger.error(`处理事件 ${event.type} 时发生错误:`, error);
+            }
+        });
+        
+        await Promise.all(promises);
     }
     
     // 设置 Vault 事件监听器
     public setupVaultEventListeners(): void {
+        logger.log('设置 Vault 事件监听器');
+        
         // 监听文件创建事件
-        this.plugin.registerEvent(
+        const createHandler = this.plugin.registerEvent(
             this.plugin.app.vault.on('create', (file: TAbstractFile) => {
                 if (file instanceof TFile) {
-                    this.onFileCreateFn(file);
+                    this.dispatch({
+                        type: FileEventType.CREATE,
+                        file: file
+                    }).catch(err => {
+                        logger.error('处理文件创建事件时出错:', err);
+                    });
                 }
             })
         );
+        this.addEventHandler('vault', createHandler);
 
         // 监听文件修改事件
-        this.plugin.registerEvent(
+        const modifyHandler = this.plugin.registerEvent(
             this.plugin.app.vault.on('modify', (file: TAbstractFile) => {
                 if (file instanceof TFile) {
-                    this.onFileModifyFn(file);
+                    this.dispatch({
+                        type: FileEventType.MODIFY,
+                        file: file
+                    }).catch(err => {
+                        logger.error('处理文件修改事件时出错:', err);
+                    });
                 }
             })
         );
+        this.addEventHandler('vault', modifyHandler);
 
         // 监听文件重命名事件
-        this.plugin.registerEvent(
+        const renameHandler = this.plugin.registerEvent(
             this.plugin.app.vault.on('rename', (file: TAbstractFile, oldPath: string) => {
                 if (file instanceof TFile) {
-                    this.onFileRenameFn(file, oldPath);
+                    this.dispatch({
+                        type: FileEventType.RENAME,
+                        file: file,
+                        oldPath: oldPath
+                    }).catch(err => {
+                        logger.error('处理文件重命名事件时出错:', err);
+                    });
                 }
             })
         );
+        this.addEventHandler('vault', renameHandler);
 
         // 监听文件删除事件
-        this.plugin.registerEvent(
+        const deleteHandler = this.plugin.registerEvent(
             this.plugin.app.vault.on('delete', (file: TAbstractFile) => {
-                this.onFileDeleteFn(file);
+                if (file instanceof TFile) {
+                    this.dispatch({
+                        type: FileEventType.DELETE,
+                        file: file
+                    }).catch(err => {
+                        logger.error('处理文件删除事件时出错:', err);
+                    });
+                }
             })
         );
+        this.addEventHandler('vault', deleteHandler);
+        
+        logger.log('Vault 事件监听器设置完成');
     }
     
     // 设置元数据事件监听器
     public setupMetadataEventListeners(): void {
+        logger.log('设置元数据事件监听器');
+        
         // 监听元数据缓存变更
-        this.plugin.registerEvent(
-            this.plugin.app.metadataCache.on('changed', (file) => {
+        const metadataHandler = this.plugin.registerEvent(
+            this.plugin.app.metadataCache.on('changed', (file: TFile) => {
                 if (file instanceof TFile) {
                     // 检查是否需要更新显示
                     const metadata = this.plugin.app.metadataCache.getFileCache(file);
                     if (metadata?.frontmatter && 'title' in metadata.frontmatter) {
-                        this.onMetadataChangeFn(file);
+                        this.dispatch({
+                            type: FileEventType.METADATA,
+                            file: file,
+                            data: { frontmatter: metadata.frontmatter }
+                        }).catch(err => {
+                            logger.error('处理元数据变更事件时出错:', err);
+                        });
                     }
                 }
             })
         );
+        this.addEventHandler('metadata', metadataHandler);
+        
+        logger.log('元数据事件监听器设置完成');
+    }
+    
+    // 添加事件处理器到集合
+    private addEventHandler(type: string, handler: any): void {
+        if (!this.eventHandlers.has(type)) {
+            this.eventHandlers.set(type, []);
+        }
+        
+        this.eventHandlers.get(type)?.push(handler);
+    }
+    
+    // 清理所有注册的事件
+    public dispose(): void {
+        logger.log('正在清理事件管理器资源...');
+        
+        // 清理所有注册的事件处理器
+        this.eventHandlers.forEach(handlers => {
+            handlers.forEach(handler => {
+                // 只有当 handler 是函数时才调用
+                if (typeof handler === 'function') {
+                    handler();
+                }
+            });
+        });
+        
+        // 清空事件处理器集合
+        this.eventHandlers.clear();
+        
+        // 清空所有订阅者
+        this.subscribers.forEach(callbacks => {
+            callbacks.clear();
+        });
+        
+        logger.log('事件管理器资源已清理');
     }
 } 

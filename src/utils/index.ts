@@ -2,4 +2,5 @@
 export * from './logger';
 export * from './FileProcessor';
 export * from './ErrorHandler';
-export * from './decorators'; 
+export * from './decorators';
+export * from './functions'; 

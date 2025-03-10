@@ -2,6 +2,7 @@ import { TFile, TAbstractFile } from 'obsidian';
 import { FileDisplayResult } from '../../types';
 import { Extension } from '@codemirror/state';
 import { IErrorHandler } from './IErrorHandler';
+import { FileEventType, EventCallback, FileEvent } from '../EventManagerService';
 
 // 导出错误处理服务接口
 export type { IErrorHandler };
@@ -54,6 +55,9 @@ export interface IEditorLinkDecorator {
 export interface IEventManagerService {
     setupVaultEventListeners(): void;
     setupMetadataEventListeners(): void;
+    subscribe(eventType: FileEventType, callback: EventCallback): () => void;
+    unsubscribe(eventType: FileEventType, callback: EventCallback): void;
+    dispatch(event: FileEvent): Promise<void>;
     dispose(): void;
 }
 

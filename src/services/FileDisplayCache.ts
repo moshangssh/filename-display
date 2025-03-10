@@ -179,8 +179,12 @@ export class FileDisplayCache {
     public clearAll(): void {
         this.fileDisplayCache.clear();
         this.processedFiles.clear();
-        this.originalDisplayNames.clear();
-        // WeakMap 不需要手动清理，会自动垃圾回收
+        // 不清除原始显示名称缓存，因为这用于恢复文件名
+    }
+    
+    // 实现IFileDisplayCache接口中的clear方法
+    public clear(): void {
+        this.clearAll();
     }
     
     // 清除过期缓存
