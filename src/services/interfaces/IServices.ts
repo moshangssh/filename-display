@@ -32,8 +32,10 @@ export interface IFileExplorerDisplayService {
 
 // 文件处理服务接口
 export interface IFileProcessorService {
-    processFile(file: TFile): Promise<FileDisplayResult | undefined>;
+    processFile(file: TFile): Promise<FileDisplayResult | undefined> | FileDisplayResult;
     updateAllFilesDisplay(clearCache?: boolean): void;
+    separateFilesByVisibility(files: TFile[]): { visibleFiles: TFile[], otherFiles: TFile[] };
+    getBatchProcessor(): any;
 }
 
 // Markdown链接服务接口

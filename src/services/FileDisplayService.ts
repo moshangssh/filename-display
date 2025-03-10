@@ -1,5 +1,5 @@
 import { TFile, TAbstractFile, MarkdownView } from 'obsidian';
-import type { IFilenameDisplayPlugin, FileDisplayResult } from '../types';
+import type { ITitleExctratorPlugin, FileDisplayResult } from '../types';
 import { 
     IFileDisplayService, 
     IFilenameParser, 
@@ -17,9 +17,35 @@ import { ServiceContainer, SERVICE_TYPES } from './di/ServiceContainer';
 // 创建日志记录器
 const logger = new Logger('FileDisplayService');
 
+// 节流函数，限制函数执行频率
+function throttle<T extends (...args: any[]) => any>(
+    func: T,
+    wait: number
+): (...args: Parameters<T>) => void {
+    let timeout: number | null = null;
+    let lastExec = 0;
+
+    return function(this: any, ...args: Parameters<T>) {
+        const context = this;
+        const now = Date.now();
+        const remaining = wait - (now - lastExec);
+
+        if (remaining <= 0 || remaining > wait) {
+            lastExec = now;
+            func.apply(context, args);
+        } else if (!timeout) {
+            timeout = window.setTimeout(() => {
+                lastExec = Date.now();
+                timeout = null;
+                func.apply(context, args);
+            }, remaining);
+        }
+    };
+}
+
 // 主服务类，协调其他组件
 export class FileDisplayService implements IFileDisplayService {
-    private plugin: IFilenameDisplayPlugin;
+    private plugin: ITitleExctratorPlugin;
     private filenameParser: IFilenameParser;
     private fileDisplayCache: IFileDisplayCache;
     private fileExplorerDisplayService: IFileExplorerDisplayService;
@@ -29,9 +55,11 @@ export class FileDisplayService implements IFileDisplayService {
     private editorLinkDecorator: IEditorLinkDecorator;
     private timerService: ITimerService;
     private updateTimer: number | null = null;
+    private throttledUpdateAllFilesDisplay: (clearCache?: boolean) => void;
+    private lastUpdatedFiles: Set<string> = new Set(); // 用于记录上次更新的文件
 
     constructor(
-        plugin: IFilenameDisplayPlugin,
+        plugin: ITitleExctratorPlugin,
         container: ServiceContainer
     ) {
         this.plugin = plugin;
@@ -46,6 +74,9 @@ export class FileDisplayService implements IFileDisplayService {
         this.eventManagerService = container.get<IEventManagerService>(SERVICE_TYPES.EventManagerService);
         this.timerService = container.get<ITimerService>(SERVICE_TYPES.TimerService);
         
+        // 创建节流版本的更新方法（2秒内最多执行一次）
+        this.throttledUpdateAllFilesDisplay = throttle(this.performUpdateAllFilesDisplay.bind(this), 2000);
+        
         // 改用布局就绪事件初始化
         this.plugin.app.workspace.onLayoutReady(() => {
             this.fileExplorerDisplayService.setupObservers();
@@ -57,6 +88,7 @@ export class FileDisplayService implements IFileDisplayService {
     
     // 文件创建事件处理
     public onFileCreate(file: TFile): void {
+        this.lastUpdatedFiles.add(file.path);
         this.fileProcessorService.processFile(file);
         this.updateFileExplorerDisplay(file);
         this.markdownLinkService.updateMarkdownLinksForFile(file);
@@ -64,6 +96,7 @@ export class FileDisplayService implements IFileDisplayService {
     
     // 文件修改事件处理
     public onFileModify(file: TFile): void {
+        this.lastUpdatedFiles.add(file.path);
         // 清除该文件的缓存，强制重新处理
         this.fileDisplayCache.deletePath(file.path);
         this.fileProcessorService.processFile(file);
@@ -80,6 +113,7 @@ export class FileDisplayService implements IFileDisplayService {
     
     // 文件重命名事件处理
     public onFileRename(file: TFile, oldPath: string): void {
+        this.lastUpdatedFiles.add(file.path);
         // 清除旧路径的缓存
         this.fileDisplayCache.deletePath(oldPath);
         // 处理新路径
@@ -106,6 +140,38 @@ export class FileDisplayService implements IFileDisplayService {
     
     // 更新所有文件的显示
     public updateAllFilesDisplay(clearCache: boolean = true): void {
+        // 使用节流版本的方法
+        this.throttledUpdateAllFilesDisplay(clearCache);
+    }
+    
+    // 实际执行更新的方法
+    private performUpdateAllFilesDisplay(clearCache: boolean = true): void {
+        // 如果有记录的变更文件，只更新这些文件
+        if (this.lastUpdatedFiles.size > 0 && !clearCache) {
+            // 获取记录的变更文件
+            const filesToUpdate = this.plugin.app.vault.getMarkdownFiles()
+                .filter(file => this.lastUpdatedFiles.has(file.path));
+                
+            // 处理这些文件
+            if (filesToUpdate.length > 0) {
+                // 优先处理当前可见的文件
+                const { visibleFiles, otherFiles } = this.fileProcessorService.separateFilesByVisibility(filesToUpdate);
+                
+                if (visibleFiles.length > 0) {
+                    this.fileProcessorService.getBatchProcessor().addToProcessQueue(visibleFiles, true);
+                }
+                
+                if (otherFiles.length > 0) {
+                    this.fileProcessorService.getBatchProcessor().addToProcessQueue(otherFiles, false);
+                }
+                
+                // 更新完成后清空记录
+                this.lastUpdatedFiles.clear();
+                return;
+            }
+        }
+        
+        // 如果没有记录的变更文件或需要清除缓存，执行完整更新
         this.fileProcessorService.updateAllFilesDisplay(clearCache);
         
         // 更新当前编辑器中的链接装饰
@@ -122,6 +188,9 @@ export class FileDisplayService implements IFileDisplayService {
                 logger.error("更新编辑器链接装饰时发生错误", error);
             }
         }
+        
+        // 完成后清空记录
+        this.lastUpdatedFiles.clear();
     }
     
     // 恢复所有原始显示名称

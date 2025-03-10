@@ -1,17 +1,17 @@
-import { TFile, MarkdownView } from 'obsidian';
-import type { IFilenameDisplayPlugin, FileDisplayResult } from '../types';
+import { TFile, MarkdownView, WorkspaceLeaf } from 'obsidian';
+import type { ITitleExctratorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from './FilenameParser';
 import { FileDisplayCache } from './FileDisplayCache';
 import { BatchProcessor } from './BatchProcessor';
 
 export class FileProcessorService {
-    private plugin: IFilenameDisplayPlugin;
+    private plugin: ITitleExctratorPlugin;
     private filenameParser: FilenameParser;
     private fileDisplayCache: FileDisplayCache;
     private batchProcessor: BatchProcessor;
     
     constructor(
-        plugin: IFilenameDisplayPlugin,
+        plugin: ITitleExctratorPlugin,
         filenameParser: FilenameParser,
         fileDisplayCache: FileDisplayCache,
         updateFileDisplayFn: (file: TFile) => Promise<void>
@@ -67,17 +67,62 @@ export class FileProcessorService {
             this.fileDisplayCache.clearExpired();
         }
 
-        // 获取所有可见的、在启用目录中的文件
-        const files = this.getVisibleFiles()
+        // 获取所有启用目录中的文件
+        const allEligibleFiles = this.plugin.app.vault.getMarkdownFiles()
             .filter(file => this.filenameParser.isFileInEnabledFolder(file));
         
-        // 批量处理文件
-        if (files.length > 0) {
-            this.batchProcessor.addToProcessQueue(files);
+        if (allEligibleFiles.length === 0) return;
+
+        // 分离可见文件和其他文件
+        const { visibleFiles, otherFiles } = this.separateFilesByVisibility(allEligibleFiles);
+        
+        // 先处理可见文件
+        if (visibleFiles.length > 0) {
+            this.batchProcessor.addToProcessQueue(visibleFiles, true); // 高优先级
+        }
+        
+        // 然后处理其他文件
+        if (otherFiles.length > 0) {
+            this.batchProcessor.addToProcessQueue(otherFiles, false); // 低优先级
         }
     }
     
-    // 获取可见文件
+    // 将文件分为可见文件和其他文件
+    public separateFilesByVisibility(files: TFile[]): { visibleFiles: TFile[], otherFiles: TFile[] } {
+        // 获取当前所有可见的文件
+        const visibleFiles = new Set<string>();
+        
+        // 添加当前活动编辑器中的文件
+        const activeFile = this.plugin.app.workspace.getActiveViewOfType(MarkdownView)?.file;
+        if (activeFile) {
+            visibleFiles.add(activeFile.path);
+        }
+        
+        // 添加所有当前打开的标签页中的文件
+        this.plugin.app.workspace.iterateAllLeaves((leaf: WorkspaceLeaf) => {
+            // 安全地获取文件
+            const fileFromView = leaf.view instanceof MarkdownView ? leaf.view.file : null;
+            if (fileFromView instanceof TFile) {
+                visibleFiles.add(fileFromView.path);
+            }
+        });
+        
+        // 分离文件
+        const visible: TFile[] = [];
+        const others: TFile[] = [];
+        
+        for (const file of files) {
+            if (visibleFiles.has(file.path)) {
+                visible.push(file);
+            } else {
+                others.push(file);
+            }
+        }
+        
+        return { visibleFiles: visible, otherFiles: others };
+    }
+    
+    // 获取可见文件（原方法，保留以兼容性）
     private getVisibleFiles(): TFile[] {
         // 获取用户可见的文件
         const openFiles = this.plugin.app.workspace.getActiveViewOfType(MarkdownView)?.file 

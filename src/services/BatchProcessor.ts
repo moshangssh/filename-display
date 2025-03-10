@@ -1,8 +1,14 @@
 import { TFile } from 'obsidian';
 
+// 文件队列项结构
+interface QueueItem {
+    file: TFile;
+    priority: boolean; // true 为高优先级，false 为普通优先级
+}
+
 // 批处理管理器类，负责处理文件处理队列
 export class BatchProcessor {
-    private processQueue: Array<TFile> = [];
+    private processQueue: Array<QueueItem> = [];
     private processingBatch = false;
     private batchSize = 50;
     private processFileCallback: (file: TFile) => Promise<void>;
@@ -13,8 +19,11 @@ export class BatchProcessor {
     }
     
     // 添加文件到处理队列
-    public addToProcessQueue(files: TFile[]): void {
-        this.processQueue.push(...files);
+    public addToProcessQueue(files: TFile[], highPriority: boolean = false): void {
+        // 将文件包装为队列项并添加到队列
+        const queueItems = files.map(file => ({ file, priority: highPriority }));
+        this.processQueue.push(...queueItems);
+        
         if (!this.processingBatch) {
             this.processBatch();
         }
@@ -28,7 +37,16 @@ export class BatchProcessor {
         }
 
         this.processingBatch = true;
-        const batch = this.processQueue.splice(0, this.batchSize);
+        
+        // 对队列进行排序，高优先级的项目排在前面
+        this.processQueue.sort((a, b) => {
+            if (a.priority === b.priority) return 0;
+            return a.priority ? -1 : 1; // 高优先级在前
+        });
+        
+        // 取出前 batchSize 个项目处理
+        const batchItems = this.processQueue.splice(0, this.batchSize);
+        const batch = batchItems.map(item => item.file);
 
         if ('requestIdleCallback' in window) {
             window.requestIdleCallback(() => {
