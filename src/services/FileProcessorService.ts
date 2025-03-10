@@ -3,26 +3,31 @@ import type { ITitleExctratorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from './FilenameParser';
 import { FileDisplayCache } from './FileDisplayCache';
 import { BatchProcessor } from './BatchProcessor';
+import { ITimerService } from './interfaces/IServices';
 
 export class FileProcessorService {
     private plugin: ITitleExctratorPlugin;
     private filenameParser: FilenameParser;
     private fileDisplayCache: FileDisplayCache;
     private batchProcessor: BatchProcessor;
+    private timerService: ITimerService;
     
     constructor(
         plugin: ITitleExctratorPlugin,
         filenameParser: FilenameParser,
         fileDisplayCache: FileDisplayCache,
+        timerService: ITimerService,
         updateFileDisplayFn: (file: TFile) => Promise<void>
     ) {
         this.plugin = plugin;
         this.filenameParser = filenameParser;
         this.fileDisplayCache = fileDisplayCache;
+        this.timerService = timerService;
         
-        // 初始化批处理器
+        // 初始化批处理器，传入timerService
         this.batchProcessor = new BatchProcessor(
             updateFileDisplayFn,
+            this.timerService,
             50
         );
     }

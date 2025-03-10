@@ -30,7 +30,6 @@ export class FileDisplayService implements IFileDisplayService {
     private editorLinkDecorator: IEditorLinkDecorator;
     private timerService: ITimerService;
     private eventManagerService: IEventManagerService;
-    private updateTimer: number | null = null;
     private throttledUpdateAllFilesDisplay: (clearCache?: boolean) => void;
     private lastUpdatedFiles: Set<string> = new Set(); // 用于记录上次更新的文件
     private unsubscribers: (() => void)[] = []; // 存储取消订阅函数
@@ -54,7 +53,8 @@ export class FileDisplayService implements IFileDisplayService {
         // 使用节流函数包装更新函数，避免短时间内多次更新
         this.throttledUpdateAllFilesDisplay = throttle(
             (clearCache?: boolean) => this.performUpdateAllFilesDisplay(clearCache), 
-            3000
+            3000,
+            this.timerService
         );
         
         // 设置事件订阅
@@ -230,12 +230,6 @@ export class FileDisplayService implements IFileDisplayService {
         // 取消所有事件订阅
         this.unsubscribers.forEach(unsubscribe => unsubscribe());
         this.unsubscribers = [];
-        
-        // 清理定时器资源
-        if (this.updateTimer !== null) {
-            this.timerService.clearTimeout(this.updateTimer);
-            this.updateTimer = null;
-        }
         
         // 清空上次更新文件集合
         this.lastUpdatedFiles.clear();

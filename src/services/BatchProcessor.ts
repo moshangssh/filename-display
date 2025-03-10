@@ -1,4 +1,5 @@
 import { TFile } from 'obsidian';
+import { ITimerService } from './interfaces/IServices';
 
 // 文件队列项结构
 interface QueueItem {
@@ -12,9 +13,15 @@ export class BatchProcessor {
     private processingBatch = false;
     private batchSize = 50;
     private processFileCallback: (file: TFile) => Promise<void>;
+    private timerService: ITimerService;
     
-    constructor(processFileCallback: (file: TFile) => Promise<void>, batchSize = 50) {
+    constructor(
+        processFileCallback: (file: TFile) => Promise<void>, 
+        timerService: ITimerService,
+        batchSize = 50
+    ) {
         this.processFileCallback = processFileCallback;
+        this.timerService = timerService;
         this.batchSize = batchSize;
     }
     
@@ -48,13 +55,10 @@ export class BatchProcessor {
         const batchItems = this.processQueue.splice(0, this.batchSize);
         const batch = batchItems.map(item => item.file);
 
-        if ('requestIdleCallback' in window) {
-            window.requestIdleCallback(() => {
-                this.processBatchItems(batch);
-            });
-        } else {
-            await this.processBatchItems(batch);
-        }
+        // 使用TimerService的requestIdleCallback
+        this.timerService.requestIdleCallback(() => {
+            this.processBatchItems(batch);
+        });
     }
     
     // 处理批次中的项目

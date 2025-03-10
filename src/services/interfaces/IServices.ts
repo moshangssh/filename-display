@@ -67,6 +67,8 @@ export interface ITimerService {
     setInterval(callback: () => void, delay: number): number;
     clearTimeout(id: number): void;
     clearInterval(id: number): void;
+    requestIdleCallback(callback: () => void): number;
+    cancelIdleCallback(id: number): void;
     clearAll(): void;
     dispose(): void;
 }

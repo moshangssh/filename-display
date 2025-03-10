@@ -2,15 +2,19 @@
  * 通用工具函数集合
  */
 
+import { ITimerService } from '../services/interfaces/IServices';
+
 /**
  * 节流函数 - 限制函数执行频率
  * @param func 要执行的函数
  * @param wait 等待时间（毫秒）
+ * @param timerService 可选的TimerService实例，如不提供则直接使用window的计时器
  * @returns 节流后的函数
  */
 export function throttle<T extends (...args: any[]) => any>(
     func: T,
-    wait: number
+    wait: number,
+    timerService?: ITimerService
 ): (...args: Parameters<T>) => void {
     let timeout: number | null = null;
     let lastExec = 0;
@@ -24,11 +28,17 @@ export function throttle<T extends (...args: any[]) => any>(
             lastExec = now;
             func.apply(context, args);
         } else if (!timeout) {
-            timeout = window.setTimeout(() => {
+            const callback = () => {
                 lastExec = Date.now();
                 timeout = null;
                 func.apply(context, args);
-            }, remaining);
+            };
+            
+            if (timerService) {
+                timeout = timerService.setTimeout(callback, remaining);
+            } else {
+                timeout = window.setTimeout(callback, remaining);
+            }
         }
     };
 } 

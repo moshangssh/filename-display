@@ -113,6 +113,7 @@ export default class TitleExctratorPlugin extends Plugin {
             this,
             this.serviceContainer.get(SERVICE_TYPES.FilenameParser),
             this.serviceContainer.get(SERVICE_TYPES.FileDisplayCache),
+            this.serviceContainer.get(SERVICE_TYPES.TimerService),
             async (file) => {
                 // 在这里，我们还没有FileExplorerDisplayService实例
                 // 返回Promise以满足接口要求
