@@ -73,7 +73,7 @@ export default class TitleExctratorPlugin extends Plugin {
         // 初始化所有文件的显示
         this.fileDisplayService.updateAllFilesDisplay();
         
-        logger.log('Filename Display插件加载完成');
+        logger.log('TitleExtrator插件加载完成');
     }
     
     /**
@@ -228,7 +228,7 @@ export default class TitleExctratorPlugin extends Plugin {
 
     onunload() {
         // 恢复所有显示名称并清理资源
-        logger.log('卸载Filename Display插件...');
+        logger.log('卸载TitleExtrator插件...');
         
         try {
             if (this.serviceContainer) {
@@ -236,9 +236,9 @@ export default class TitleExctratorPlugin extends Plugin {
                 this.serviceContainer.dispose();
             }
             
-            logger.log('Filename Display插件已成功卸载并清理所有资源');
+            logger.log('TitleExtrator插件已成功卸载并清理所有资源');
         } catch (error) {
-            logger.error('卸载Filename Display插件时出错:', error);
+            logger.error('卸载TitleExtrator插件时出错:', error);
         }
     }
 
