@@ -1,7 +1,7 @@
 import { App, Editor, MarkdownView, Notice, Plugin, TFile } from 'obsidian';
-import { TitleExctratorSettings } from './types';
+import { TitleExtractorSettings } from './types';
 import { DEFAULT_SETTINGS } from './constants';
-import { TitleExctratorSettingTab } from './settings/SettingsTab';
+import { TitleExtractorSettingTab } from './settings/SettingsTab';
 import { FileDisplayService } from './services/FileDisplayService';
 import { FilenameParser } from './services/FilenameParser';
 import { FileDisplayCache } from './services/FileDisplayCache';
@@ -17,10 +17,10 @@ import { errorHandler } from './utils/ErrorHandler';
 import { Extension } from '@codemirror/state';
 import { createEditorExtensions } from './extensions/editor';
 
-const logger = new LoggerService().getLogger('TitleExctratorPlugin');
+const logger = new LoggerService().getLogger('TitleExtractorPlugin');
 
 // 创建 CodeMirror 扩展集合
-function createCombinedExtensions(plugin: TitleExctratorPlugin): Extension {
+function createCombinedExtensions(plugin: TitleExtractorPlugin): Extension {
     logger.log('创建 CodeMirror 扩展集合');
     
     // 获取服务容器中的服务
@@ -34,8 +34,8 @@ function createCombinedExtensions(plugin: TitleExctratorPlugin): Extension {
     return extensions;
 }
 
-export default class TitleExctratorPlugin extends Plugin {
-    settings: TitleExctratorSettings;
+export default class TitleExtractorPlugin extends Plugin {
+    settings: TitleExtractorSettings;
     serviceContainer: ServiceContainer;
     private fileDisplayService: FileDisplayService;
     private editorExtensions: Extension[] = [];
@@ -54,7 +54,7 @@ export default class TitleExctratorPlugin extends Plugin {
         this.fileDisplayService = this.serviceContainer.get<FileDisplayService>(SERVICE_TYPES.FileDisplayService);
 
         // 添加设置标签页
-        this.addSettingTab(new TitleExctratorSettingTab(this.app, this));
+        this.addSettingTab(new TitleExtractorSettingTab(this.app, this));
 
         // 监听布局变更事件
         this.registerEvent(
@@ -95,7 +95,7 @@ export default class TitleExctratorPlugin extends Plugin {
         // 注册定时器服务
         this.serviceContainer.register(
             SERVICE_TYPES.TimerService, 
-            new TimerService()
+            new TimerService(this)
         );
         
         // 注册文件名解析服务

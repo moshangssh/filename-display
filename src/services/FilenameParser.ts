@@ -1,13 +1,13 @@
 import { TFile, normalizePath } from 'obsidian';
-import type { ITitleExctratorPlugin, FileDisplayResult } from '../types';
+import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { ILoggerService } from './interfaces/IServices';
 
 // 文件名解析器类，负责文件显示名称的提取逻辑
 export class FilenameParser {
-    private plugin: ITitleExctratorPlugin;
+    private plugin: ITitleExtractorPlugin;
     private logger: ILoggerService;
     
-    constructor(plugin: ITitleExctratorPlugin, loggerService: ILoggerService) {
+    constructor(plugin: ITitleExtractorPlugin, loggerService: ILoggerService) {
         this.plugin = plugin;
         this.logger = loggerService.getLogger('FilenameParser');
         this.logger.info('FilenameParser 初始化完成');

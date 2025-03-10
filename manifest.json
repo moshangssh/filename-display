@@ -1,6 +1,6 @@
 {
-	"id": "title-exctrator",
-	"name": "TitleExctrator",
+	"id": "title-Extractor",
+	"name": "TitleExtractor",
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
 	"description": "根据正则表达式提取文件名中的内容来替换文件的显示名称",

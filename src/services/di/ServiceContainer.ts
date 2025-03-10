@@ -9,7 +9,7 @@ import {
     IFileDisplayService,
     ILoggerService
 } from '../interfaces/IServices';
-import { ITitleExctratorPlugin } from '../../types';
+import { ITitleExtractorPlugin } from '../../types';
 
 /**
  * 依赖注入服务容器，负责管理所有服务实例
@@ -17,16 +17,16 @@ import { ITitleExctratorPlugin } from '../../types';
 export class ServiceContainer {
     private static instance: ServiceContainer;
     private services: Map<string, any> = new Map();
-    private plugin: ITitleExctratorPlugin;
+    private plugin: ITitleExtractorPlugin;
 
-    private constructor(plugin: ITitleExctratorPlugin) {
+    private constructor(plugin: ITitleExtractorPlugin) {
         this.plugin = plugin;
     }
 
     /**
      * 获取服务容器单例
      */
-    public static getInstance(plugin?: ITitleExctratorPlugin): ServiceContainer {
+    public static getInstance(plugin?: ITitleExtractorPlugin): ServiceContainer {
         if (!ServiceContainer.instance && plugin) {
             ServiceContainer.instance = new ServiceContainer(plugin);
         }
@@ -61,7 +61,7 @@ export class ServiceContainer {
     /**
      * 获取插件实例
      */
-    public getPlugin(): ITitleExctratorPlugin {
+    public getPlugin(): ITitleExtractorPlugin {
         return this.plugin;
     }
 

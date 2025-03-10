@@ -1,5 +1,5 @@
 import { TFile, TAbstractFile, MarkdownView } from 'obsidian';
-import type { ITitleExctratorPlugin, FileDisplayResult } from '../types';
+import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { 
     IFileDisplayService, 
     IFilenameParser, 
@@ -18,7 +18,7 @@ import { FileEventType, FileEvent } from './EventManagerService';
 
 // 主服务类，协调其他组件
 export class FileDisplayService implements IFileDisplayService {
-    private plugin: ITitleExctratorPlugin;
+    private plugin: ITitleExtractorPlugin;
     private filenameParser: IFilenameParser;
     private fileDisplayCache: IFileDisplayCache;
     private fileExplorerDisplayService: IFileExplorerDisplayService;
@@ -33,7 +33,7 @@ export class FileDisplayService implements IFileDisplayService {
     private unsubscribers: (() => void)[] = []; // 存储取消订阅函数
 
     constructor(
-        plugin: ITitleExctratorPlugin,
+        plugin: ITitleExtractorPlugin,
         filenameParser: IFilenameParser,
         fileDisplayCache: IFileDisplayCache,
         fileExplorerDisplayService: IFileExplorerDisplayService,

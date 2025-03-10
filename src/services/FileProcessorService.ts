@@ -1,12 +1,12 @@
 import { TFile, MarkdownView, WorkspaceLeaf } from 'obsidian';
-import type { ITitleExctratorPlugin, FileDisplayResult } from '../types';
+import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from './FilenameParser';
 import { FileDisplayCache } from './FileDisplayCache';
 import { BatchProcessor } from './BatchProcessor';
 import { ITimerService, ILoggerService } from './interfaces/IServices';
 
 export class FileProcessorService {
-    private plugin: ITitleExctratorPlugin;
+    private plugin: ITitleExtractorPlugin;
     private filenameParser: FilenameParser;
     private fileDisplayCache: FileDisplayCache;
     private batchProcessor: BatchProcessor;
@@ -14,7 +14,7 @@ export class FileProcessorService {
     private logger: ILoggerService;
     
     constructor(
-        plugin: ITitleExctratorPlugin,
+        plugin: ITitleExtractorPlugin,
         filenameParser: FilenameParser,
         fileDisplayCache: FileDisplayCache,
         timerService: ITimerService,

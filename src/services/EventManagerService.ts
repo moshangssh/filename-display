@@ -1,5 +1,5 @@
 import { TFile, TAbstractFile } from 'obsidian';
-import type { ITitleExctratorPlugin } from '../types';
+import type { ITitleExtractorPlugin } from '../types';
 import { IEventManagerService, ILoggerService } from './interfaces/IServices';
 
 // 定义事件类型
@@ -25,12 +25,12 @@ export interface FileEvent {
 export type EventCallback = (event: FileEvent) => Promise<void> | void;
 
 export class EventManagerService implements IEventManagerService {
-    private plugin: ITitleExctratorPlugin;
+    private plugin: ITitleExtractorPlugin;
     private eventSubscribers: Map<FileEventType, Set<EventCallback>> = new Map();
     private eventHandlers: Map<string, any[]> = new Map();
     private logger: ILoggerService;
     
-    constructor(plugin: ITitleExctratorPlugin, loggerService: ILoggerService) {
+    constructor(plugin: ITitleExtractorPlugin, loggerService: ILoggerService) {
         this.plugin = plugin;
         this.logger = loggerService.getLogger('EventManagerService');
         

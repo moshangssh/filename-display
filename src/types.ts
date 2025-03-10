@@ -1,7 +1,7 @@
 import { Plugin } from 'obsidian';
 import { Extension } from '@codemirror/state';
 
-export interface TitleExctratorSettings {
+export interface TitleExtractorSettings {
     pattern: string;
     useYamlTitleWhenAvailable: boolean;
     preferFrontmatterTitle: boolean;
@@ -9,8 +9,8 @@ export interface TitleExctratorSettings {
     enableEditorLinkDecorations: boolean;
 }
 
-export interface ITitleExctratorPlugin extends Plugin {
-    settings: TitleExctratorSettings;
+export interface ITitleExtractorPlugin extends Plugin {
+    settings: TitleExtractorSettings;
     saveSettings(): Promise<void>;
     updateAllFilesDisplay(): void;
     registerEditorExtension(extension: Extension[]): void;
