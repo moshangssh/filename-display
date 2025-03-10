@@ -1,4 +1,4 @@
-import FilenameDisplayPlugin from './src/plugin';
+import TitleExctratorPlugin from './src/plugin';
 
 // 导出模块化的插件
-export default FilenameDisplayPlugin;
+export default TitleExctratorPlugin;

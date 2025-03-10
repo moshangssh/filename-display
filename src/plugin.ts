@@ -1,7 +1,7 @@
 import { App, Editor, MarkdownView, Notice, Plugin, TFile } from 'obsidian';
-import { FilenameDisplaySettings } from './types';
+import { TitleExctratorSettings } from './types';
 import { DEFAULT_SETTINGS } from './constants';
-import { FilenameDisplaySettingTab } from './settings/SettingsTab';
+import { TitleExctratorSettingTab } from './settings/SettingsTab';
 import { FileDisplayService } from './services/FileDisplayService';
 import { FilenameParser } from './services/FilenameParser';
 import { FileDisplayCache } from './services/FileDisplayCache';
@@ -17,10 +17,10 @@ import { errorHandler } from './utils/ErrorHandler';
 import { Extension } from '@codemirror/state';
 import { createEditorExtensions } from './extensions/editor';
 
-const logger = new Logger('FilenameDisplayPlugin');
+const logger = new Logger('TitleExctratorPlugin');
 
 // 创建 CodeMirror 扩展集合
-function createCombinedExtensions(plugin: FilenameDisplayPlugin): Extension {
+function createCombinedExtensions(plugin: TitleExctratorPlugin): Extension {
     logger.log('创建 CodeMirror 扩展集合');
     
     // 获取服务容器中的服务
@@ -34,8 +34,8 @@ function createCombinedExtensions(plugin: FilenameDisplayPlugin): Extension {
     return extensions;
 }
 
-export default class FilenameDisplayPlugin extends Plugin {
-    settings: FilenameDisplaySettings;
+export default class TitleExctratorPlugin extends Plugin {
+    settings: TitleExctratorSettings;
     serviceContainer: ServiceContainer;
     private fileDisplayService: FileDisplayService;
     private editorExtensions: Extension[] = [];
@@ -54,7 +54,7 @@ export default class FilenameDisplayPlugin extends Plugin {
         this.fileDisplayService = this.serviceContainer.get<FileDisplayService>(SERVICE_TYPES.FileDisplayService);
 
         // 添加设置标签页
-        this.addSettingTab(new FilenameDisplaySettingTab(this.app, this));
+        this.addSettingTab(new TitleExctratorSettingTab(this.app, this));
 
         // 监听布局变更事件
         this.registerEvent(

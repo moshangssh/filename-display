@@ -1,16 +1,16 @@
 import { App, PluginSettingTab, Setting, Plugin, normalizePath, Notice } from 'obsidian';
-import type { FilenameDisplaySettings } from '../types';
+import type { TitleExctratorSettings } from '../types';
 
-interface IFilenameDisplayPlugin extends Plugin {
-    settings: FilenameDisplaySettings;
+interface ITitleExctratorPlugin extends Plugin {
+    settings: TitleExctratorSettings;
     saveSettings(): Promise<void>;
     updateAllFilesDisplay(): void;
 }
 
-export class FilenameDisplaySettingTab extends PluginSettingTab {
-    plugin: IFilenameDisplayPlugin;
+export class TitleExctratorSettingTab extends PluginSettingTab {
+    plugin: ITitleExctratorPlugin;
 
-    constructor(app: App, plugin: IFilenameDisplayPlugin) {
+    constructor(app: App, plugin: ITitleExctratorPlugin) {
         super(app, plugin);
         this.plugin = plugin;
     }
