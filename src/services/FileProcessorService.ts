@@ -3,7 +3,7 @@ import type { ITitleExctratorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from './FilenameParser';
 import { FileDisplayCache } from './FileDisplayCache';
 import { BatchProcessor } from './BatchProcessor';
-import { ITimerService } from './interfaces/IServices';
+import { ITimerService, ILoggerService } from './interfaces/IServices';
 
 export class FileProcessorService {
     private plugin: ITitleExctratorPlugin;
@@ -11,18 +11,21 @@ export class FileProcessorService {
     private fileDisplayCache: FileDisplayCache;
     private batchProcessor: BatchProcessor;
     private timerService: ITimerService;
+    private logger: ILoggerService;
     
     constructor(
         plugin: ITitleExctratorPlugin,
         filenameParser: FilenameParser,
         fileDisplayCache: FileDisplayCache,
         timerService: ITimerService,
+        loggerService: ILoggerService,
         updateFileDisplayFn: (file: TFile) => Promise<void>
     ) {
         this.plugin = plugin;
         this.filenameParser = filenameParser;
         this.fileDisplayCache = fileDisplayCache;
         this.timerService = timerService;
+        this.logger = loggerService.getLogger('FileProcessorService');
         
         // 初始化批处理器，传入timerService
         this.batchProcessor = new BatchProcessor(
@@ -30,6 +33,8 @@ export class FileProcessorService {
             this.timerService,
             50
         );
+        
+        this.logger.info('FileProcessorService 初始化完成');
     }
     
     // 处理单个文件并返回处理结果

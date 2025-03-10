@@ -1,12 +1,16 @@
 import { TFile, normalizePath } from 'obsidian';
-import type { IFilenameDisplayPlugin, FileDisplayResult } from '../types';
+import type { ITitleExctratorPlugin, FileDisplayResult } from '../types';
+import { ILoggerService } from './interfaces/IServices';
 
 // 文件名解析器类，负责文件显示名称的提取逻辑
 export class FilenameParser {
-    private plugin: IFilenameDisplayPlugin;
+    private plugin: ITitleExctratorPlugin;
+    private logger: ILoggerService;
     
-    constructor(plugin: IFilenameDisplayPlugin) {
+    constructor(plugin: ITitleExctratorPlugin, loggerService: ILoggerService) {
         this.plugin = plugin;
+        this.logger = loggerService.getLogger('FilenameParser');
+        this.logger.info('FilenameParser 初始化完成');
     }
     
     // 从元数据获取显示名称
@@ -134,31 +138,25 @@ export class FilenameParser {
         }
     }
     
-    // 检查文件是否在指定的生效目录中
+    // 检查文件是否在启用的文件夹中
     public isFileInEnabledFolder(file: TFile): boolean {
-        // 如果没有指定目录，则对所有文件生效
+        // 如果没有指定启用的文件夹，则默认处理所有文件
         if (!this.plugin.settings.enabledFolders || this.plugin.settings.enabledFolders.length === 0) {
             return true;
         }
         
         // 检查文件路径是否在指定目录中
         const filePath = file.path;
-        return this.plugin.settings.enabledFolders.some(folder => {
+        return this.plugin.settings.enabledFolders.some((folder: string) => {
             // 空字符串应该匹配所有路径
             if (folder.trim() === '') {
                 return true;
             }
             
+            // 规范化路径并检查文件是否在该文件夹中
             const normalizedFolder = normalizePath(folder);
-            
-            // 检查文件是否就是该文件夹
-            if (filePath === normalizedFolder) {
-                return true;
-            }
-            
-            // 检查文件是否在该文件夹内（确保以路径分隔符结尾以避免前缀匹配错误）
-            // 例如："folder" 不应该匹配 "folder2/file.md"，但应该匹配 "folder/file.md"
-            return filePath.startsWith(normalizedFolder + '/');
+            return filePath === normalizedFolder || 
+                   filePath.startsWith(normalizedFolder + '/');
         });
     }
 } 

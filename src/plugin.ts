@@ -12,12 +12,12 @@ import { EventManagerService } from './services/EventManagerService';
 import { EditorLinkDecorator } from './services/EditorLinkDecorator';
 import { TimerService } from './services/TimerService';
 import { ServiceContainer, SERVICE_TYPES } from './services/di/ServiceContainer';
-import { Logger } from './utils/logger';
+import { LoggerService } from './services/LoggerService';
 import { errorHandler } from './utils/ErrorHandler';
 import { Extension } from '@codemirror/state';
 import { createEditorExtensions } from './extensions/editor';
 
-const logger = new Logger('TitleExctratorPlugin');
+const logger = new LoggerService().getLogger('TitleExctratorPlugin');
 
 // 创建 CodeMirror 扩展集合
 function createCombinedExtensions(plugin: TitleExctratorPlugin): Extension {
@@ -80,6 +80,12 @@ export default class TitleExctratorPlugin extends Plugin {
      * 注册所有服务
      */
     private registerServices() {
+        // 注册日志服务（首先注册，因为其他服务可能依赖它）
+        this.serviceContainer.register(
+            SERVICE_TYPES.LoggerService, 
+            new LoggerService()
+        );
+        
         // 注册错误处理服务
         this.serviceContainer.register(
             SERVICE_TYPES.ErrorHandler, 
@@ -95,7 +101,10 @@ export default class TitleExctratorPlugin extends Plugin {
         // 注册文件名解析服务
         this.serviceContainer.register(
             SERVICE_TYPES.FilenameParser, 
-            new FilenameParser(this)
+            new FilenameParser(
+                this,
+                this.serviceContainer.get(SERVICE_TYPES.LoggerService)
+            )
         );
         
         // 注册文件显示缓存服务
@@ -114,6 +123,7 @@ export default class TitleExctratorPlugin extends Plugin {
             this.serviceContainer.get(SERVICE_TYPES.FilenameParser),
             this.serviceContainer.get(SERVICE_TYPES.FileDisplayCache),
             this.serviceContainer.get(SERVICE_TYPES.TimerService),
+            this.serviceContainer.get(SERVICE_TYPES.LoggerService),
             async (file) => {
                 // 在这里，我们还没有FileExplorerDisplayService实例
                 // 返回Promise以满足接口要求
@@ -175,14 +185,28 @@ export default class TitleExctratorPlugin extends Plugin {
         );
 
         // 创建事件管理服务
-        const eventManagerService = new EventManagerService(this);
+        const eventManagerService = new EventManagerService(
+            this,
+            this.serviceContainer.get(SERVICE_TYPES.LoggerService)
+        );
         this.serviceContainer.register(
             SERVICE_TYPES.EventManagerService,
             eventManagerService
         );
         
         // 注册主服务
-        const fileDisplayService = new FileDisplayService(this, this.serviceContainer);
+        const fileDisplayService = new FileDisplayService(
+            this,
+            this.serviceContainer.get(SERVICE_TYPES.FilenameParser),
+            this.serviceContainer.get(SERVICE_TYPES.FileDisplayCache),
+            this.serviceContainer.get(SERVICE_TYPES.FileExplorerDisplayService),
+            this.serviceContainer.get(SERVICE_TYPES.FileProcessorService),
+            this.serviceContainer.get(SERVICE_TYPES.MarkdownLinkService),
+            this.serviceContainer.get(SERVICE_TYPES.EditorLinkDecorator),
+            this.serviceContainer.get(SERVICE_TYPES.EventManagerService),
+            this.serviceContainer.get(SERVICE_TYPES.TimerService),
+            this.serviceContainer.get(SERVICE_TYPES.LoggerService)
+        );
         this.serviceContainer.register(
             SERVICE_TYPES.FileDisplayService, 
             fileDisplayService

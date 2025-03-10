@@ -6,9 +6,10 @@ import {
     IMarkdownLinkService, 
     IEditorLinkDecorator, 
     IEventManagerService,
-    IFileDisplayService
+    IFileDisplayService,
+    ILoggerService
 } from '../interfaces/IServices';
-import { IFilenameDisplayPlugin } from '../../types';
+import { ITitleExctratorPlugin } from '../../types';
 
 /**
  * 依赖注入服务容器，负责管理所有服务实例
@@ -16,16 +17,16 @@ import { IFilenameDisplayPlugin } from '../../types';
 export class ServiceContainer {
     private static instance: ServiceContainer;
     private services: Map<string, any> = new Map();
-    private plugin: IFilenameDisplayPlugin;
+    private plugin: ITitleExctratorPlugin;
 
-    private constructor(plugin: IFilenameDisplayPlugin) {
+    private constructor(plugin: ITitleExctratorPlugin) {
         this.plugin = plugin;
     }
 
     /**
      * 获取服务容器单例
      */
-    public static getInstance(plugin?: IFilenameDisplayPlugin): ServiceContainer {
+    public static getInstance(plugin?: ITitleExctratorPlugin): ServiceContainer {
         if (!ServiceContainer.instance && plugin) {
             ServiceContainer.instance = new ServiceContainer(plugin);
         }
@@ -60,7 +61,7 @@ export class ServiceContainer {
     /**
      * 获取插件实例
      */
-    public getPlugin(): IFilenameDisplayPlugin {
+    public getPlugin(): ITitleExctratorPlugin {
         return this.plugin;
     }
 
@@ -106,5 +107,6 @@ export const SERVICE_TYPES = {
     EventManagerService: 'EventManagerService',
     FileDisplayService: 'FileDisplayService',
     TimerService: 'TimerService',
-    ErrorHandler: 'ErrorHandler'
+    ErrorHandler: 'ErrorHandler',
+    LoggerService: 'LoggerService'
 }; 

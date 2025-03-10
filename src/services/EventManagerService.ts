@@ -1,9 +1,6 @@
 import { TFile, TAbstractFile } from 'obsidian';
 import type { ITitleExctratorPlugin } from '../types';
-import { Logger } from '../utils/logger';
-import { IEventManagerService } from './interfaces/IServices';
-
-const logger = new Logger('EventManagerService');
+import { IEventManagerService, ILoggerService } from './interfaces/IServices';
 
 // 定义事件类型
 export enum FileEventType {
@@ -29,23 +26,26 @@ export type EventCallback = (event: FileEvent) => Promise<void> | void;
 
 export class EventManagerService implements IEventManagerService {
     private plugin: ITitleExctratorPlugin;
+    private eventSubscribers: Map<FileEventType, Set<EventCallback>> = new Map();
     private eventHandlers: Map<string, any[]> = new Map();
-    private subscribers: Map<FileEventType, Set<EventCallback>> = new Map();
+    private logger: ILoggerService;
     
-    constructor(plugin: ITitleExctratorPlugin) {
+    constructor(plugin: ITitleExctratorPlugin, loggerService: ILoggerService) {
         this.plugin = plugin;
-        logger.log('事件管理器初始化');
-
-        // 初始化事件类型订阅集合
-        Object.values(FileEventType).forEach(eventType => {
-            this.subscribers.set(eventType as FileEventType, new Set());
+        this.logger = loggerService.getLogger('EventManagerService');
+        
+        // 初始化事件类型映射
+        Object.values(FileEventType).forEach(type => {
+            this.eventSubscribers.set(type as FileEventType, new Set());
         });
+        
+        this.logger.info('EventManagerService 初始化完成');
     }
     
     // 订阅事件
     public subscribe(eventType: FileEventType, callback: EventCallback): () => void {
-        logger.log(`订阅事件：${eventType}`);
-        const callbacks = this.subscribers.get(eventType);
+        this.logger.log(`订阅事件：${eventType}`);
+        const callbacks = this.eventSubscribers.get(eventType);
         if (!callbacks) {
             throw new Error(`未知的事件类型: ${eventType}`);
         }
@@ -60,8 +60,8 @@ export class EventManagerService implements IEventManagerService {
     
     // 取消订阅
     public unsubscribe(eventType: FileEventType, callback: EventCallback): void {
-        logger.log(`取消订阅事件：${eventType}`);
-        const callbacks = this.subscribers.get(eventType);
+        this.logger.log(`取消订阅事件：${eventType}`);
+        const callbacks = this.eventSubscribers.get(eventType);
         if (callbacks) {
             callbacks.delete(callback);
         }
@@ -69,15 +69,15 @@ export class EventManagerService implements IEventManagerService {
     
     // 分发事件
     public async dispatch(event: FileEvent): Promise<void> {
-        logger.log(`分发事件: ${event.type} - 文件: ${event.file.path}`);
-        const callbacks = this.subscribers.get(event.type);
+        this.logger.log(`分发事件: ${event.type} - 文件: ${event.file.path}`);
+        const callbacks = this.eventSubscribers.get(event.type);
         
         if (!callbacks || callbacks.size === 0) {
-            logger.log(`没有订阅者处理事件: ${event.type}`);
+            this.logger.log(`没有订阅者处理事件: ${event.type}`);
             return;
         }
         
-        logger.log(`找到 ${callbacks.size} 个订阅者处理事件: ${event.type}`);
+        this.logger.log(`找到 ${callbacks.size} 个订阅者处理事件: ${event.type}`);
         
         // 并行执行所有回调，但捕获潜在错误
         const promises = Array.from(callbacks).map(async (callback) => {
@@ -87,7 +87,7 @@ export class EventManagerService implements IEventManagerService {
                     await result;
                 }
             } catch (error) {
-                logger.error(`处理事件 ${event.type} 时发生错误:`, error);
+                this.logger.error(`处理事件 ${event.type} 时发生错误:`, error);
             }
         });
         
@@ -96,7 +96,7 @@ export class EventManagerService implements IEventManagerService {
     
     // 设置 Vault 事件监听器
     public setupVaultEventListeners(): void {
-        logger.log('设置 Vault 事件监听器');
+        this.logger.log('设置 Vault 事件监听器');
         
         // 监听文件创建事件
         const createHandler = this.plugin.registerEvent(
@@ -106,7 +106,7 @@ export class EventManagerService implements IEventManagerService {
                         type: FileEventType.CREATE,
                         file: file
                     }).catch(err => {
-                        logger.error('处理文件创建事件时出错:', err);
+                        this.logger.error('处理文件创建事件时出错:', err);
                     });
                 }
             })
@@ -121,7 +121,7 @@ export class EventManagerService implements IEventManagerService {
                         type: FileEventType.MODIFY,
                         file: file
                     }).catch(err => {
-                        logger.error('处理文件修改事件时出错:', err);
+                        this.logger.error('处理文件修改事件时出错:', err);
                     });
                 }
             })
@@ -137,7 +137,7 @@ export class EventManagerService implements IEventManagerService {
                         file: file,
                         oldPath: oldPath
                     }).catch(err => {
-                        logger.error('处理文件重命名事件时出错:', err);
+                        this.logger.error('处理文件重命名事件时出错:', err);
                     });
                 }
             })
@@ -152,19 +152,19 @@ export class EventManagerService implements IEventManagerService {
                         type: FileEventType.DELETE,
                         file: file
                     }).catch(err => {
-                        logger.error('处理文件删除事件时出错:', err);
+                        this.logger.error('处理文件删除事件时出错:', err);
                     });
                 }
             })
         );
         this.addEventHandler('vault', deleteHandler);
         
-        logger.log('Vault 事件监听器设置完成');
+        this.logger.log('Vault 事件监听器设置完成');
     }
     
     // 设置元数据事件监听器
     public setupMetadataEventListeners(): void {
-        logger.log('设置元数据事件监听器');
+        this.logger.log('设置元数据事件监听器');
         
         // 监听元数据缓存变更
         const metadataHandler = this.plugin.registerEvent(
@@ -178,7 +178,7 @@ export class EventManagerService implements IEventManagerService {
                             file: file,
                             data: { frontmatter: metadata.frontmatter }
                         }).catch(err => {
-                            logger.error('处理元数据变更事件时出错:', err);
+                            this.logger.error('处理元数据变更事件时出错:', err);
                         });
                     }
                 }
@@ -186,7 +186,7 @@ export class EventManagerService implements IEventManagerService {
         );
         this.addEventHandler('metadata', metadataHandler);
         
-        logger.log('元数据事件监听器设置完成');
+        this.logger.log('元数据事件监听器设置完成');
     }
     
     // 添加事件处理器到集合
@@ -200,7 +200,7 @@ export class EventManagerService implements IEventManagerService {
     
     // 清理所有注册的事件
     public dispose(): void {
-        logger.log('正在清理事件管理器资源...');
+        this.logger.log('正在清理事件管理器资源...');
         
         // 清理所有注册的事件处理器
         this.eventHandlers.forEach(handlers => {
@@ -214,12 +214,8 @@ export class EventManagerService implements IEventManagerService {
         
         // 清空事件处理器集合
         this.eventHandlers.clear();
+        this.eventSubscribers.clear();
         
-        // 清空所有订阅者
-        this.subscribers.forEach(callbacks => {
-            callbacks.clear();
-        });
-        
-        logger.log('事件管理器资源已清理');
+        this.logger.log('事件管理器资源已清理');
     }
 } 

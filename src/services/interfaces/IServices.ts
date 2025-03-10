@@ -7,6 +7,15 @@ import { FileEventType, EventCallback, FileEvent } from '../EventManagerService'
 // 导出错误处理服务接口
 export type { IErrorHandler };
 
+// 日志服务接口
+export interface ILoggerService {
+    log(message: string, ...args: any[]): void;
+    error(message: string, ...args: any[]): void;
+    warn(message: string, ...args: any[]): void;
+    info(message: string, ...args: any[]): void;
+    getLogger(prefix: string): ILoggerService;
+}
+
 // 文件名解析服务接口
 export interface IFilenameParser {
     parseFilename(file: TFile): Promise<FileDisplayResult>;

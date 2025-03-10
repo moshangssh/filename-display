@@ -9,15 +9,12 @@ import {
     IMarkdownLinkService, 
     IEditorLinkDecorator, 
     IEventManagerService, 
-    ITimerService 
+    ITimerService,
+    ILoggerService
 } from './interfaces/IServices';
-import { Logger } from '../utils/logger';
 import { ServiceContainer, SERVICE_TYPES } from './di/ServiceContainer';
 import { throttle } from '../utils';
 import { FileEventType, FileEvent } from './EventManagerService';
-
-// 创建日志记录器
-const logger = new Logger('FileDisplayService');
 
 // 主服务类，协调其他组件
 export class FileDisplayService implements IFileDisplayService {
@@ -28,27 +25,35 @@ export class FileDisplayService implements IFileDisplayService {
     private fileProcessorService: IFileProcessorService;
     private markdownLinkService: IMarkdownLinkService;
     private editorLinkDecorator: IEditorLinkDecorator;
+    private eventManager: IEventManagerService;
     private timerService: ITimerService;
-    private eventManagerService: IEventManagerService;
+    private logger: ILoggerService;
     private throttledUpdateAllFilesDisplay: (clearCache?: boolean) => void;
     private lastUpdatedFiles: Set<string> = new Set(); // 用于记录上次更新的文件
     private unsubscribers: (() => void)[] = []; // 存储取消订阅函数
 
     constructor(
         plugin: ITitleExctratorPlugin,
-        container: ServiceContainer
+        filenameParser: IFilenameParser,
+        fileDisplayCache: IFileDisplayCache,
+        fileExplorerDisplayService: IFileExplorerDisplayService,
+        fileProcessorService: IFileProcessorService,
+        markdownLinkService: IMarkdownLinkService,
+        editorLinkDecorator: IEditorLinkDecorator,
+        eventManager: IEventManagerService,
+        timerService: ITimerService,
+        loggerService: ILoggerService
     ) {
         this.plugin = plugin;
-        
-        // 从服务容器获取服务
-        this.filenameParser = container.get<IFilenameParser>(SERVICE_TYPES.FilenameParser);
-        this.fileDisplayCache = container.get<IFileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
-        this.fileExplorerDisplayService = container.get<IFileExplorerDisplayService>(SERVICE_TYPES.FileExplorerDisplayService);
-        this.fileProcessorService = container.get<IFileProcessorService>(SERVICE_TYPES.FileProcessorService);
-        this.markdownLinkService = container.get<IMarkdownLinkService>(SERVICE_TYPES.MarkdownLinkService);
-        this.editorLinkDecorator = container.get<IEditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator);
-        this.timerService = container.get<ITimerService>(SERVICE_TYPES.TimerService);
-        this.eventManagerService = container.get<IEventManagerService>(SERVICE_TYPES.EventManagerService);
+        this.filenameParser = filenameParser;
+        this.fileDisplayCache = fileDisplayCache;
+        this.fileExplorerDisplayService = fileExplorerDisplayService;
+        this.fileProcessorService = fileProcessorService;
+        this.markdownLinkService = markdownLinkService;
+        this.editorLinkDecorator = editorLinkDecorator;
+        this.eventManager = eventManager;
+        this.timerService = timerService;
+        this.logger = loggerService.getLogger('FileDisplayService');
         
         // 使用节流函数包装更新函数，避免短时间内多次更新
         this.throttledUpdateAllFilesDisplay = throttle(
@@ -59,43 +64,45 @@ export class FileDisplayService implements IFileDisplayService {
         
         // 设置事件订阅
         this.setupEventSubscriptions();
+        
+        this.logger.info('FileDisplayService 初始化完成');
     }
     
     // 设置事件订阅
     private setupEventSubscriptions(): void {
-        logger.log('设置事件订阅...');
+        this.logger.log('设置事件订阅...');
         
         // 订阅文件创建事件
         this.unsubscribers.push(
-            this.eventManagerService.subscribe(FileEventType.CREATE, this.handleFileEvent.bind(this))
+            this.eventManager.subscribe(FileEventType.CREATE, this.handleFileEvent.bind(this))
         );
         
         // 订阅文件修改事件
         this.unsubscribers.push(
-            this.eventManagerService.subscribe(FileEventType.MODIFY, this.handleFileEvent.bind(this))
+            this.eventManager.subscribe(FileEventType.MODIFY, this.handleFileEvent.bind(this))
         );
         
         // 订阅文件重命名事件
         this.unsubscribers.push(
-            this.eventManagerService.subscribe(FileEventType.RENAME, this.handleFileEvent.bind(this))
+            this.eventManager.subscribe(FileEventType.RENAME, this.handleFileEvent.bind(this))
         );
         
         // 订阅文件删除事件
         this.unsubscribers.push(
-            this.eventManagerService.subscribe(FileEventType.DELETE, this.handleFileEvent.bind(this))
+            this.eventManager.subscribe(FileEventType.DELETE, this.handleFileEvent.bind(this))
         );
         
         // 订阅元数据变更事件
         this.unsubscribers.push(
-            this.eventManagerService.subscribe(FileEventType.METADATA, this.handleFileEvent.bind(this))
+            this.eventManager.subscribe(FileEventType.METADATA, this.handleFileEvent.bind(this))
         );
         
-        logger.log('事件订阅设置完成');
+        this.logger.log('事件订阅设置完成');
     }
     
     // 处理文件事件
     private async handleFileEvent(event: FileEvent): Promise<void> {
-        logger.log(`处理文件事件: ${event.type} - 文件: ${event.file.path}`);
+        this.logger.log(`处理文件事件: ${event.type} - 文件: ${event.file.path}`);
         
         const file = event.file;
         
@@ -121,7 +128,7 @@ export class FileDisplayService implements IFileDisplayService {
                 break;
                 
             default:
-                logger.log(`未处理的事件类型: ${event.type}`);
+                this.logger.log(`未处理的事件类型: ${event.type}`);
         }
     }
 
@@ -193,7 +200,7 @@ export class FileDisplayService implements IFileDisplayService {
     }
 
     private async performUpdateAllFilesDisplay(clearCache: boolean = true): Promise<void> {
-        logger.log('更新所有文件显示...');
+        this.logger.log('更新所有文件显示...');
         
         try {
             // 直接使用fileProcessorService的方法，它会处理缓存清理
@@ -201,9 +208,9 @@ export class FileDisplayService implements IFileDisplayService {
             
             // 获取文件数量用于日志
             const files = this.plugin.app.vault.getMarkdownFiles();
-            logger.log(`已更新所有 ${files.length} 个文件的显示`);
+            this.logger.log(`已更新所有 ${files.length} 个文件的显示`);
         } catch (error) {
-            logger.error('更新所有文件显示时发生错误:', error);
+            this.logger.error('更新所有文件显示时发生错误:', error);
         }
     }
 
@@ -212,7 +219,7 @@ export class FileDisplayService implements IFileDisplayService {
             // 恢复文件浏览器中的原始文件名
             this.fileExplorerDisplayService.restoreAllDisplayNames();
         } catch (error) {
-            logger.error('恢复所有显示名称时发生错误:', error);
+            this.logger.error('恢复所有显示名称时发生错误:', error);
         }
     }
 
@@ -225,7 +232,7 @@ export class FileDisplayService implements IFileDisplayService {
     }
 
     public dispose(): void {
-        logger.log('释放 FileDisplayService 资源...');
+        this.logger.log('释放 FileDisplayService 资源...');
         
         // 取消所有事件订阅
         this.unsubscribers.forEach(unsubscribe => unsubscribe());
@@ -234,6 +241,6 @@ export class FileDisplayService implements IFileDisplayService {
         // 清空上次更新文件集合
         this.lastUpdatedFiles.clear();
         
-        logger.log('FileDisplayService 资源已释放');
+        this.logger.log('FileDisplayService 资源已释放');
     }
 } 
