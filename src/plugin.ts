@@ -19,33 +19,20 @@ import { createEditorExtensions } from './extensions/editor';
 import { Logger } from './utils/logger';
 import { IEditorLinkDecorator } from './services/interfaces/IServices';
 import { IFileExplorerDisplayService } from './services/interfaces/IServices';
+import { ExtensionCacheService, ExtensionType } from './services/ExtensionCacheService';
 
 const logger = new Logger('Plugin');
 
-// 创建 CodeMirror 扩展集合
+// 创建 CodeMirror 扩展集合 - 使用扩展缓存服务
 function createCombinedExtensions(plugin: TitleExtractorPlugin): Extension {
     logger.log('创建 CodeMirror 扩展集合');
     
-    // 获取服务容器中的服务
+    // 获取服务容器中的扩展缓存服务
     const container = plugin.serviceContainer;
+    const extensionCacheService = container.get<ExtensionCacheService>(SERVICE_TYPES.ExtensionCacheService);
     
-    // 收集所有服务的 CodeMirror 扩展
-    const extensions: Extension[] = [];
-    
-    // 添加编辑器链接装饰器服务的扩展
-    if (container.has(SERVICE_TYPES.EditorLinkDecorator)) {
-        const editorLinkDecorator = container.get<EditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator);
-        extensions.push(...editorLinkDecorator.getExtension());
-    }
-
-    // 添加来自editor.ts的编辑器扩展
-    extensions.push(createEditorExtensions(plugin));
-
-    // 如果后续有其他服务提供CodeMirror扩展，可以在这里添加
-    
-    logger.log(`已收集 ${extensions.length} 个 CodeMirror 扩展`);
-    
-    return extensions;
+    // 使用缓存服务获取组合扩展
+    return extensionCacheService.getCombinedExtensions();
 }
 
 export default class TitleExtractorPlugin extends Plugin {
@@ -53,6 +40,8 @@ export default class TitleExtractorPlugin extends Plugin {
     serviceContainer: ServiceContainer;
     private fileDisplayService: FileDisplayService;
     private editorExtensions: Extension[] = [];
+    // 添加扩展缓存服务字段
+    private extensionCacheService: ExtensionCacheService;
 
     async onload() {
         await this.loadSettings();
@@ -66,6 +55,9 @@ export default class TitleExtractorPlugin extends Plugin {
         
         // 从服务容器获取主服务（懒加载）
         this.fileDisplayService = this.serviceContainer.get<FileDisplayService>(SERVICE_TYPES.FileDisplayService);
+        
+        // 获取扩展缓存服务
+        this.extensionCacheService = this.serviceContainer.get<ExtensionCacheService>(SERVICE_TYPES.ExtensionCacheService);
 
         // 添加设置标签页
         this.addSettingTab(new TitleExtractorSettingTab(this.app, this));
@@ -117,6 +109,12 @@ export default class TitleExtractorPlugin extends Plugin {
         this.serviceContainer.register(
             SERVICE_TYPES.TimerService, 
             new TimerService(this)
+        );
+        
+        // 注册扩展缓存服务
+        this.serviceContainer.register(
+            SERVICE_TYPES.ExtensionCacheService,
+            new ExtensionCacheService(this)
         );
         
         // 注册文件名解析服务（通过工厂函数）
@@ -255,6 +253,9 @@ export default class TitleExtractorPlugin extends Plugin {
     registerEditorExtension(extension: Extension[]): void {
         // 首先添加到内部扩展数组
         this.editorExtensions = [...this.editorExtensions, ...extension];
+        
+        // 添加日志记录
+        logger.debug('注册编辑器扩展');
         
         // 然后调用父类方法注册到 Obsidian
         super.registerEditorExtension(extension);

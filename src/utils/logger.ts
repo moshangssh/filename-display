@@ -34,6 +34,11 @@ export class Logger implements ILoggerService {
             console.info(this.prefix + message, ...args);
         }
     }
+    
+    // 添加debug方法作为info的别名，方便开发调试
+    debug(message: string, ...args: any[]): void {
+        this.info(message, ...args);
+    }
 
     // 创建一个带有特定前缀的子日志记录器
     getLogger(prefix: string): ILoggerService {

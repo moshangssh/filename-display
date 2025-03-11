@@ -132,7 +132,8 @@ export class ServiceContainer {
             SERVICE_TYPES.FileExplorerDisplayService,
             SERVICE_TYPES.FileDisplayCache,
             SERVICE_TYPES.FilenameParser,
-            SERVICE_TYPES.FileDisplayService
+            SERVICE_TYPES.FileDisplayService,
+            SERVICE_TYPES.ExtensionCacheService
         ];
 
         for (const serviceType of serviceTypes) {
@@ -162,5 +163,6 @@ export const SERVICE_TYPES = {
     FileDisplayService: 'FileDisplayService',
     TimerService: 'TimerService',
     ErrorHandler: 'ErrorHandler',
-    LoggerService: 'LoggerService'
+    LoggerService: 'LoggerService',
+    ExtensionCacheService: 'ExtensionCacheService'
 }; 

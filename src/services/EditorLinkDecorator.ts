@@ -13,6 +13,8 @@ import {
     removeLinkDecoration,
     updateLinkDisplayName
 } from '../extensions/editor';
+import { ExtensionCacheService, ExtensionType } from './ExtensionCacheService';
+import { ServiceContainer, SERVICE_TYPES } from './di/ServiceContainer';
 
 // 创建服务特定的日志记录器
 const logger = new Logger('EditorLinkDecorator');
@@ -32,6 +34,8 @@ export class EditorLinkDecorator extends LinkHandler {
     private readonly PREPROCESS_INTERVAL: number = 5000; // 5秒
     // 不强制指定批处理大小的具体数值类型
     private readonly batchSize = 10;
+    // 扩展缓存服务
+    private extensionCacheService: ExtensionCacheService;
     
     constructor(plugin: ITitleExtractorPlugin, filenameParser: FilenameParser, fileDisplayCache: FileDisplayCache) {
         super(plugin, filenameParser, fileDisplayCache, {
@@ -40,9 +44,13 @@ export class EditorLinkDecorator extends LinkHandler {
             respectCustomLinkText: true
         });
         
-        // 注册编辑器扩展 - 使用新的扩展模块
+        // 获取扩展缓存服务
+        const serviceContainer = ServiceContainer.getInstance(plugin);
+        this.extensionCacheService = serviceContainer.get<ExtensionCacheService>(SERVICE_TYPES.ExtensionCacheService);
+        
+        // 注册编辑器扩展 - 使用扩展缓存服务
         this.plugin.registerEditorExtension([
-            createLinkDecorationExtension(plugin, (view) => this.onEditorChange(view))
+            this.extensionCacheService.getLinkDecorationExtension((view) => this.onEditorChange(view))
         ]);
         
         // 保存装饰器引用，供扩展使用
@@ -506,9 +514,9 @@ export class EditorLinkDecorator extends LinkHandler {
      * 实现IEditorLinkDecorator接口
      */
     public getExtension(): Extension[] {
-        // 返回需要的编辑器扩展
+        // 返回从扩展缓存服务获取的扩展
         return [
-            createLinkDecorationExtension(this.plugin, (view) => this.onEditorChange(view))
+            this.extensionCacheService.getLinkDecorationExtension((view) => this.onEditorChange(view))
         ];
     }
 } 

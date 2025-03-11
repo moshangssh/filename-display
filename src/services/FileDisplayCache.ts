@@ -49,6 +49,7 @@ export class FileDisplayCache {
             info: (message: string, ...args: any[]) => console.info(`[FileDisplayCache] ${message}`, ...args),
             warn: (message: string, ...args: any[]) => console.warn(`[FileDisplayCache] ${message}`, ...args),
             error: (message: string, ...args: any[]) => console.error(`[FileDisplayCache] ${message}`, ...args),
+            debug: (message: string, ...args: any[]) => console.debug(`[FileDisplayCache] ${message}`, ...args),
             getLogger: (prefix: string) => this.logger
         };
         
