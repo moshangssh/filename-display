@@ -24,8 +24,29 @@ export class FileExplorerObserver {
     
     // 设置文件资源管理器观察器
     public setupObservers(): void {
+        // 如果已经有活跃的观察器，先停止它
+        this.stopObserving();
+        
+        // 只有在文件资源管理器存在时才设置观察器
+        const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
+        if (fileExplorers.length === 0) {
+            // 没有文件资源管理器，设置一个监听器等待其创建
+            this.plugin.registerEvent(
+                this.plugin.app.workspace.on('layout-change', () => {
+                    // 检查文件资源管理器是否已创建
+                    if (this.plugin.app.workspace.getLeavesOfType('file-explorer').length > 0) {
+                        this.setupObservers();
+                    }
+                })
+            );
+            console.log('文件资源管理器尚未加载，已注册布局变化监听器');
+            return;
+        }
+        
+        // 文件资源管理器存在，设置观察器
         this.setupFileExplorerObserver();
         this.setupFolderObserver();
+        console.log('文件资源管理器观察器已完成初始化');
     }
     
     // 停止所有观察
@@ -80,29 +101,63 @@ export class FileExplorerObserver {
     
     // 设置文件夹展开/折叠观察器
     private setupFolderObserver(): void {
-        const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
-        
-        fileExplorers.forEach((explorer: WorkspaceLeaf) => {
-            const container = explorer.view.containerEl;
-            
-            container.on('click', '.nav-folder-title', (event: MouseEvent) => {
-                const folderTitle = (event.currentTarget as HTMLElement);
-                const folderElement = folderTitle.parentElement as HTMLElement;
-                
-                // 检查文件夹是否是折叠状态
+        // 使用布局变化事件监听，更稳健地捕获文件夹展开/折叠
+        this.plugin.registerEvent(
+            this.plugin.app.workspace.on('layout-change', () => {
+                // 延迟处理，等待DOM完全更新
                 setTimeout(() => {
-                    if (folderElement.hasClass('is-collapsed')) {
-                        this.onFolderCollapse(folderElement);
-                    } else {
-                        this.onFolderExpand(folderElement);
-                    }
-                }, 100); // 短暂延迟以确保DOM更新
-            });
-        });
+                    const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
+                    fileExplorers.forEach((explorer: WorkspaceLeaf) => {
+                        const container = explorer.view.containerEl;
+                        if (!container) return;
+                        
+                        // 查找所有展开的文件夹
+                        const expandedFolders = container.querySelectorAll('.nav-folder:not(.is-collapsed)');
+                        expandedFolders.forEach((folderElement) => {
+                            if (folderElement instanceof HTMLElement && 
+                                !folderElement.hasAttribute('data-observer-processed')) {
+                                
+                                this.processFolderContent(folderElement);
+                                // 标记已处理，避免重复处理
+                                folderElement.setAttribute('data-observer-processed', 'true');
+                            }
+                        });
+                        
+                        // 同时监听展开/折叠按钮的点击
+                        const folderArrows = container.querySelectorAll('.nav-folder-collapse-indicator');
+                        folderArrows.forEach((arrow) => {
+                            if (arrow instanceof HTMLElement && 
+                                !arrow.hasAttribute('data-observer-click')) {
+                                    
+                                arrow.setAttribute('data-observer-click', 'true');
+                                arrow.addEventListener('click', (event) => {
+                                    // 延迟处理，等待文件夹状态更新
+                                    setTimeout(() => {
+                                        const folderElement = (event.target as HTMLElement)
+                                            .closest('.nav-folder') as HTMLElement;
+                                        
+                                        if (folderElement) {
+                                            if (folderElement.classList.contains('is-collapsed')) {
+                                                this.onFolderCollapse(folderElement);
+                                            } else {
+                                                folderElement.removeAttribute('data-observer-processed');
+                                                this.onFolderExpand(folderElement);
+                                            }
+                                        }
+                                    }, 100);
+                                });
+                            }
+                        });
+                    });
+                }, 200);
+            })
+        );
+        
+        console.log('文件夹展开/折叠观察器设置成功');
     }
     
-    // 文件夹展开处理
-    private onFolderExpand(folderElement: HTMLElement): void {
+    // 处理文件夹内容
+    private processFolderContent(folderElement: HTMLElement): void {
         const folderPath = this.getFolderPath(folderElement);
         if (folderPath) {
             const files = this.getFilesInFolder(folderPath);
@@ -110,9 +165,21 @@ export class FileExplorerObserver {
         }
     }
     
+    // 文件夹展开处理
+    private onFolderExpand(folderElement: HTMLElement): void {
+        // 使用processFolderContent处理展开的文件夹
+        this.processFolderContent(folderElement);
+    }
+    
     // 文件夹折叠处理
     private onFolderCollapse(folderElement: HTMLElement): void {
-        // 当文件夹折叠时可能需要的处理
+        // 移除处理标记，以便下次展开时重新处理
+        folderElement.removeAttribute('data-observer-processed');
+        // 记录日志，便于调试
+        const folderPath = this.getFolderPath(folderElement);
+        if (folderPath) {
+            console.log(`文件夹已折叠: ${folderPath}`);
+        }
     }
     
     // 获取文件夹路径
@@ -130,12 +197,6 @@ export class FileExplorerObserver {
     // 开始观察文件资源管理器
     private startObserving(): void {
         const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
-        
-        // 如果没有找到文件资源管理器，记录日志并退出
-        if (fileExplorers.length === 0) {
-            console.log('文件资源管理器尚未加载，将在懒加载机制中重试');
-            return;
-        }
         
         fileExplorers.forEach((explorer: WorkspaceLeaf) => {
             try {
