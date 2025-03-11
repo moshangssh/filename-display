@@ -1,6 +1,7 @@
 import { TFile, TAbstractFile } from 'obsidian';
 import type { ITitleExtractorPlugin } from '../types';
 import { IEventManagerService, ILoggerService } from './interfaces/IServices';
+import { EventQueueManager } from './EventQueueManager';
 
 // 定义事件类型
 export enum FileEventType {
@@ -31,15 +32,20 @@ export class EventManagerService implements IEventManagerService {
     private eventSubscribers: Map<FileEventType, Set<EventCallback>> = new Map();
     private eventHandlers: Map<string, any[]> = new Map();
     private logger: ILoggerService;
+    private eventQueue: EventQueueManager;
     
     constructor(plugin: ITitleExtractorPlugin, loggerService: ILoggerService) {
         this.plugin = plugin;
         this.logger = loggerService.getLogger('EventManagerService');
+        this.eventQueue = new EventQueueManager(loggerService);
         
         // 初始化事件类型映射
         Object.values(FileEventType).forEach(type => {
             this.eventSubscribers.set(type as FileEventType, new Set());
         });
+        
+        // 设置事件处理器
+        this.eventQueue.setEventProcessor(this.processEvent.bind(this));
         
         this.logger.info('EventManagerService 初始化完成');
     }
@@ -56,15 +62,6 @@ export class EventManagerService implements IEventManagerService {
         
         // 返回取消订阅函数
         return () => {
-            this.unsubscribe(eventType, callback);
-        };
-    }
-    
-    // 取消订阅
-    public unsubscribe(eventType: FileEventType, callback: EventCallback): void {
-        this.logger.log(`取消订阅事件：${eventType}`);
-        const callbacks = this.eventSubscribers.get(eventType);
-        if (callbacks) {
             callbacks.delete(callback);
         }
     }
@@ -74,6 +71,17 @@ export class EventManagerService implements IEventManagerService {
         try {
             const filePath = event.file ? event.file.path : 'no-file';
             this.logger.log(`分发事件: ${event.type} - 文件: ${filePath}`);
+            
+            // 将事件添加到队列中
+            this.eventQueue.enqueue(event);
+        } catch (error) {
+            this.logger.error(`分发事件 ${event.type} 时发生致命错误`, error);
+        }
+    }
+
+    // 处理单个事件
+    private async processEvent(event: FileEvent): Promise<void> {
+        try {
             const callbacks = this.eventSubscribers.get(event.type);
             
             if (!callbacks || callbacks.size === 0) {
@@ -94,7 +102,6 @@ export class EventManagerService implements IEventManagerService {
                         return result;
                     } catch (error) {
                         this.logger.error(`处理事件 ${event.type} 时发生错误:`, error);
-                        // 重新抛出以便 Promise.allSettled 可以捕获
                         throw error;
                     }
                 })
@@ -150,8 +157,7 @@ export class EventManagerService implements IEventManagerService {
                 }
             }
         } catch (error) {
-            this.logger.error(`分发事件 ${event.type} 时发生致命错误`, error);
-            // 不抛出，因为这是顶级方法，我们不希望它导致整个插件崩溃
+            this.logger.error(`处理事件 ${event.type} 时发生错误`, error);
         }
     }
     
@@ -227,54 +233,56 @@ export class EventManagerService implements IEventManagerService {
     public setupMetadataEventListeners(): void {
         this.logger.log('设置元数据事件监听器');
         
-        // 监听元数据缓存变更
         const metadataHandler = this.plugin.registerEvent(
             this.plugin.app.metadataCache.on('changed', (file: TFile) => {
-                if (file instanceof TFile) {
-                    // 检查是否需要更新显示
-                    const metadata = this.plugin.app.metadataCache.getFileCache(file);
-                    if (metadata?.frontmatter && 'title' in metadata.frontmatter) {
-                        this.dispatch({
-                            type: FileEventType.METADATA,
-                            file: file,
-                            data: { frontmatter: metadata.frontmatter }
-                        }).catch(err => {
-                            this.logger.error('处理元数据变更事件时出错:', err);
-                        });
-                    }
-                }
+                this.dispatch({
+                    type: FileEventType.METADATA,
+                    file: file
+                }).catch(err => {
+                    this.logger.error('处理元数据变更事件时出错:', err);
+                });
             })
         );
-        this.addEventHandler('metadata', metadataHandler);
         
+        this.addEventHandler('metadata', metadataHandler);
         this.logger.log('元数据事件监听器设置完成');
     }
     
     // 添加事件处理器到集合
-    private addEventHandler(type: string, handler: any): void {
-        if (!this.eventHandlers.has(type)) {
-            this.eventHandlers.set(type, []);
+    private addEventHandler(source: string, handler: any): void {
+        if (!this.eventHandlers.has(source)) {
+            this.eventHandlers.set(source, []);
         }
-        
-        this.eventHandlers.get(type)?.push(handler);
+        this.eventHandlers.get(source)?.push(handler);
     }
     
-    // 清理所有注册的事件
+    // 取消订阅
+    public unsubscribe(eventType: FileEventType, callback: EventCallback): void {
+        this.logger.log(`取消订阅事件：${eventType}`);
+        const callbacks = this.eventSubscribers.get(eventType);
+        if (callbacks) {
+            callbacks.delete(callback);
+        }
+    }
+
+    // 清理所有资源
     public dispose(): void {
         this.logger.log('正在清理事件管理器资源...');
         
-        // 清理所有注册的事件处理器
+        // 清理事件队列
+        this.eventQueue.clear();
+        
+        // 清理所有事件处理器
         this.eventHandlers.forEach(handlers => {
             handlers.forEach(handler => {
-                // 只有当 handler 是函数时才调用
-                if (typeof handler === 'function') {
-                    handler();
+                if (typeof handler.unregister === 'function') {
+                    handler.unregister();
                 }
             });
         });
-        
-        // 清空事件处理器集合
         this.eventHandlers.clear();
+        
+        // 清理所有订阅者
         this.eventSubscribers.clear();
         
         this.logger.log('事件管理器资源已清理');
