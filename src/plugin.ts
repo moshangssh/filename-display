@@ -266,12 +266,12 @@ export default class TitleExtractorPlugin extends Plugin {
             // 获取缓存服务
             const fileDisplayCache = this.serviceContainer.get<FileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
             
-            // 执行缓存预热
+            // 执行渐进式缓存预热
             await fileDisplayCache.warmUpCache();
             
-            logger.log('缓存预热完成');
+            logger.log('缓存预热启动完成');
         } catch (error) {
-            logger.error('缓存预热失败:', error);
+            logger.error('缓存预热启动失败:', error);
         }
     }
 

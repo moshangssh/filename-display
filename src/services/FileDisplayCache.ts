@@ -1,5 +1,8 @@
 // 文件缓存管理器类，负责处理文件显示名称的缓存
-import { ILoggerService } from './interfaces/IServices';
+import { TFile } from 'obsidian';
+import { ILoggerService, ITimerService } from './interfaces/IServices';
+import { ServiceContainer, SERVICE_TYPES } from './di/ServiceContainer';
+import { FileProcessorService } from './FileProcessorService';
 
 export class FileDisplayCache {
     private fileDisplayCache: Map<string, {
@@ -30,6 +33,8 @@ export class FileDisplayCache {
     private cacheWarmedUp: boolean = false;
     // 日志记录器
     private logger: ILoggerService;
+    // 服务容器引用
+    private serviceContainer: ServiceContainer;
     
     constructor(
         private timerCallback?: (cleanupCallback: () => void) => number, 
@@ -46,6 +51,11 @@ export class FileDisplayCache {
             error: (message: string, ...args: any[]) => console.error(`[FileDisplayCache] ${message}`, ...args),
             getLogger: (prefix: string) => this.logger
         };
+        
+        // 获取服务容器
+        if (plugin) {
+            this.serviceContainer = ServiceContainer.getInstance(plugin);
+        }
         
         // 开始定期清理缓存
         this.startPeriodicCleanup();
@@ -188,7 +198,13 @@ export class FileDisplayCache {
                     });
                 }
                 
-                this.cacheWarmedUp = true;
+                // 检查缓存是否有足够的数据来标记为已预热
+                const hasEnoughData = this.fileDisplayCache.size > 0 && this.fileLinkMap.size > 0;
+                this.cacheWarmedUp = hasEnoughData;
+                
+                if (hasEnoughData) {
+                    this.logger?.log(`从持久化存储加载了 ${this.fileDisplayCache.size} 个文件显示缓存和 ${this.fileLinkMap.size} 个文件链接关系`);
+                }
             }
         } catch (error) {
             console.error('Failed to load filename display cache:', error);
@@ -576,11 +592,27 @@ export class FileDisplayCache {
         if (this.cacheWarmedUp) return;
         
         try {
+            // 首先尝试从持久化存储加载缓存
+            await this.loadCacheFromData();
+            
+            // 如果缓存已经加载成功，则不需要重新预热
+            if (this.cacheWarmedUp) {
+                this.logger?.log('从持久化存储成功加载缓存数据');
+                return;
+            }
+            
+            // 如果没有缓存或缓存加载失败，则执行预热
+            this.logger?.log('开始执行渐进式缓存预热...');
+            
             // 1. 加载所有markdown文件
             const files = this.plugin?.app?.vault?.getMarkdownFiles() || [];
             
-            // 2. 对于每个文件，预先解析其中的链接关系
-            for (const file of files) {
+            // 2. 分离可见文件和其他文件
+            const fileProcessorService = this.serviceContainer.get<FileProcessorService>(SERVICE_TYPES.FileProcessorService);
+            const { visibleFiles, otherFiles } = fileProcessorService.separateFilesByVisibility(files);
+            
+            // 3. 先处理可见文件
+            for (const file of visibleFiles) {
                 // 获取文件的缓存
                 const fileCache = this.plugin?.app?.metadataCache?.getFileCache(file);
                 if (!fileCache || !fileCache.links) continue;
@@ -598,10 +630,51 @@ export class FileDisplayCache {
                 }
             }
             
-            this.cacheWarmedUp = true;
-            
-            // 保存缓存数据
-            await this.saveCacheToData();
+            // 4. 在后台处理其他文件
+            if (otherFiles.length > 0) {
+                // 创建一个处理函数
+                const processFile = async (file: TFile) => {
+                    const fileCache = this.plugin?.app?.metadataCache?.getFileCache(file);
+                    if (!fileCache || !fileCache.links) return;
+                    
+                    for (const link of fileCache.links) {
+                        if (!link.link) continue;
+                        
+                        const targetFile = this.plugin?.app?.metadataCache?.getFirstLinkpathDest(link.link, file.path);
+                        if (!targetFile) continue;
+                        
+                        this.addFileLink(file.path, targetFile.path);
+                    }
+                };
+                
+                // 使用TimerService在空闲时间处理其余文件
+                const timerService = this.serviceContainer.get<ITimerService>(SERVICE_TYPES.TimerService);
+                
+                // 分批处理文件
+                const batchSize = 20;
+                for (let i = 0; i < otherFiles.length; i += batchSize) {
+                    const batch = otherFiles.slice(i, i + batchSize);
+                    
+                    // 使用requestIdleCallback在浏览器空闲时处理
+                    timerService.requestIdleCallback(async () => {
+                        for (const file of batch) {
+                            await processFile(file);
+                        }
+                        
+                        // 如果这是最后一批，标记缓存预热完成并保存
+                        if (i + batchSize >= otherFiles.length) {
+                            this.cacheWarmedUp = true;
+                            await this.saveCacheToData();
+                            this.logger?.log('缓存预热完成，已保存到持久化存储');
+                        }
+                    });
+                }
+            } else {
+                // 如果没有其他文件需要处理，直接标记完成并保存
+                this.cacheWarmedUp = true;
+                await this.saveCacheToData();
+                this.logger?.log('缓存预热完成，已保存到持久化存储');
+            }
         } catch (error) {
             console.error('Failed to warm up cache:', error);
         }
