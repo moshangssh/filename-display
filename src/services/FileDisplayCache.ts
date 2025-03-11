@@ -1,4 +1,6 @@
 // 文件缓存管理器类，负责处理文件显示名称的缓存
+import { ILoggerService } from './interfaces/IServices';
+
 export class FileDisplayCache {
     private fileDisplayCache: Map<string, {
         displayName: string;
@@ -26,13 +28,29 @@ export class FileDisplayCache {
     private priorityPaths: Set<string> = new Set(); // 高优先级路径集合，这些路径会被优先处理
     // 新增：缓存预热状态
     private cacheWarmedUp: boolean = false;
+    // 日志记录器
+    private logger: ILoggerService;
     
-    constructor(private timerCallback?: (cleanupCallback: () => void) => number, plugin?: any) {
-        // 初始化缓存并设置定期清理
+    constructor(
+        private timerCallback?: (cleanupCallback: () => void) => number, 
+        plugin?: any,
+        loggerService?: ILoggerService
+    ) {
         this.plugin = plugin;
+        
+        // 设置日志记录器
+        this.logger = loggerService?.getLogger('FileDisplayCache') || {
+            log: (message: string, ...args: any[]) => console.log(`[FileDisplayCache] ${message}`, ...args),
+            info: (message: string, ...args: any[]) => console.info(`[FileDisplayCache] ${message}`, ...args),
+            warn: (message: string, ...args: any[]) => console.warn(`[FileDisplayCache] ${message}`, ...args),
+            error: (message: string, ...args: any[]) => console.error(`[FileDisplayCache] ${message}`, ...args),
+            getLogger: (prefix: string) => this.logger
+        };
+        
+        // 开始定期清理缓存
         this.startPeriodicCleanup();
         
-        // 尝试从持久化数据加载缓存
+        // 初始化时加载缓存数据
         this.loadCacheFromData();
     }
     
@@ -274,54 +292,57 @@ export class FileDisplayCache {
     
     // 获取显示名称（增加时间戳检查）
     public getDisplayName(path: string): string | undefined {
-        // 在返回缓存前检查缓存是否有效
-        if (!this.isCacheValid(path)) {
-            // 如果缓存无效，返回 undefined 促使重新处理
+        try {
+            // 安全检查
+            if (!path) {
+                this.logger.warn('尝试获取空路径的显示名称');
+                return undefined;
+            }
+            
+            // 在返回缓存前检查缓存是否有效
+            if (!this.isCacheValid(path)) {
+                // 如果缓存无效，返回 undefined 促使重新处理
+                return undefined;
+            }
+            
+            if (!this.fileDisplayCache.has(path)) {
+                return undefined;
+            }
+            
+            const entry = this.fileDisplayCache.get(path);
+            if (!entry) {
+                return undefined;
+            }
+            
+            // 更新时间戳表示最近访问
+            entry.timestamp = Date.now();
+            
+            return entry.displayName;
+        } catch (error) {
+            this.logger.error(`获取路径 ${path} 的显示名称时出错:`, error);
             return undefined;
         }
-        
-        if (!this.fileDisplayCache.has(path)) {
-            return undefined;
-        }
-        
-        const entry = this.fileDisplayCache.get(path);
-        if (!entry) {
-            return undefined;
-        }
-        
-        // 更新时间戳表示最近访问
-        entry.timestamp = Date.now();
-        
-        return entry.displayName;
     }
     
     // 设置显示名称
     public setDisplayName(path: string, displayName: string): void {
-        // 添加到缓存中
-        this.fileDisplayCache.set(path, {
-            displayName: displayName,
-            timestamp: Date.now()
-        });
-        
-        // 添加到已处理文件集合
-        this.processedFiles.add(path);
-        
-        // 更新文件修改时间记录
-        this.updateFileMTime(path);
-        
-        // 添加到优先级路径
-        this.priorityPaths.add(path);
-    }
-    
-    // 批量设置显示名称
-    public setDisplayNames(entries: Array<[string, string]>): void {
-        const now = Date.now();
-        
-        // 批量更新displayCache
-        entries.forEach(([path, displayName]) => {
+        try {
+            // 安全检查
+            if (!path) {
+                this.logger.warn('尝试为空路径设置显示名称');
+                return;
+            }
+            
+            if (!displayName) {
+                this.logger.warn(`尝试为路径 ${path} 设置空显示名称`);
+                // 回退到使用路径的基础名称
+                displayName = path.split('/').pop() || path;
+            }
+            
+            // 添加到缓存中
             this.fileDisplayCache.set(path, {
                 displayName: displayName,
-                timestamp: now
+                timestamp: Date.now()
             });
             
             // 添加到已处理文件集合
@@ -329,19 +350,94 @@ export class FileDisplayCache {
             
             // 更新文件修改时间记录
             this.updateFileMTime(path);
-        });
+            
+            // 添加到优先级路径
+            this.priorityPaths.add(path);
+        } catch (error) {
+            this.logger.error(`设置路径 ${path} 的显示名称时出错:`, error);
+        }
+    }
+    
+    // 批量设置显示名称
+    public setDisplayNames(entries: Array<[string, string]>): void {
+        try {
+            // 安全检查
+            if (!entries || !Array.isArray(entries)) {
+                this.logger.warn('尝试使用无效的条目批量设置显示名称');
+                return;
+            }
+            
+            const now = Date.now();
+            const validEntries = entries.filter(entry => 
+                entry && Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && typeof entry[1] === 'string'
+            );
+            
+            if (validEntries.length !== entries.length) {
+                this.logger.warn(`批量更新中发现 ${entries.length - validEntries.length} 个无效条目`);
+            }
+            
+            // 批量更新displayCache
+            validEntries.forEach(([path, displayName]) => {
+                try {
+                    this.fileDisplayCache.set(path, {
+                        displayName: displayName,
+                        timestamp: now
+                    });
+                    
+                    // 添加到已处理文件集合
+                    this.processedFiles.add(path);
+                    
+                    // 更新文件修改时间记录
+                    this.updateFileMTime(path);
+                } catch (entryError) {
+                    this.logger.error(`更新路径 ${path} 时出错:`, entryError);
+                }
+            });
+        } catch (error) {
+            this.logger.error('批量设置显示名称时出错:', error);
+        }
     }
     
     // 删除路径
     public deletePath(path: string): void {
-        this.fileDisplayCache.delete(path);
-        this.originalDisplayNames.delete(path);
-        this.processedFiles.delete(path);
-        this.fileModificationTimes.delete(path);
-        this.priorityPaths.delete(path);
-        
-        // 清理fileLinkMap
-        this.fileLinkMap.delete(path);
+        try {
+            // 安全检查
+            if (!path) {
+                this.logger.warn('尝试删除空路径的缓存');
+                return;
+            }
+            
+            this.fileDisplayCache.delete(path);
+            this.originalDisplayNames.delete(path);
+            this.processedFiles.delete(path);
+            this.fileModificationTimes.delete(path);
+            this.priorityPaths.delete(path);
+            
+            // 清理fileLinkMap
+            this.fileLinkMap.delete(path);
+        } catch (error) {
+            this.logger.error(`删除路径 ${path} 的缓存时出错:`, error);
+            
+            // 尝试单独删除每个缓存条目以最大程度保持一致性
+            try {
+                this.fileDisplayCache.delete(path);
+            } catch {}
+            try {
+                this.originalDisplayNames.delete(path);
+            } catch {}
+            try {
+                this.processedFiles.delete(path);
+            } catch {}
+            try {
+                this.fileModificationTimes.delete(path);
+            } catch {}
+            try {
+                this.priorityPaths.delete(path);
+            } catch {}
+            try {
+                this.fileLinkMap.delete(path);
+            } catch {}
+        }
     }
     
     // 检查是否已经处理过
@@ -351,20 +447,61 @@ export class FileDisplayCache {
     
     // 清空所有缓存
     public clearAll(): void {
-        this.fileDisplayCache.clear();
-        this.originalDisplayNames.clear();
-        this.processedFiles.clear();
-        this.fileModificationTimes.clear();
-        this.fileLinkMap.clear();
-        this.priorityPaths.clear();
-        this.cacheWarmedUp = false;
+        try {
+            this.fileDisplayCache.clear();
+            this.originalDisplayNames.clear();
+            this.processedFiles.clear();
+            this.fileModificationTimes.clear();
+            this.fileLinkMap.clear();
+            this.priorityPaths.clear();
+            this.cacheWarmedUp = false;
+        } catch (error) {
+            this.logger.error('清空所有缓存时出错:', error);
+            
+            // 尝试单独清除每个缓存以最大程度保持一致性
+            try {
+                this.fileDisplayCache.clear();
+            } catch {}
+            try {
+                this.originalDisplayNames.clear();
+            } catch {}
+            try {
+                this.processedFiles.clear();
+            } catch {}
+            try {
+                this.fileModificationTimes.clear();
+            } catch {}
+            try {
+                this.fileLinkMap.clear();
+            } catch {}
+            try {
+                this.priorityPaths.clear();
+            } catch {}
+            
+            this.cacheWarmedUp = false;
+        }
     }
     
     // 清空缓存
     public clear(): void {
-        this.fileDisplayCache.clear();
-        this.processedFiles.clear();
-        this.priorityPaths.clear();
+        try {
+            this.fileDisplayCache.clear();
+            this.processedFiles.clear();
+            this.priorityPaths.clear();
+        } catch (error) {
+            this.logger.error('清空缓存时出错:', error);
+            
+            // 尝试单独清除每个缓存以最大程度保持一致性
+            try {
+                this.fileDisplayCache.clear();
+            } catch {}
+            try {
+                this.processedFiles.clear();
+            } catch {}
+            try {
+                this.priorityPaths.clear();
+            } catch {}
+        }
     }
     
     // 清除过期的缓存项

@@ -69,29 +69,87 @@ export class EventManagerService implements IEventManagerService {
     
     // 分发事件
     public async dispatch(event: FileEvent): Promise<void> {
-        this.logger.log(`分发事件: ${event.type} - 文件: ${event.file.path}`);
-        const callbacks = this.eventSubscribers.get(event.type);
-        
-        if (!callbacks || callbacks.size === 0) {
-            this.logger.log(`没有订阅者处理事件: ${event.type}`);
-            return;
-        }
-        
-        this.logger.log(`找到 ${callbacks.size} 个订阅者处理事件: ${event.type}`);
-        
-        // 并行执行所有回调，但捕获潜在错误
-        const promises = Array.from(callbacks).map(async (callback) => {
-            try {
-                const result = callback(event);
-                if (result instanceof Promise) {
-                    await result;
-                }
-            } catch (error) {
-                this.logger.error(`处理事件 ${event.type} 时发生错误:`, error);
+        try {
+            this.logger.log(`分发事件: ${event.type} - 文件: ${event.file.path}`);
+            const callbacks = this.eventSubscribers.get(event.type);
+            
+            if (!callbacks || callbacks.size === 0) {
+                this.logger.log(`没有订阅者处理事件: ${event.type}`);
+                return;
             }
-        });
-        
-        await Promise.all(promises);
+            
+            this.logger.log(`找到 ${callbacks.size} 个订阅者处理事件: ${event.type}`);
+            
+            // 并行执行所有回调，但捕获潜在错误
+            const results = await Promise.allSettled(
+                Array.from(callbacks).map(async (callback) => {
+                    try {
+                        const result = callback(event);
+                        if (result instanceof Promise) {
+                            return await result;
+                        }
+                        return result;
+                    } catch (error) {
+                        this.logger.error(`处理事件 ${event.type} 时发生错误:`, error);
+                        // 重新抛出以便 Promise.allSettled 可以捕获
+                        throw error;
+                    }
+                })
+            );
+            
+            // 检查结果，记录失败的处理程序
+            const failedPromises = results.filter((result): result is PromiseRejectedResult => 
+                result.status === 'rejected'
+            );
+            
+            if (failedPromises.length > 0) {
+                this.logger.warn(
+                    `事件 ${event.type} 的 ${failedPromises.length}/${results.length} 个处理程序失败执行`,
+                    failedPromises.map(p => p.reason)
+                );
+                
+                // 对于文件相关事件，如果有失败的处理程序，可以尝试在下一个循环中重新触发特定事件
+                if (
+                    [
+                        FileEventType.CREATE, 
+                        FileEventType.MODIFY, 
+                        FileEventType.RENAME, 
+                        FileEventType.DELETE, 
+                        FileEventType.METADATA
+                    ].includes(event.type)
+                ) {
+                    // 标记这是重试，以避免无限循环
+                    if (!event.data?.isRetry) {
+                        setTimeout(() => {
+                            try {
+                                // 确保文件仍然存在
+                                if (this.plugin.app.vault.getFileByPath(event.file.path)) {
+                                    this.logger.log(`尝试重新触发事件: ${event.type} - 文件: ${event.file.path}`);
+                                    
+                                    // 创建带有重试标记的新事件对象
+                                    this.dispatch({
+                                        ...event,
+                                        data: {
+                                            ...event.data,
+                                            isRetry: true
+                                        }
+                                    }).catch(err => {
+                                        this.logger.error(`重试事件处理失败: ${event.type}`, err);
+                                    });
+                                }
+                            } catch (retryError) {
+                                this.logger.error(`准备重试事件时出错: ${event.type}`, retryError);
+                            }
+                        }, 500); // 延迟半秒后重试
+                    } else {
+                        this.logger.warn(`事件 ${event.type} 已经是重试，不再继续重试`);
+                    }
+                }
+            }
+        } catch (error) {
+            this.logger.error(`分发事件 ${event.type} 时发生致命错误`, error);
+            // 不抛出，因为这是顶级方法，我们不希望它导致整个插件崩溃
+        }
     }
     
     // 设置 Vault 事件监听器

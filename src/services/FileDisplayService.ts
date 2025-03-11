@@ -102,92 +102,228 @@ export class FileDisplayService implements IFileDisplayService {
     
     // 处理文件事件
     private async handleFileEvent(event: FileEvent): Promise<void> {
-        this.logger.log(`处理文件事件: ${event.type} - 文件: ${event.file.path}`);
-        
-        const file = event.file;
-        
-        switch (event.type) {
-            case FileEventType.CREATE:
-                await this.handleFileOperation(file, 'create');
-                break;
+        try {
+            this.logger.log(`处理文件事件: ${event.type} - 文件: ${event.file.path}`);
+            
+            const file = event.file;
+            
+            switch (event.type) {
+                case FileEventType.CREATE:
+                    await this.handleFileOperation(file, 'create');
+                    break;
+                    
+                case FileEventType.MODIFY:
+                    await this.handleFileOperation(file, 'modify');
+                    break;
+                    
+                case FileEventType.RENAME:
+                    await this.handleFileOperation(file, 'rename', event.oldPath);
+                    break;
+                    
+                case FileEventType.DELETE:
+                    await this.handleFileOperation(file, 'delete');
+                    break;
+                    
+                case FileEventType.METADATA:
+                    await this.handleFileOperation(file, 'metadata');
+                    break;
+                    
+                default:
+                    this.logger.log(`未处理的事件类型: ${event.type}`);
+            }
+        } catch (error) {
+            this.logger.error(`处理文件事件失败: ${event.type} - 文件: ${event.file.path}`, error);
+            
+            // 尝试恢复缓存状态与实际文件状态的一致性
+            if (event.file?.path) {
+                // 清除可能不一致的缓存
+                this.fileDisplayCache.deletePath(event.file.path);
                 
-            case FileEventType.MODIFY:
-                await this.handleFileOperation(file, 'modify');
-                break;
-                
-            case FileEventType.RENAME:
-                await this.handleFileOperation(file, 'rename', event.oldPath);
-                break;
-                
-            case FileEventType.DELETE:
-                await this.handleFileOperation(file, 'delete');
-                break;
-                
-            case FileEventType.METADATA:
-                await this.handleFileOperation(file, 'metadata');
-                break;
-                
-            default:
-                this.logger.log(`未处理的事件类型: ${event.type}`);
+                // 在下一个事件循环中尝试重新处理
+                setTimeout(() => {
+                    try {
+                        // 检查文件是否仍然存在
+                        if (this.plugin.app.vault.getFileByPath(event.file.path)) {
+                            this.updateFileExplorerDisplay(event.file).catch(err => {
+                                this.logger.error(`恢复文件显示失败: ${event.file.path}`, err);
+                            });
+                        }
+                    } catch (recoverError) {
+                        this.logger.error(`尝试恢复文件显示时出错: ${event.file.path}`, recoverError);
+                    }
+                }, 200);
+            }
         }
     }
 
     // 处理各种文件操作
     public async handleFileOperation(file: TFile, operation: 'create' | 'modify' | 'rename' | 'delete' | 'metadata', oldPath?: string): Promise<void> {
-        if (file?.path) {
-            this.lastUpdatedFiles.add(file.path);
+        if (!file) {
+            this.logger.error(`处理文件操作失败: 无效的文件对象, 操作类型: ${operation}`);
+            return;
         }
         
-        switch (operation) {
-            case 'create':
-                await this.fileProcessorService.processFile(file);
-                await this.updateFileExplorerDisplay(file);
-                this.markdownLinkService.updateMarkdownLinksForFile(file);
-                break;
+        try {
+            if (file?.path) {
+                this.lastUpdatedFiles.add(file.path);
+            }
+            
+            switch (operation) {
+                case 'create':
+                    try {
+                        await this.fileProcessorService.processFile(file);
+                    } catch (error) {
+                        this.logger.error(`处理新建文件失败: ${file.path}`, error);
+                        throw error; // 向上传递错误以触发恢复机制
+                    }
+                    
+                    try {
+                        await this.updateFileExplorerDisplay(file);
+                    } catch (error) {
+                        this.logger.error(`更新新建文件显示失败: ${file.path}`, error);
+                        // 清除缓存以便下次尝试
+                        if (file?.path) this.fileDisplayCache.deletePath(file.path);
+                    }
+                    
+                    try {
+                        this.markdownLinkService.updateMarkdownLinksForFile(file);
+                    } catch (error) {
+                        this.logger.error(`更新新建文件链接失败: ${file.path}`, error);
+                    }
+                    break;
+                    
+                case 'modify':
+                    // 清除该文件的缓存，强制重新处理
+                    if (file?.path) {
+                        this.fileDisplayCache.deletePath(file.path);
+                    }
+                    
+                    try {
+                        await this.fileProcessorService.processFile(file);
+                    } catch (error) {
+                        this.logger.error(`处理修改文件失败: ${file.path}`, error);
+                        throw error; // 向上传递错误以触发恢复机制
+                    }
+                    
+                    try {
+                        await this.updateFileExplorerDisplay(file);
+                    } catch (error) {
+                        this.logger.error(`更新修改文件显示失败: ${file.path}`, error);
+                        // 清除缓存以便下次尝试
+                        if (file?.path) this.fileDisplayCache.deletePath(file.path);
+                    }
+                    
+                    try {
+                        this.markdownLinkService.updateMarkdownLinksForFile(file);
+                    } catch (error) {
+                        this.logger.error(`更新修改文件链接失败: ${file.path}`, error);
+                    }
+                    
+                    // 检查当前活跃编辑器，如果存在则刷新链接装饰
+                    try {
+                        const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+                        if (view && view.editor) {
+                            this.editorLinkDecorator.processLinks();
+                        }
+                    } catch (error) {
+                        this.logger.error(`更新编辑器链接装饰失败`, error);
+                    }
+                    break;
+                    
+                case 'rename':
+                    if (oldPath) {
+                        try {
+                            // 清除旧路径的缓存
+                            this.fileDisplayCache.deletePath(oldPath);
+                        } catch (error) {
+                            this.logger.error(`清除重命名文件旧路径缓存失败: ${oldPath}`, error);
+                        }
+                    }
+                    
+                    // 处理新路径
+                    try {
+                        await this.fileProcessorService.processFile(file);
+                    } catch (error) {
+                        this.logger.error(`处理重命名文件失败: ${file.path}`, error);
+                        throw error; // 向上传递错误以触发恢复机制
+                    }
+                    
+                    try {
+                        await this.updateFileExplorerDisplay(file);
+                    } catch (error) {
+                        this.logger.error(`更新重命名文件显示失败: ${file.path}`, error);
+                        // 清除缓存以便下次尝试
+                        if (file?.path) this.fileDisplayCache.deletePath(file.path);
+                    }
+                    
+                    try {
+                        this.markdownLinkService.updateMarkdownLinksForFile(file);
+                    } catch (error) {
+                        this.logger.error(`更新重命名文件链接失败: ${file.path}`, error);
+                    }
+                    break;
+                    
+                case 'delete':
+                    if (file?.path) {
+                        try {
+                            // 从缓存中删除
+                            this.fileDisplayCache.deletePath(file.path);
+                        } catch (error) {
+                            this.logger.error(`清除已删除文件缓存失败: ${file.path}`, error);
+                        }
+                    }
+                    break;
+                    
+                case 'metadata':
+                    if (file?.path) {
+                        try {
+                            // 清除缓存
+                            this.fileDisplayCache.deletePath(file.path);
+                        } catch (error) {
+                            this.logger.error(`清除元数据更新文件缓存失败: ${file.path}`, error);
+                        }
+                        
+                        try {
+                            await this.fileProcessorService.processFile(file);
+                        } catch (error) {
+                            this.logger.error(`处理元数据更新文件失败: ${file.path}`, error);
+                            throw error; // 向上传递错误以触发恢复机制
+                        }
+                        
+                        try {
+                            await this.updateFileExplorerDisplay(file);
+                        } catch (error) {
+                            this.logger.error(`更新元数据更新文件显示失败: ${file.path}`, error);
+                            // 清除缓存以便下次尝试
+                            this.fileDisplayCache.deletePath(file.path);
+                        }
+                        
+                        try {
+                            this.markdownLinkService.updateMarkdownLinksForFile(file);
+                        } catch (error) {
+                            this.logger.error(`更新元数据更新文件链接失败: ${file.path}`, error);
+                        }
+                    }
+                    break;
+            }
+        } catch (error) {
+            this.logger.error(`文件操作处理失败: ${operation}, 文件: ${file.path}`, error);
+            
+            // 确保缓存与实际文件状态一致
+            if (file?.path) {
+                this.fileDisplayCache.deletePath(file.path);
                 
-            case 'modify':
-                // 清除该文件的缓存，强制重新处理
-                if (file?.path) {
-                    this.fileDisplayCache.deletePath(file.path);
-                }
-                await this.fileProcessorService.processFile(file);
-                await this.updateFileExplorerDisplay(file);
-                this.markdownLinkService.updateMarkdownLinksForFile(file);
-                
-                // 检查当前活跃编辑器，如果存在则刷新链接装饰
-                const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-                if (view && view.editor) {
-                    this.editorLinkDecorator.processLinks();
-                }
-                break;
-                
-            case 'rename':
-                if (oldPath) {
-                    // 清除旧路径的缓存
-                    this.fileDisplayCache.deletePath(oldPath);
-                }
-                // 处理新路径
-                await this.fileProcessorService.processFile(file);
-                await this.updateFileExplorerDisplay(file);
-                this.markdownLinkService.updateMarkdownLinksForFile(file);
-                break;
-                
-            case 'delete':
-                if (file?.path) {
-                    // 从缓存中删除
-                    this.fileDisplayCache.deletePath(file.path);
-                }
-                break;
-                
-            case 'metadata':
-                if (file?.path) {
-                    // 清除缓存并重新处理
-                    this.fileDisplayCache.deletePath(file.path);
-                    await this.fileProcessorService.processFile(file);
-                    await this.updateFileExplorerDisplay(file);
-                    this.markdownLinkService.updateMarkdownLinksForFile(file);
-                }
-                break;
+                // 触发文件资源管理器刷新
+                this.eventManager.dispatch({
+                    type: FileEventType.EXPLORER_REFRESH,
+                    file: file
+                }).catch(err => {
+                    this.logger.error(`触发资源管理器刷新失败`, err);
+                });
+            }
+            
+            // 向上抛出错误以便调用者可以进一步处理
+            throw error;
         }
     }
 

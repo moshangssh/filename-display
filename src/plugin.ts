@@ -133,7 +133,8 @@ export default class TitleExtractorPlugin extends Plugin {
                 const timerService = this.serviceContainer.get<TimerService>(SERVICE_TYPES.TimerService);
                 return timerService.setInterval(cleanupFn, 60000); // 每分钟执行一次
             },
-            this // 传入插件实例，使得缓存服务可以访问 app.loadData 和 app.saveData
+            this, // 传入插件实例，使得缓存服务可以访问 app.loadData 和 app.saveData
+            this.serviceContainer.get(SERVICE_TYPES.LoggerService) // 传入日志服务
         );
         this.serviceContainer.register(
             SERVICE_TYPES.FileDisplayCache, 

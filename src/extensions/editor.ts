@@ -14,15 +14,29 @@ const logger = new Logger('EditorExtensions');
 export class LinkReplaceWidget extends WidgetType {
     private readonly plugin: ITitleExtractorPlugin;
     private clickListener: ((event: MouseEvent) => void) | null = null;
-    // 新增：链接DOM引用
+    // 链接DOM引用
     private spanElement: HTMLElement | null = null;
+    // 跟踪小部件是否已被销毁
+    private isDestroyed: boolean = false;
     
-    constructor(private readonly displayName: string, private readonly originalPath: string, plugin: ITitleExtractorPlugin) {
+    constructor(
+        private readonly displayName: string, 
+        private readonly originalPath: string, 
+        plugin: ITitleExtractorPlugin
+    ) {
         super();
         this.plugin = plugin;
+        // 构造函数中不创建DOM或添加事件监听器，这些操作推迟到toDOM中
     }
 
     toDOM() {
+        // 防御性检查：如果已被销毁则返回空span
+        if (this.isDestroyed) {
+            const emptySpan = document.createElement('span');
+            emptySpan.className = 'cm-link cm-hmd-internal-link filename-display-destroyed';
+            return emptySpan;
+        }
+        
         const span = document.createElement('span');
         span.className = 'cm-link cm-underline cm-hmd-internal-link filename-display-replaced';
         span.textContent = this.displayName;
@@ -38,6 +52,12 @@ export class LinkReplaceWidget extends WidgetType {
         this.clickListener = (event: MouseEvent) => {
             event.preventDefault();
             event.stopPropagation(); // 阻止事件冒泡
+            
+            // 防御性检查：如果已被销毁或插件不可用则不执行操作
+            if (this.isDestroyed || !this.plugin || !this.plugin.app) {
+                return;
+            }
+            
             // 使用Obsidian API打开链接
             const workspace = this.plugin.app.workspace;
             const path = this.originalPath;
@@ -57,33 +77,70 @@ export class LinkReplaceWidget extends WidgetType {
         return span;
     }
 
-    destroy(dom: HTMLElement): void {
-        // 在小部件被销毁时清理事件监听器
-        if (this.clickListener && dom instanceof HTMLElement) {
-            dom.removeEventListener('click', this.clickListener);
+    destroy(dom: HTMLElement | null): void {
+        // 标记为已销毁
+        this.isDestroyed = true;
+        
+        // 无条件清理事件监听器，即使dom参数不是HTMLElement
+        if (this.clickListener) {
+            // 尝试从spanElement中清理事件监听器（如果存在）
+            if (this.spanElement) {
+                this.spanElement.removeEventListener('click', this.clickListener);
+            }
+            // 从传入的dom元素中也清理事件监听器
+            if (dom) {
+                dom.removeEventListener('click', this.clickListener);
+            }
+            // 释放监听器引用
             this.clickListener = null;
         }
+        
+        // 清除DOM引用
         this.spanElement = null;
+        
+        // 注意：plugin是只读属性，无法置空
+        // 由于plugin是应用级别的单例，不需要在这里特别处理
+        // 确保不在此类中存储任何可能导致循环引用的临时数据
     }
 
     ignoreEvent() {
         return false;
     }
     
-    // 新增：更新文本内容方法
+    // 更新文本内容方法
     updateText(newDisplayName: string): void {
+        // 防御性检查：如果已被销毁则不执行更新
+        if (this.isDestroyed) {
+            return;
+        }
+        
         if (this.spanElement) {
             // 应用平滑过渡
             this.spanElement.style.opacity = '0';
             
-            // 使用setTimeout来延迟内容更新，让渐变效果可见
-            setTimeout(() => {
-                if (this.spanElement) {
-                    this.spanElement.textContent = newDisplayName;
-                    this.spanElement.style.opacity = '1';
+            // 使用requestAnimationFrame替代setTimeout，更符合浏览器渲染机制
+            requestAnimationFrame(() => {
+                // 再次检查组件是否已被销毁
+                if (this.isDestroyed || !this.spanElement) {
+                    return;
                 }
-            }, 50);
+                
+                this.spanElement.textContent = newDisplayName;
+                this.spanElement.style.opacity = '1';
+            });
         }
+    }
+
+    // 添加eq方法以优化重新渲染
+    eq(other: LinkReplaceWidget): boolean {
+        // 如果小部件已被销毁，则始终返回false触发完全重新渲染
+        if (this.isDestroyed) {
+            return false;
+        }
+        
+        // 只有当显示名称和原始路径都相同时才认为两个小部件相等
+        return this.displayName === other.displayName && 
+               this.originalPath === other.originalPath;
     }
 }
 
@@ -106,10 +163,34 @@ export const linkDecorationField = StateField.define<DecorationSet>({
         // 处理文档变更
         decorations = decorations.map(tr.changes);
         
+        // 如果文档发生大规模变化(例如编辑器完全替换内容)，清理所有小部件以避免内存泄漏
+        if (tr.changes.desc?.length && tr.newDoc.length < tr.startState.doc.length / 2) {
+            // 在清理前手动调用所有小部件的destroy方法
+            decorations.between(0, tr.startState.doc.length, (from, to, deco) => {
+                if (deco.spec.widget instanceof LinkReplaceWidget) {
+                    const widget = deco.spec.widget as LinkReplaceWidget;
+                    // 传入null作为dom参数
+                    widget.destroy(null);
+                }
+                return false;
+            });
+            // 清空所有装饰
+            decorations = Decoration.none;
+        }
+        
         // 处理装饰效果
         for (const effect of tr.effects) {
             // 清除所有装饰
             if (effect.is(removeLinkDecoration)) {
+                // 在清理前手动调用所有小部件的destroy方法
+                decorations.between(0, tr.state.doc.length, (from, to, deco) => {
+                    if (deco.spec.widget instanceof LinkReplaceWidget) {
+                        const widget = deco.spec.widget as LinkReplaceWidget;
+                        // 传入null作为dom参数
+                        widget.destroy(null);
+                    }
+                    return false;
+                });
                 decorations = Decoration.none;
             }
             // 添加新装饰
@@ -119,9 +200,37 @@ export const linkDecorationField = StateField.define<DecorationSet>({
                     widget: widget,
                     inclusive: false
                 }).range(from, to);
+                
+                // 检查是否已经存在相同位置的装饰，如果有则先清理它们
+                // 存储需要移除的装饰位置
+                const overlappingPositions: {from: number, to: number}[] = [];
+                
+                decorations.between(from, to, (start, end, deco) => {
+                    if (deco.spec.widget instanceof LinkReplaceWidget) {
+                        const widget = deco.spec.widget as LinkReplaceWidget;
+                        widget.destroy(null);
+                        overlappingPositions.push({from: start, to: end});
+                    }
+                    return false;
+                });
+                
+                // 如果有重叠装饰，先移除它们
+                if (overlappingPositions.length > 0) {
+                    // 使用filter方法移除重叠的装饰
+                    decorations = decorations.update({ 
+                        filter: (dfrom, dto) => {
+                            // 检查该位置是否在我们要移除的范围内
+                            return !overlappingPositions.some(
+                                pos => pos.from === dfrom && pos.to === dto
+                            );
+                        } 
+                    });
+                }
+                
+                // 添加新装饰
                 decorations = decorations.update({ add: [decoration], sort: true });
             }
-            // 新增：处理更新文本效果
+            // 处理更新文本效果
             else if (effect.is(updateLinkText)) {
                 const { from, to, displayName } = effect.value;
                 
