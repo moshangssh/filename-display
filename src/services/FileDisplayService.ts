@@ -97,12 +97,26 @@ export class FileDisplayService implements IFileDisplayService {
             this.eventManager.subscribe(FileEventType.METADATA, this.handleFileEvent.bind(this))
         );
         
+        // 订阅更新所有文件事件
+        this.unsubscribers.push(
+            this.eventManager.subscribe(FileEventType.UPDATE_ALL, (event) => {
+                this.logger.log('收到更新所有文件事件');
+                this.updateAllFilesDisplay(false);
+                return Promise.resolve();
+            })
+        );
+        
         this.logger.log('事件订阅设置完成');
     }
     
     // 处理文件事件
     private async handleFileEvent(event: FileEvent): Promise<void> {
         try {
+            // 跳过file为null的事件(UPDATE_ALL类型事件会单独处理)
+            if (!event.file) {
+                return;
+            }
+            
             this.logger.log(`处理文件事件: ${event.type} - 文件: ${event.file.path}`);
             
             const file = event.file;
@@ -132,7 +146,9 @@ export class FileDisplayService implements IFileDisplayService {
                     this.logger.log(`未处理的事件类型: ${event.type}`);
             }
         } catch (error) {
-            this.logger.error(`处理文件事件失败: ${event.type} - 文件: ${event.file.path}`, error);
+            // file可能为null，添加空检查
+            const filePath = event.file ? event.file.path : 'unknown';
+            this.logger.error(`处理文件事件失败: ${event.type} - 文件: ${filePath}`, error);
             
             // 尝试恢复缓存状态与实际文件状态的一致性
             if (event.file?.path) {
@@ -140,16 +156,21 @@ export class FileDisplayService implements IFileDisplayService {
                 this.fileDisplayCache.deletePath(event.file.path);
                 
                 // 在下一个事件循环中尝试重新处理
+                const file = event.file; // 保存引用，避免多次null检查
                 setTimeout(() => {
                     try {
                         // 检查文件是否仍然存在
-                        if (this.plugin.app.vault.getFileByPath(event.file.path)) {
-                            this.updateFileExplorerDisplay(event.file).catch(err => {
-                                this.logger.error(`恢复文件显示失败: ${event.file.path}`, err);
+                        if (file && this.plugin.app.vault.getFileByPath(file.path)) {
+                            this.updateFileExplorerDisplay(file).catch(err => {
+                                this.logger.error(`恢复文件显示失败: ${file.path}`, err);
                             });
                         }
                     } catch (recoverError) {
-                        this.logger.error(`尝试恢复文件显示时出错: ${event.file.path}`, recoverError);
+                        if (file) {
+                            this.logger.error(`尝试恢复文件显示时出错: ${file.path}`, recoverError);
+                        } else {
+                            this.logger.error(`尝试恢复文件显示时出错`, recoverError);
+                        }
                     }
                 }, 200);
             }

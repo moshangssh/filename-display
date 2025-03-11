@@ -1,34 +1,61 @@
 import { TFile } from 'obsidian';
 import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
-import { FilenameParser } from './FilenameParser';
-import { FileDisplayCache } from './FileDisplayCache';
+import { IFilenameParser, IFileDisplayCache, IFileExplorerDisplayService, IEventManagerService, ILoggerService } from './interfaces/IServices';
 import { FileExplorerObserver } from './FileExplorerObserver';
+import { FileEventType, FileEvent } from './EventManagerService';
 
-export class FileExplorerDisplayService {
+export class FileExplorerDisplayService implements IFileExplorerDisplayService {
     private plugin: ITitleExtractorPlugin;
-    private filenameParser: FilenameParser;
-    private fileDisplayCache: FileDisplayCache;
+    private filenameParser: IFilenameParser;
+    private fileDisplayCache: IFileDisplayCache;
     private fileExplorerObserver: FileExplorerObserver;
+    private eventManager: IEventManagerService;
+    private logger: ILoggerService;
+    private unsubscribers: (() => void)[] = [];
 
     constructor(
         plugin: ITitleExtractorPlugin,
-        filenameParser: FilenameParser,
-        fileDisplayCache: FileDisplayCache,
-        updateAllFilesFn: () => void,
-        updateSingleFileFn: (file: TFile) => Promise<void>,
-        updateAddedNodesFn: (nodes: Node[]) => void
+        filenameParser: IFilenameParser,
+        fileDisplayCache: IFileDisplayCache,
+        eventManager: IEventManagerService,
+        loggerService: ILoggerService
     ) {
         this.plugin = plugin;
         this.filenameParser = filenameParser;
         this.fileDisplayCache = fileDisplayCache;
+        this.eventManager = eventManager;
+        this.logger = loggerService.getLogger('FileExplorerDisplayService');
         
         // 初始化文件资源管理器观察器
         this.fileExplorerObserver = new FileExplorerObserver(
             plugin,
-            updateAllFilesFn,
-            updateSingleFileFn,
-            updateAddedNodesFn
+            // 更新所有文件的回调
+            () => {
+                this.dispatchUpdateAllFilesEvent();
+            },
+            // 更新单个文件的回调
+            async (file: TFile) => {
+                return this.updateFileExplorerDisplay(file);
+            },
+            // 更新新添加节点的回调
+            (nodes: Node[]) => {
+                this.updateAddedNodes(nodes);
+            }
         );
+        
+        this.logger.info('FileExplorerDisplayService 初始化完成');
+    }
+    
+    // 分发更新所有文件的事件
+    private dispatchUpdateAllFilesEvent(): void {
+        const event: FileEvent = {
+            type: FileEventType.UPDATE_ALL,
+            file: null as any, // 此事件不关联特定文件
+            source: 'FileExplorerDisplayService'
+        };
+        this.eventManager.dispatch(event).catch(err => {
+            this.logger.error('分发更新所有文件事件失败', err);
+        });
     }
 
     // 更新新添加的节点
@@ -176,7 +203,7 @@ export class FileExplorerDisplayService {
                 }
             }
         } catch (error) {
-            console.error(`更新文件资源管理器显示错误: ${error}`);
+            this.logger.error(`更新文件资源管理器显示错误: ${error}`);
         }
     }
     
@@ -216,7 +243,7 @@ export class FileExplorerDisplayService {
                 }
             }
         } catch (error) {
-            console.error('恢复显示名称时出错:', error);
+            this.logger.error('恢复显示名称时出错:', error);
         }
     }
     
@@ -230,9 +257,9 @@ export class FileExplorerDisplayService {
     public setupObservers(): void {
         try {
             this.fileExplorerObserver.setupObservers();
-            console.log('文件资源管理器观察器设置成功');
+            this.logger.info('文件资源管理器观察器设置成功');
         } catch (error) {
-            console.error('设置文件资源管理器观察器时发生错误:', error);
+            this.logger.error('设置文件资源管理器观察器时发生错误:', error);
         }
     }
     
@@ -253,16 +280,29 @@ export class FileExplorerDisplayService {
             if (cachedName) {
                 return {
                     success: true,
-                    displayName: cachedName
+                    displayName: cachedName,
+                    fromCache: true
                 };
             }
         }
 
-        // 使用metadataCache获取文件元数据，处理文件名
+        // 使用FilenameParser处理文件
         const result = this.filenameParser.getDisplayNameFromMetadata(file);
         if (result.success && result.displayName) {
             this.fileDisplayCache.setDisplayName(file.path, result.displayName);
         }
         return result;
+    }
+    
+    // 释放资源
+    public dispose(): void {
+        // 取消所有事件订阅
+        this.unsubscribers.forEach(unsub => unsub());
+        this.unsubscribers = [];
+        
+        // 停止观察器
+        if (this.fileExplorerObserver) {
+            this.fileExplorerObserver.stopObserving();
+        }
     }
 } 

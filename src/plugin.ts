@@ -18,6 +18,7 @@ import { Extension } from '@codemirror/state';
 import { createEditorExtensions } from './extensions/editor';
 import { Logger } from './utils/logger';
 import { IEditorLinkDecorator } from './services/interfaces/IServices';
+import { IFileExplorerDisplayService } from './services/interfaces/IServices';
 
 const logger = new Logger('Plugin');
 
@@ -63,7 +64,7 @@ export default class TitleExtractorPlugin extends Plugin {
         // 注册各个服务
         this.registerServices();
         
-        // 从服务容器获取主服务
+        // 从服务容器获取主服务（懒加载）
         this.fileDisplayService = this.serviceContainer.get<FileDisplayService>(SERVICE_TYPES.FileDisplayService);
 
         // 添加设置标签页
@@ -83,13 +84,13 @@ export default class TitleExtractorPlugin extends Plugin {
             })
         );
         
-        // 监听文件创建、修改、删除和重命名事件
+        // 监听相关事件
         this.registerEvents();
         
-        // 使用懒加载机制初始化文件资源管理器观察器
+        // 设置文件资源管理器
         this.setupFileExplorer();
         
-        // 新增：预热缓存
+        // 预热缓存
         await this.warmUpCache();
         
         // 日志输出
@@ -118,125 +119,105 @@ export default class TitleExtractorPlugin extends Plugin {
             new TimerService(this)
         );
         
-        // 注册文件名解析服务
-        this.serviceContainer.register(
+        // 注册文件名解析服务（通过工厂函数）
+        this.serviceContainer.registerFactory(
             SERVICE_TYPES.FilenameParser, 
-            new FilenameParser(
+            (container) => new FilenameParser(
                 this,
-                this.serviceContainer.get(SERVICE_TYPES.LoggerService)
+                container.get(SERVICE_TYPES.LoggerService)
             )
         );
         
-        // 注册文件显示缓存服务
-        const cacheService = new FileDisplayCache(
-            (cleanupFn: () => void) => {
-                const timerService = this.serviceContainer.get<TimerService>(SERVICE_TYPES.TimerService);
-                return timerService.setInterval(cleanupFn, 60000); // 每分钟执行一次
-            },
-            this, // 传入插件实例，使得缓存服务可以访问 app.loadData 和 app.saveData
-            this.serviceContainer.get(SERVICE_TYPES.LoggerService) // 传入日志服务
-        );
-        this.serviceContainer.register(
+        // 注册文件显示缓存服务（通过工厂函数）
+        this.serviceContainer.registerFactory(
             SERVICE_TYPES.FileDisplayCache, 
-            cacheService
+            (container) => new FileDisplayCache(
+                (cleanupFn: () => void) => {
+                    const timerService = container.get<TimerService>(SERVICE_TYPES.TimerService);
+                    return timerService.setInterval(cleanupFn, 60000); // 每分钟执行一次
+                },
+                this, // 传入插件实例，使得缓存服务可以访问 app.loadData 和 app.saveData
+                container.get(SERVICE_TYPES.LoggerService) // 传入日志服务
+            )
         );
         
-        // 注册文件处理服务
-        const fileProcessorService = new FileProcessorService(
-            this,
-            this.serviceContainer.get(SERVICE_TYPES.FilenameParser),
-            this.serviceContainer.get(SERVICE_TYPES.FileDisplayCache),
-            this.serviceContainer.get(SERVICE_TYPES.TimerService),
-            this.serviceContainer.get(SERVICE_TYPES.LoggerService),
-            async (file) => {
-                // 在这里，我们还没有FileExplorerDisplayService实例
-                // 返回Promise以满足接口要求
-                return Promise.resolve();
-            }
-        );
-        this.serviceContainer.register(
-            SERVICE_TYPES.FileProcessorService, 
-            fileProcessorService
-        );
-        
-        // 注册Markdown链接服务
-        const markdownLinkService = new MarkdownLinkService(
-            this,
-            this.serviceContainer.get(SERVICE_TYPES.FilenameParser),
-            this.serviceContainer.get(SERVICE_TYPES.FileDisplayCache)
-        );
-        this.serviceContainer.register(
-            SERVICE_TYPES.MarkdownLinkService, 
-            markdownLinkService
-        );
-        
-        // 注册编辑器链接装饰器服务
-        const editorLinkDecorator = new EditorLinkDecorator(
-            this,
-            this.serviceContainer.get(SERVICE_TYPES.FilenameParser),
-            this.serviceContainer.get(SERVICE_TYPES.FileDisplayCache)
-        );
-        this.serviceContainer.register(
-            SERVICE_TYPES.EditorLinkDecorator, 
-            editorLinkDecorator
-        );
-        
-        // 注册文件资源管理器显示服务
-        const fileExplorerDisplayService = new FileExplorerDisplayService(
-            this,
-            this.serviceContainer.get(SERVICE_TYPES.FilenameParser),
-            this.serviceContainer.get(SERVICE_TYPES.FileDisplayCache),
-            () => {
-                if (this.fileDisplayService) {
-                    this.fileDisplayService.updateAllFilesDisplay();
-                }
-            },
-            async (file) => {
-                if (this.fileDisplayService) {
-                    return this.fileDisplayService.updateFileExplorerDisplay(file);
-                }
-                return Promise.resolve();
-            },
-            (nodes) => {
-                if (fileExplorerDisplayService) {
-                    fileExplorerDisplayService.updateAddedNodes(nodes);
-                }
-            }
-        );
-        this.serviceContainer.register(
-            SERVICE_TYPES.FileExplorerDisplayService, 
-            fileExplorerDisplayService
-        );
-
-        // 创建事件管理服务
-        const eventManagerService = new EventManagerService(
-            this,
-            this.serviceContainer.get(SERVICE_TYPES.LoggerService)
-        );
-        this.serviceContainer.register(
+        // 注册事件管理服务（通过工厂函数）
+        this.serviceContainer.registerFactory(
             SERVICE_TYPES.EventManagerService,
-            eventManagerService
+            (container) => new EventManagerService(
+                this,
+                container.get(SERVICE_TYPES.LoggerService)
+            )
         );
         
-        // 注册主服务
-        const fileDisplayService = new FileDisplayService(
-            this,
-            this.serviceContainer.get(SERVICE_TYPES.FilenameParser),
-            this.serviceContainer.get(SERVICE_TYPES.FileDisplayCache),
-            this.serviceContainer.get(SERVICE_TYPES.FileExplorerDisplayService),
-            this.serviceContainer.get(SERVICE_TYPES.FileProcessorService),
-            this.serviceContainer.get(SERVICE_TYPES.MarkdownLinkService),
-            this.serviceContainer.get(SERVICE_TYPES.EditorLinkDecorator),
-            this.serviceContainer.get(SERVICE_TYPES.EventManagerService),
-            this.serviceContainer.get(SERVICE_TYPES.TimerService),
-            this.serviceContainer.get(SERVICE_TYPES.LoggerService)
+        // 注册文件资源管理器显示服务（通过工厂函数）
+        this.serviceContainer.registerFactory(
+            SERVICE_TYPES.FileExplorerDisplayService, 
+            (container) => new FileExplorerDisplayService(
+                this,
+                container.get(SERVICE_TYPES.FilenameParser),
+                container.get(SERVICE_TYPES.FileDisplayCache),
+                container.get(SERVICE_TYPES.EventManagerService),
+                container.get(SERVICE_TYPES.LoggerService)
+            )
         );
-        this.serviceContainer.register(
+        
+        // 注册文件处理服务（通过工厂函数）
+        this.serviceContainer.registerFactory(
+            SERVICE_TYPES.FileProcessorService, 
+            (container) => new FileProcessorService(
+                this,
+                container.get(SERVICE_TYPES.FilenameParser),
+                container.get(SERVICE_TYPES.FileDisplayCache),
+                container.get(SERVICE_TYPES.TimerService),
+                container.get(SERVICE_TYPES.LoggerService),
+                async (file: TFile) => {
+                    // 直接使用FileExplorerDisplayService更新文件
+                    const fileExplorerDisplayService = container.get<IFileExplorerDisplayService>(SERVICE_TYPES.FileExplorerDisplayService);
+                    return fileExplorerDisplayService.updateFileExplorerDisplay(file);
+                }
+            )
+        );
+        
+        // 注册Markdown链接服务（通过工厂函数）
+        this.serviceContainer.registerFactory(
+            SERVICE_TYPES.MarkdownLinkService, 
+            (container) => new MarkdownLinkService(
+                this,
+                container.get(SERVICE_TYPES.FilenameParser),
+                container.get(SERVICE_TYPES.FileDisplayCache)
+            )
+        );
+        
+        // 注册编辑器链接装饰器服务（通过工厂函数）
+        this.serviceContainer.registerFactory(
+            SERVICE_TYPES.EditorLinkDecorator, 
+            (container) => new EditorLinkDecorator(
+                this,
+                container.get(SERVICE_TYPES.FilenameParser),
+                container.get(SERVICE_TYPES.FileDisplayCache)
+            )
+        );
+        
+        // 注册主文件显示服务（通过工厂函数）
+        this.serviceContainer.registerFactory(
             SERVICE_TYPES.FileDisplayService, 
-            fileDisplayService
+            (container) => new FileDisplayService(
+                this,
+                container.get(SERVICE_TYPES.FilenameParser),
+                container.get(SERVICE_TYPES.FileDisplayCache),
+                container.get(SERVICE_TYPES.FileExplorerDisplayService),
+                container.get(SERVICE_TYPES.FileProcessorService),
+                container.get(SERVICE_TYPES.MarkdownLinkService),
+                container.get(SERVICE_TYPES.EditorLinkDecorator),
+                container.get(SERVICE_TYPES.EventManagerService),
+                container.get(SERVICE_TYPES.TimerService),
+                container.get(SERVICE_TYPES.LoggerService)
+            )
         );
         
         // 设置事件监听器
+        const eventManagerService = this.serviceContainer.get<EventManagerService>(SERVICE_TYPES.EventManagerService);
         eventManagerService.setupVaultEventListeners();
         eventManagerService.setupMetadataEventListeners();
     }
@@ -335,41 +316,21 @@ export default class TitleExtractorPlugin extends Plugin {
     }
 
     /**
-     * 使用懒加载机制设置文件资源管理器
-     * 延迟初始化文件资源管理器的观察器，直到文件资源管理器完全加载
+     * 设置文件资源管理器
      */
     private setupFileExplorer(): void {
-        logger.log('开始懒加载文件资源管理器...');
+        // 获取文件资源管理器显示服务
+        const fileExplorerDisplayService = this.serviceContainer.get<FileExplorerDisplayService>(SERVICE_TYPES.FileExplorerDisplayService);
         
-        // 尝试次数计数器
-        let attempts = 0;
-        const maxAttempts = 50; // 最多尝试50次，约5秒
-        
-        // 确保文件资源管理器已加载
+        // 检查文件资源管理器是否已加载
         const checkExplorer = () => {
-            attempts++;
             const fileExplorers = this.app.workspace.getLeavesOfType('file-explorer');
-            
             if (fileExplorers.length > 0) {
-                logger.log(`文件资源管理器已加载，尝试次数: ${attempts}`);
-                
-                // 文件资源管理器已加载，初始化观察器
-                const fileExplorerService = this.serviceContainer.get<FileExplorerDisplayService>(SERVICE_TYPES.FileExplorerDisplayService);
-                fileExplorerService.setupObservers();
-                
-                // 更新所有文件显示
-                logger.log('开始更新所有文件显示...');
-                this.fileDisplayService.updateAllFilesDisplay(false);
+                // 文件资源管理器已加载，设置观察器
+                fileExplorerDisplayService.setupObservers();
             } else {
-                if (attempts >= maxAttempts) {
-                    logger.log('达到最大尝试次数，可能文件资源管理器未加载');
-                    return;
-                }
-                
-                // 继续等待，使用指数退避策略
-                const delay = Math.min(100 * Math.pow(1.1, attempts), 500);
-                logger.log(`文件资源管理器尚未加载，${delay}ms后重试 (${attempts}/${maxAttempts})`);
-                setTimeout(checkExplorer, delay);
+                // 文件资源管理器尚未加载，延迟重试
+                setTimeout(checkExplorer, 500);
             }
         };
         

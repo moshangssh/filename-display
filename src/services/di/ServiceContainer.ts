@@ -7,17 +7,29 @@ import {
     IEditorLinkDecorator, 
     IEventManagerService,
     IFileDisplayService,
-    ILoggerService
+    ILoggerService,
+    ITimerService
 } from '../interfaces/IServices';
 import { ITitleExtractorPlugin } from '../../types';
+
+/**
+ * 依赖类型定义
+ */
+type ServiceFactory<T> = (container: ServiceContainer) => T;
+type ServiceEntry<T> = {
+    instance?: T;
+    factory?: ServiceFactory<T>;
+    dependencies?: string[];
+};
 
 /**
  * 依赖注入服务容器，负责管理所有服务实例
  */
 export class ServiceContainer {
     private static instance: ServiceContainer;
-    private services: Map<string, any> = new Map();
+    private services: Map<string, ServiceEntry<any>> = new Map();
     private plugin: ITitleExtractorPlugin;
+    private resolutionStack: string[] = []; // 用于检测循环依赖
 
     private constructor(plugin: ITitleExtractorPlugin) {
         this.plugin = plugin;
@@ -37,18 +49,60 @@ export class ServiceContainer {
      * 注册服务实例
      */
     public register<T>(serviceType: string, instance: T): void {
-        this.services.set(serviceType, instance);
+        this.services.set(serviceType, { instance });
     }
 
     /**
-     * 获取服务实例
+     * 注册服务工厂函数和依赖
+     */
+    public registerFactory<T>(
+        serviceType: string, 
+        factory: ServiceFactory<T>,
+        dependencies: string[] = []
+    ): void {
+        this.services.set(serviceType, { 
+            factory,
+            dependencies
+        });
+    }
+
+    /**
+     * 获取服务实例，如果实例不存在会通过工厂函数创建
      */
     public get<T>(serviceType: string): T {
-        const service = this.services.get(serviceType);
-        if (!service) {
+        // 检测循环依赖
+        if (this.resolutionStack.includes(serviceType)) {
+            const cycle = [...this.resolutionStack, serviceType].join(" -> ");
+            throw new Error(`检测到循环依赖: ${cycle}`);
+        }
+
+        const entry = this.services.get(serviceType);
+        if (!entry) {
             throw new Error(`服务 ${serviceType} 未注册`);
         }
-        return service as T;
+
+        // 如果已经有实例，直接返回
+        if (entry.instance) {
+            return entry.instance as T;
+        }
+
+        // 记录当前解析路径，用于检测循环依赖
+        this.resolutionStack.push(serviceType);
+
+        try {
+            if (entry.factory) {
+                // 创建实例
+                const instance = entry.factory(this);
+                // 缓存实例
+                entry.instance = instance;
+                return instance as T;
+            } else {
+                throw new Error(`服务 ${serviceType} 没有实例或工厂函数`);
+            }
+        } finally {
+            // 无论成功失败，移除当前服务类型
+            this.resolutionStack.pop();
+        }
     }
 
     /**
@@ -71,18 +125,18 @@ export class ServiceContainer {
     public dispose(): void {
         // 按顺序清理，确保依赖关系正确处理
         const serviceTypes = [
-            'EditorLinkDecorator',
-            'EventManagerService',
-            'MarkdownLinkService',
-            'FileProcessorService',
-            'FileExplorerDisplayService',
-            'FileDisplayCache',
-            'FilenameParser',
-            'FileDisplayService'
+            SERVICE_TYPES.EditorLinkDecorator,
+            SERVICE_TYPES.EventManagerService,
+            SERVICE_TYPES.MarkdownLinkService,
+            SERVICE_TYPES.FileProcessorService,
+            SERVICE_TYPES.FileExplorerDisplayService,
+            SERVICE_TYPES.FileDisplayCache,
+            SERVICE_TYPES.FilenameParser,
+            SERVICE_TYPES.FileDisplayService
         ];
 
         for (const serviceType of serviceTypes) {
-            const service = this.services.get(serviceType);
+            const service = this.services.get(serviceType)?.instance;
             if (service && typeof service.dispose === 'function') {
                 try {
                     service.dispose();

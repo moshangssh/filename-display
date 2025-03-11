@@ -10,15 +10,17 @@ export enum FileEventType {
     DELETE = 'file_delete',
     METADATA = 'file_metadata',
     DISPLAY_UPDATE = 'display_update',
-    EXPLORER_REFRESH = 'explorer_refresh'
+    EXPLORER_REFRESH = 'explorer_refresh',
+    UPDATE_ALL = 'update_all_files'
 }
 
 // 定义事件接口
 export interface FileEvent {
     type: FileEventType;
-    file: TFile;
+    file: TFile | null;
     oldPath?: string;
     data?: any;
+    source?: string;
 }
 
 // 定义订阅者回调函数类型
@@ -70,7 +72,8 @@ export class EventManagerService implements IEventManagerService {
     // 分发事件
     public async dispatch(event: FileEvent): Promise<void> {
         try {
-            this.logger.log(`分发事件: ${event.type} - 文件: ${event.file.path}`);
+            const filePath = event.file ? event.file.path : 'no-file';
+            this.logger.log(`分发事件: ${event.type} - 文件: ${filePath}`);
             const callbacks = this.eventSubscribers.get(event.type);
             
             if (!callbacks || callbacks.size === 0) {
@@ -123,7 +126,7 @@ export class EventManagerService implements IEventManagerService {
                         setTimeout(() => {
                             try {
                                 // 确保文件仍然存在
-                                if (this.plugin.app.vault.getFileByPath(event.file.path)) {
+                                if (event.file && this.plugin.app.vault.getFileByPath(event.file.path)) {
                                     this.logger.log(`尝试重新触发事件: ${event.type} - 文件: ${event.file.path}`);
                                     
                                     // 创建带有重试标记的新事件对象

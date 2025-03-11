@@ -20,6 +20,8 @@ export interface ILoggerService {
 export interface IFilenameParser {
     parseFilename(file: TFile): Promise<FileDisplayResult>;
     shouldProcess(file: TFile): boolean;
+    isFileInEnabledFolder(file: TFile): boolean;
+    getDisplayNameFromMetadata(file: TFile): FileDisplayResult;
 }
 
 // 文件显示缓存服务接口
@@ -29,6 +31,17 @@ export interface IFileDisplayCache {
     deletePath(path: string): void;
     clear(): void;
     stopPeriodicCleanup(): void;
+    
+    // 为FileExplorerDisplayService增加的方法
+    getDisplayName(path: string): string | undefined;
+    setDisplayName(path: string, displayName: string): void;
+    hasDisplayName(path: string): boolean;
+    saveOriginalName(path: string, originalName: string): void;
+    getOriginalName(path: string): string | undefined;
+    saveElementData(element: HTMLElement, path: string, originalName: string): void;
+    getElementData(element: HTMLElement): { path: string; originalName: string } | undefined;
+    getAllOriginalNames(): Map<string, string>;
+    clearAll(): void;
 }
 
 // 文件浏览器显示服务接口
