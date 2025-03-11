@@ -225,14 +225,44 @@ export default class TitleExtractorPlugin extends Plugin {
         logger.log('卸载TitleExtrator插件...');
         
         try {
-            if (this.serviceContainer) {
-                // 清理所有服务
-                this.serviceContainer.dispose();
+            // 确保编辑器扩展被卸载
+            if (this.editorExtensions.length > 0) {
+                logger.log('清理编辑器扩展...');
+                this.app.workspace.updateOptions();
+                this.editorExtensions = [];
             }
             
-            logger.log('TitleExtrator插件已成功卸载并清理所有资源');
+            // 先恢复所有文件显示
+            if (this.fileDisplayService) {
+                logger.log('恢复所有文件显示...');
+                this.fileDisplayService.restoreAllDisplayNames();
+            }
+            
+            // 等待一小段时间确保UI已更新
+            setTimeout(() => {
+                // 然后清理服务容器
+                if (this.serviceContainer) {
+                    logger.log('清理服务容器...');
+                    this.serviceContainer.dispose();
+                    // 创建新的空服务容器而不是设为null
+                    this.serviceContainer = ServiceContainer.getInstance();
+                }
+                
+                logger.log('TitleExtrator插件已成功卸载并清理所有资源');
+            }, 100);
         } catch (error) {
             logger.error('卸载TitleExtrator插件时出错:', error);
+            
+            // 即使有错误，也尝试清理服务容器
+            try {
+                if (this.serviceContainer) {
+                    this.serviceContainer.dispose();
+                    // 创建新的空服务容器而不是设为null
+                    this.serviceContainer = ServiceContainer.getInstance();
+                }
+            } catch (e) {
+                logger.error('清理服务容器时出现二次错误:', e);
+            }
         }
     }
 

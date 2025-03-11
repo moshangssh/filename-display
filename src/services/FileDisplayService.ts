@@ -391,12 +391,18 @@ export class FileDisplayService implements IFileDisplayService {
     public dispose(): void {
         this.logger.log('释放 FileDisplayService 资源...');
         
+        // 首先恢复所有文件的原始显示名称
+        this.restoreAllDisplayNames();
+        
         // 取消所有事件订阅
         this.unsubscribers.forEach(unsubscribe => unsubscribe());
         this.unsubscribers = [];
         
         // 清空上次更新文件集合
         this.lastUpdatedFiles.clear();
+        
+        // 停止任何可能正在进行的计时器
+        this.timerService.clearAll();
         
         this.logger.log('FileDisplayService 资源已释放');
     }

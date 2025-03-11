@@ -41,6 +41,7 @@ export class FileDisplayCache {
         plugin?: any,
         loggerService?: ILoggerService
     ) {
+        // 存储插件引用
         this.plugin = plugin;
         
         // 设置日志记录器
@@ -50,7 +51,8 @@ export class FileDisplayCache {
             warn: (message: string, ...args: any[]) => console.warn(`[FileDisplayCache] ${message}`, ...args),
             error: (message: string, ...args: any[]) => console.error(`[FileDisplayCache] ${message}`, ...args),
             debug: (message: string, ...args: any[]) => console.debug(`[FileDisplayCache] ${message}`, ...args),
-            getLogger: (prefix: string) => this.logger
+            getLogger: (prefix: string) => this.logger,
+            dispose: () => {}
         };
         
         // 获取服务容器
@@ -711,5 +713,18 @@ export class FileDisplayCache {
         });
         
         return results;
+    }
+    
+    /**
+     * 释放资源
+     */
+    public dispose(): void {
+        // 停止周期性清理任务
+        this.stopPeriodicCleanup();
+        
+        // 清空缓存数据
+        this.clearAll();
+        
+        this.logger.log('FileDisplayCache资源已释放');
     }
 } 

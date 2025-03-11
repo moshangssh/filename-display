@@ -159,4 +159,12 @@ export class FilenameParser {
                    filePath.startsWith(normalizedFolder + '/');
         });
     }
+
+    /**
+     * 释放资源
+     */
+    public dispose(): void {
+        // 释放任何占用的资源
+        // 目前无需特别清理
+    }
 } 

@@ -294,8 +294,12 @@ export class FileExplorerDisplayService implements IFileExplorerDisplayService {
         return result;
     }
     
-    // 释放资源
+    /**
+     * 释放资源
+     */
     public dispose(): void {
+        this.logger.log('释放 FileExplorerDisplayService 资源...');
+        
         // 取消所有事件订阅
         this.unsubscribers.forEach(unsub => unsub());
         this.unsubscribers = [];
@@ -304,5 +308,10 @@ export class FileExplorerDisplayService implements IFileExplorerDisplayService {
         if (this.fileExplorerObserver) {
             this.fileExplorerObserver.stopObserving();
         }
+        
+        // 恢复所有显示名称
+        this.restoreAllDisplayNames();
+        
+        this.logger.log('FileExplorerDisplayService 资源已释放');
     }
 } 

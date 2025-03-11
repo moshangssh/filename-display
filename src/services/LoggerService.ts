@@ -50,10 +50,29 @@ export class LoggerService implements ILoggerService {
     }
 
     /**
+     * 记录调试信息
+     */
+    debug(message: string, ...args: any[]): void {
+        if (this.isDev) {
+            console.debug(this.prefix + message, ...args);
+        }
+    }
+
+    /**
      * 创建一个带有特定前缀的子日志记录器
      * 这允许各个服务有自己的日志标识，同时仍使用同一个日志服务实例
      */
     getLogger(prefix: string): ILoggerService {
         return new LoggerService(prefix);
+    }
+
+    /**
+     * 释放日志服务资源
+     */
+    dispose(): void {
+        // 目前无需特殊资源清理
+        if (this.isDev) {
+            console.log(this.prefix + '日志服务资源已释放');
+        }
     }
 } 

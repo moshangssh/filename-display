@@ -133,21 +133,68 @@ export class ServiceContainer {
             SERVICE_TYPES.FileDisplayCache,
             SERVICE_TYPES.FilenameParser,
             SERVICE_TYPES.FileDisplayService,
+            SERVICE_TYPES.TimerService,
+            SERVICE_TYPES.LoggerService,
             SERVICE_TYPES.ExtensionCacheService
         ];
 
+        // 先获取关键服务
+        const loggerService = this.services.get(SERVICE_TYPES.LoggerService)?.instance;
+        const logger = loggerService ? loggerService.getLogger('ServiceContainer') : console;
+        
+        logger.log('开始清理所有服务资源...');
+        
+        const results: Record<string, boolean> = {};
+
+        // 按顺序清理每个服务
         for (const serviceType of serviceTypes) {
-            const service = this.services.get(serviceType)?.instance;
-            if (service && typeof service.dispose === 'function') {
+            const entry = this.services.get(serviceType);
+            const service = entry?.instance;
+            
+            if (service) {
                 try {
-                    service.dispose();
+                    if (typeof service.dispose === 'function') {
+                        service.dispose();
+                        results[serviceType] = true;
+                    } else {
+                        logger.warn(`服务 ${serviceType} 没有实现 dispose 方法`);
+                        results[serviceType] = false;
+                    }
                 } catch (error) {
-                    console.error(`清理服务 ${serviceType} 时出错:`, error);
+                    logger.error(`清理服务 ${serviceType} 时出错:`, error);
+                    results[serviceType] = false;
+                }
+            }
+        }
+        
+        // 检查是否有服务没有被清理
+        const remainingServices = Array.from(this.services.keys())
+            .filter(type => !serviceTypes.includes(type));
+            
+        if (remainingServices.length > 0) {
+            logger.warn(`以下服务没有被明确清理: ${remainingServices.join(', ')}`);
+            
+            // 尝试清理这些服务
+            for (const serviceType of remainingServices) {
+                const entry = this.services.get(serviceType);
+                const service = entry?.instance;
+                
+                if (service && typeof service.dispose === 'function') {
+                    try {
+                        service.dispose();
+                        results[serviceType] = true;
+                    } catch (error) {
+                        logger.error(`清理额外服务 ${serviceType} 时出错:`, error);
+                        results[serviceType] = false;
+                    }
                 }
             }
         }
 
+        // 清空服务容器
         this.services.clear();
+        
+        logger.log('所有服务资源清理完成', results);
     }
 }
 

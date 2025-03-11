@@ -15,6 +15,7 @@ export interface ILoggerService {
     info(message: string, ...args: any[]): void;
     debug(message: string, ...args: any[]): void;
     getLogger(prefix: string): ILoggerService;
+    dispose(): void;
 }
 
 // 文件名解析服务接口
@@ -23,6 +24,7 @@ export interface IFilenameParser {
     shouldProcess(file: TFile): boolean;
     isFileInEnabledFolder(file: TFile): boolean;
     getDisplayNameFromMetadata(file: TFile): FileDisplayResult;
+    dispose(): void;
 }
 
 // 文件显示缓存服务接口
@@ -43,6 +45,7 @@ export interface IFileDisplayCache {
     getElementData(element: HTMLElement): { path: string; originalName: string } | undefined;
     getAllOriginalNames(): Map<string, string>;
     clearAll(): void;
+    dispose(): void;
 }
 
 // 文件浏览器显示服务接口
@@ -52,6 +55,7 @@ export interface IFileExplorerDisplayService {
     updateFileExplorerDisplay(file: TFile): Promise<void>;
     updateAddedNodes(nodes: Node[]): void;
     restoreAllDisplayNames(): void;
+    dispose(): void;
 }
 
 // 文件处理服务接口
@@ -60,11 +64,13 @@ export interface IFileProcessorService {
     updateAllFilesDisplay(clearCache?: boolean): void;
     separateFilesByVisibility(files: TFile[]): { visibleFiles: TFile[], otherFiles: TFile[] };
     getBatchProcessor(): any;
+    dispose(): void;
 }
 
 // Markdown链接服务接口
 export interface IMarkdownLinkService {
     updateMarkdownLinksForFile(file: TFile): void;
+    dispose(): void;
 }
 
 // 编辑器链接装饰器接口
