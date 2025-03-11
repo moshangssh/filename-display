@@ -1,9 +1,9 @@
-import { TFile } from 'obsidian';
-import type { IFilenameDisplayPlugin } from '../types';
+import { TFile, WorkspaceLeaf } from 'obsidian';
+import type { ITitleExtractorPlugin } from '../types';
 
 // DOM观察器类，负责监控文件资源管理器的DOM变化
 export class FileExplorerObserver {
-    private plugin: IFilenameDisplayPlugin;
+    private plugin: ITitleExtractorPlugin;
     private fileExplorerObserver: MutationObserver | null = null;
     private folderObserver: MutationObserver | null = null;
     private updateCallback: () => void;
@@ -11,7 +11,7 @@ export class FileExplorerObserver {
     private addedNodesCallback: (nodes: Node[]) => void;
     
     constructor(
-        plugin: IFilenameDisplayPlugin, 
+        plugin: ITitleExtractorPlugin, 
         updateCallback: () => void,
         fileUpdateCallback: (file: TFile) => void,
         addedNodesCallback: (nodes: Node[]) => void
@@ -82,10 +82,10 @@ export class FileExplorerObserver {
     private setupFolderObserver(): void {
         const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
         
-        fileExplorers.forEach((explorer) => {
+        fileExplorers.forEach((explorer: WorkspaceLeaf) => {
             const container = explorer.view.containerEl;
             
-            container.on('click', '.nav-folder-title', (event) => {
+            container.on('click', '.nav-folder-title', (event: MouseEvent) => {
                 const folderTitle = (event.currentTarget as HTMLElement);
                 const folderElement = folderTitle.parentElement as HTMLElement;
                 
@@ -123,7 +123,7 @@ export class FileExplorerObserver {
     
     // 获取文件夹中的文件
     private getFilesInFolder(folderPath: string): TFile[] {
-        return this.plugin.app.vault.getMarkdownFiles().filter(file => 
+        return this.plugin.app.vault.getMarkdownFiles().filter((file: TFile) => 
             file.path.startsWith(folderPath + '/'));
     }
     
@@ -131,27 +131,38 @@ export class FileExplorerObserver {
     private startObserving(): void {
         const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
         
-        fileExplorers.forEach((explorer) => {
-            const container = explorer.view.containerEl;
-            if (container) {
-                // 找到文件列表容器，减少观察范围
-                const fileListContainer = container.querySelector('.nav-files-container');
-                if (fileListContainer) {
-                    this.fileExplorerObserver?.observe(fileListContainer, {
-                        childList: true,
-                        subtree: true,
-                        attributes: false,
-                        characterData: false
-                    });
-                } else {
-                    // 如果找不到特定容器，回退到原始行为
-                    this.fileExplorerObserver?.observe(container, {
-                        childList: true,
-                        subtree: true,
-                        attributes: false,
-                        characterData: false
-                    });
+        // 如果没有找到文件资源管理器，记录日志并退出
+        if (fileExplorers.length === 0) {
+            console.log('文件资源管理器尚未加载，将在懒加载机制中重试');
+            return;
+        }
+        
+        fileExplorers.forEach((explorer: WorkspaceLeaf) => {
+            try {
+                const container = explorer.view.containerEl;
+                if (container) {
+                    // 找到文件列表容器，减少观察范围
+                    const fileListContainer = container.querySelector('.nav-files-container');
+                    if (fileListContainer) {
+                        this.fileExplorerObserver?.observe(fileListContainer, {
+                            childList: true,
+                            subtree: true,
+                            attributes: false,
+                            characterData: false
+                        });
+                        console.log('成功设置文件资源管理器观察器');
+                    } else {
+                        // 如果找不到特定容器，回退到原始行为
+                        this.fileExplorerObserver?.observe(container, {
+                            childList: true,
+                            subtree: true,
+                            attributes: false,
+                            characterData: false
+                        });
+                    }
                 }
+            } catch (error) {
+                console.error('设置文件资源管理器观察器时发生错误:', error);
             }
         });
     }

@@ -14,6 +14,8 @@ const logger = new Logger('EditorExtensions');
 export class LinkReplaceWidget extends WidgetType {
     private readonly plugin: ITitleExtractorPlugin;
     private clickListener: ((event: MouseEvent) => void) | null = null;
+    // 新增：链接DOM引用
+    private spanElement: HTMLElement | null = null;
     
     constructor(private readonly displayName: string, private readonly originalPath: string, plugin: ITitleExtractorPlugin) {
         super();
@@ -28,6 +30,9 @@ export class LinkReplaceWidget extends WidgetType {
         // 保留链接可点击性
         span.dataset.originalPath = this.originalPath;
         span.style.cursor = 'pointer';
+        
+        // 新增：平滑过渡效果
+        span.style.transition = 'opacity 0.15s ease-in';
         
         // 创建点击事件监听器函数
         this.clickListener = (event: MouseEvent) => {
@@ -46,6 +51,9 @@ export class LinkReplaceWidget extends WidgetType {
         // 添加点击事件监听
         span.addEventListener('click', this.clickListener);
         
+        // 保存引用用于更新
+        this.spanElement = span;
+        
         return span;
     }
 
@@ -55,10 +63,27 @@ export class LinkReplaceWidget extends WidgetType {
             dom.removeEventListener('click', this.clickListener);
             this.clickListener = null;
         }
+        this.spanElement = null;
     }
 
     ignoreEvent() {
         return false;
+    }
+    
+    // 新增：更新文本内容方法
+    updateText(newDisplayName: string): void {
+        if (this.spanElement) {
+            // 应用平滑过渡
+            this.spanElement.style.opacity = '0';
+            
+            // 使用setTimeout来延迟内容更新，让渐变效果可见
+            setTimeout(() => {
+                if (this.spanElement) {
+                    this.spanElement.textContent = newDisplayName;
+                    this.spanElement.style.opacity = '1';
+                }
+            }, 50);
+        }
     }
 }
 
@@ -67,6 +92,8 @@ export class LinkReplaceWidget extends WidgetType {
  */
 export const addLinkDecoration = StateEffect.define<{ from: number; to: number; widget: LinkReplaceWidget }>();
 export const removeLinkDecoration = StateEffect.define<null>();
+// 新增：用于更新已有链接的文本
+export const updateLinkText = StateEffect.define<{ from: number; to: number; displayName: string }>();
 
 /**
  * 装饰状态字段 - 管理编辑器中的装饰
@@ -94,6 +121,25 @@ export const linkDecorationField = StateField.define<DecorationSet>({
                 }).range(from, to);
                 decorations = decorations.update({ add: [decoration], sort: true });
             }
+            // 新增：处理更新文本效果
+            else if (effect.is(updateLinkText)) {
+                const { from, to, displayName } = effect.value;
+                
+                // 查找给定范围的装饰
+                let foundDecoration = false;
+                decorations.between(from, to, (start, end, deco) => {
+                    // 如果找到装饰并且是我们期望的LinkReplaceWidget类型
+                    if (deco.spec.widget instanceof LinkReplaceWidget) {
+                        // 更新小部件的文本
+                        deco.spec.widget.updateText(displayName);
+                        foundDecoration = true;
+                    }
+                    return false; // 继续搜索
+                });
+                
+                // 如果没有找到现有装饰，可能是因为它刚刚被创建但还未渲染
+                // 这种情况我们不做任何处理，等待下一次更新
+            }
         }
         
         return decorations;
@@ -112,7 +158,10 @@ export function createLinkObserverExtension(
 ): Extension {
     return ViewPlugin.fromClass(
         class LinkObserver {
-            constructor(private view: EditorView) {}
+            constructor(private view: EditorView) {
+                // 在构造函数中立即触发一次处理，确保首次加载时处理链接
+                setTimeout(() => onChange(view), 100);
+            }
             
             update(update: ViewUpdate) {
                 // 仅在文档内容变化时触发处理
@@ -157,4 +206,22 @@ export function createEditorExtensions(plugin: ITitleExtractorPlugin): Extension
     }
     
     return extensions;
+} 
+
+// 新增：更新链接文本但保持装饰
+export function updateLinkDisplayName(
+    view: EditorView,
+    from: number,
+    to: number,
+    displayName: string
+): void {
+    if (!view) return;
+    
+    try {
+        view.dispatch({
+            effects: updateLinkText.of({ from, to, displayName })
+        });
+    } catch (e) {
+        logger.log('更新链接文本失败:', e);
+    }
 } 

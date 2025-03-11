@@ -228,7 +228,12 @@ export class FileExplorerDisplayService {
     
     // 初始化文件资源管理器观察器
     public setupObservers(): void {
-        this.fileExplorerObserver.setupObservers();
+        try {
+            this.fileExplorerObserver.setupObservers();
+            console.log('文件资源管理器观察器设置成功');
+        } catch (error) {
+            console.error('设置文件资源管理器观察器时发生错误:', error);
+        }
     }
     
     // 处理文件以获取显示名称

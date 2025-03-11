@@ -59,54 +59,28 @@ export default class TitleExtractorPlugin extends Plugin {
         // 监听布局变更事件
         this.registerEvent(
             this.app.workspace.on('layout-change', () => {
-                // 重新设置观察器并更新所有文件显示
-                this.fileDisplayService.resetObservers();
-                // 使用现有缓存更新，避免重新处理所有文件
-                this.fileDisplayService.updateAllFilesDisplay(false);
+                // 重置文件资源管理器观察器
+                const fileExplorerDisplayService = this.serviceContainer.get<FileExplorerDisplayService>(SERVICE_TYPES.FileExplorerDisplayService);
+                fileExplorerDisplayService.resetObservers();
+                
+                // 延迟更新所有文件的显示，避免布局更改后立即处理
+                setTimeout(() => {
+                    this.fileDisplayService.updateAllFilesDisplay(false);
+                }, 300);
             })
         );
         
-        // 监听文件修改事件，确保缓存一致性
-        this.registerEvent(
-            this.app.vault.on('modify', (file: TAbstractFile) => {
-                if (file instanceof TFile && file.extension === 'md') {
-                    // 当文件内容变更时，清除该文件的缓存并重新处理
-                    const cacheService = this.serviceContainer.get<FileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
-                    cacheService.deletePath(file.path);
-                    // 只更新修改的文件
-                    this.fileDisplayService.updateFileExplorerDisplay(file);
-                }
-            })
-        );
+        // 监听文件创建、修改、删除和重命名事件
+        this.registerEvents();
         
-        // 监听文件重命名事件
-        this.registerEvent(
-            this.app.vault.on('rename', (file: TAbstractFile, oldPath: string) => {
-                if (file instanceof TFile && file.extension === 'md') {
-                    // 当文件重命名时，清除旧路径缓存
-                    const cacheService = this.serviceContainer.get<FileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
-                    cacheService.deletePath(oldPath);
-                    // 更新新路径的显示
-                    this.fileDisplayService.updateFileExplorerDisplay(file);
-                }
-            })
-        );
-
-        // 注册编辑器扩展
-        if (this.editorExtensions.length > 0) {
-            this.registerEditorExtension(this.editorExtensions);
-        }
-
-        // 获取缓存服务，确保缓存已加载
-        const cacheService = this.serviceContainer.get(SERVICE_TYPES.FileDisplayCache);
+        // 使用懒加载机制初始化文件资源管理器观察器
+        this.setupFileExplorer();
         
-        // 初始化所有文件的显示，保留缓存以避免文件名闪烁
-        setTimeout(() => {
-            // 使用短延迟确保DOM已完全加载
-            this.fileDisplayService.updateAllFilesDisplay(false);
-        }, 50);
+        // 新增：预热缓存
+        await this.warmUpCache();
         
-        logger.log('TitleExtrator插件加载完成');
+        // 日志输出
+        logger.log('插件初始化完成');
     }
     
     /**
@@ -289,5 +263,103 @@ export default class TitleExtractorPlugin extends Plugin {
         
         // 然后调用父类方法注册到 Obsidian
         super.registerEditorExtension(extension);
+    }
+
+    // 新增：预热缓存方法
+    private async warmUpCache(): Promise<void> {
+        try {
+            // 获取缓存服务
+            const fileDisplayCache = this.serviceContainer.get<FileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
+            
+            // 执行缓存预热
+            await fileDisplayCache.warmUpCache();
+            
+            logger.log('缓存预热完成');
+        } catch (error) {
+            logger.error('缓存预热失败:', error);
+        }
+    }
+
+    // 注册文件事件监听
+    private registerEvents(): void {
+        // 监听文件修改事件
+        this.registerEvent(
+            this.app.vault.on('modify', (file: TAbstractFile) => {
+                if (file instanceof TFile && file.extension === 'md') {
+                    // 当文件内容变更时，交由服务处理
+                    this.fileDisplayService.handleFileOperation(file as TFile, 'modify');
+                }
+            })
+        );
+        
+        // 监听文件创建事件
+        this.registerEvent(
+            this.app.vault.on('create', (file: TAbstractFile) => {
+                if (file instanceof TFile && file.extension === 'md') {
+                    this.fileDisplayService.handleFileOperation(file as TFile, 'create');
+                }
+            })
+        );
+        
+        // 监听文件删除事件
+        this.registerEvent(
+            this.app.vault.on('delete', (file: TAbstractFile) => {
+                if (file instanceof TFile && file.extension === 'md') {
+                    this.fileDisplayService.handleFileOperation(file as TFile, 'delete');
+                }
+            })
+        );
+        
+        // 监听文件重命名事件
+        this.registerEvent(
+            this.app.vault.on('rename', (file: TAbstractFile, oldPath: string) => {
+                if (file instanceof TFile && file.extension === 'md') {
+                    this.fileDisplayService.handleFileOperation(file as TFile, 'rename', oldPath);
+                }
+            })
+        );
+    }
+
+    /**
+     * 使用懒加载机制设置文件资源管理器
+     * 延迟初始化文件资源管理器的观察器，直到文件资源管理器完全加载
+     */
+    private setupFileExplorer(): void {
+        logger.log('开始懒加载文件资源管理器...');
+        
+        // 尝试次数计数器
+        let attempts = 0;
+        const maxAttempts = 50; // 最多尝试50次，约5秒
+        
+        // 确保文件资源管理器已加载
+        const checkExplorer = () => {
+            attempts++;
+            const fileExplorers = this.app.workspace.getLeavesOfType('file-explorer');
+            
+            if (fileExplorers.length > 0) {
+                logger.log(`文件资源管理器已加载，尝试次数: ${attempts}`);
+                
+                // 文件资源管理器已加载，初始化观察器
+                const fileExplorerService = this.serviceContainer.get<FileExplorerDisplayService>(SERVICE_TYPES.FileExplorerDisplayService);
+                fileExplorerService.setupObservers();
+                
+                // 更新所有文件显示
+                logger.log('开始更新所有文件显示...');
+                this.fileDisplayService.updateAllFilesDisplay(false);
+            } else {
+                if (attempts >= maxAttempts) {
+                    logger.log('达到最大尝试次数，可能文件资源管理器未加载');
+                    return;
+                }
+                
+                // 继续等待，使用指数退避策略
+                const delay = Math.min(100 * Math.pow(1.1, attempts), 500);
+                logger.log(`文件资源管理器尚未加载，${delay}ms后重试 (${attempts}/${maxAttempts})`);
+                setTimeout(checkExplorer, delay);
+            }
+        };
+        
+        // 开始检查
+        checkExplorer();
     }
 } 

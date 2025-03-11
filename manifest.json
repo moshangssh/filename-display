@@ -1,9 +1,9 @@
 {
 	"id": "title-Extractor",
 	"name": "TitleExtractor",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"minAppVersion": "0.15.0",
-	"description": "根据正则表达式提取文件名中的内容来替换文件的显示名称",
+	"description": "根据正则表达式提取文件名中的内容来替换文件的显示名称，优化双链接缓存提升显示性能",
 	"author": "xdd",
 	"authorUrl": "https://obsidian.md",
 	"fundingUrl": "https://obsidian.md/pricing",

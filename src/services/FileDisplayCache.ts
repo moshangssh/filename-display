@@ -20,6 +20,12 @@ export class FileDisplayCache {
     private readonly MAX_CACHE_SIZE = 1000; // 最大缓存条目数
     private readonly CACHE_DATA_KEY = 'filename-display-cache'; // 持久化缓存的键名
     private plugin: any; // 存储插件引用，用于访问 app.vault
+    // 新增：存储文件链接关系
+    private fileLinkMap: Map<string, Set<string>> = new Map(); // 文件到其引用的文件的映射
+    // 新增：优先级缓存
+    private priorityPaths: Set<string> = new Set(); // 高优先级路径集合，这些路径会被优先处理
+    // 新增：缓存预热状态
+    private cacheWarmedUp: boolean = false;
     
     constructor(private timerCallback?: (cleanupCallback: () => void) => number, plugin?: any) {
         // 初始化缓存并设置定期清理
@@ -71,6 +77,18 @@ export class FileDisplayCache {
             
             for (let i = 0; i < entriesToRemove; i++) {
                 this.originalDisplayNames.delete(entries[i]);
+            }
+        }
+        
+        // 新增：限制fileLinkMap大小
+        if (this.fileLinkMap.size > this.MAX_CACHE_SIZE) {
+            const entriesToRemove = this.fileLinkMap.size - this.MAX_CACHE_SIZE;
+            const entries = Array.from(this.fileLinkMap.keys())
+                .filter(key => !this.priorityPaths.has(key)) // 保留高优先级路径
+                .sort(); // 按字母排序，可以根据需要调整
+            
+            for (let i = 0; i < entriesToRemove && i < entries.length; i++) {
+                this.fileLinkMap.delete(entries[i]);
             }
         }
     }
@@ -141,6 +159,18 @@ export class FileDisplayCache {
                         }
                     });
                 }
+                
+                // 新增：恢复文件链接映射
+                if (data.fileLinkMap && Array.isArray(data.fileLinkMap)) {
+                    data.fileLinkMap.forEach((entry: [string, string[]]) => {
+                        const [path, links] = entry;
+                        if (path && Array.isArray(links)) {
+                            this.fileLinkMap.set(path, new Set(links));
+                        }
+                    });
+                }
+                
+                this.cacheWarmedUp = true;
             }
         } catch (error) {
             console.error('Failed to load filename display cache:', error);
@@ -154,11 +184,18 @@ export class FileDisplayCache {
         }
         
         try {
+            // 转换fileLinkMap为可序列化的格式
+            const serializedLinkMap: [string, string[]][] = [];
+            this.fileLinkMap.forEach((links, path) => {
+                serializedLinkMap.push([path, Array.from(links)]);
+            });
+            
             const data = {
                 fileDisplayCache: Array.from(this.fileDisplayCache.entries()),
                 originalDisplayNames: Array.from(this.originalDisplayNames.entries()),
                 processedFiles: Array.from(this.processedFiles),
-                fileModificationTimes: Array.from(this.fileModificationTimes.entries())
+                fileModificationTimes: Array.from(this.fileModificationTimes.entries()),
+                fileLinkMap: serializedLinkMap
             };
             
             await this.plugin.app.saveData(this.CACHE_DATA_KEY, data);
@@ -248,100 +285,107 @@ export class FileDisplayCache {
         }
         
         const entry = this.fileDisplayCache.get(path);
-        const now = Date.now();
-        
-        // 如果缓存过期，返回 undefined 促使重新处理
-        if (now - entry!.timestamp > this.CACHE_EXPIRY) {
+        if (!entry) {
             return undefined;
         }
         
-        return entry!.displayName;
+        // 更新时间戳表示最近访问
+        entry.timestamp = Date.now();
+        
+        return entry.displayName;
     }
     
     // 设置显示名称
     public setDisplayName(path: string, displayName: string): void {
+        // 添加到缓存中
         this.fileDisplayCache.set(path, {
-            displayName,
+            displayName: displayName,
             timestamp: Date.now()
         });
+        
+        // 添加到已处理文件集合
         this.processedFiles.add(path);
         
-        // 更新文件修改时间
+        // 更新文件修改时间记录
         this.updateFileMTime(path);
         
-        // 当更新缓存时保存到持久化存储
-        this.saveCacheToData();
+        // 添加到优先级路径
+        this.priorityPaths.add(path);
     }
     
     // 批量设置显示名称
     public setDisplayNames(entries: Array<[string, string]>): void {
         const now = Date.now();
         
-        for (const [path, displayName] of entries) {
+        // 批量更新displayCache
+        entries.forEach(([path, displayName]) => {
             this.fileDisplayCache.set(path, {
-                displayName,
+                displayName: displayName,
                 timestamp: now
             });
+            
+            // 添加到已处理文件集合
             this.processedFiles.add(path);
             
-            // 更新文件修改时间
+            // 更新文件修改时间记录
             this.updateFileMTime(path);
-        }
-        
-        // 当批量更新缓存时保存到持久化存储
-        this.saveCacheToData();
+        });
     }
     
-    // 删除路径的缓存
+    // 删除路径
     public deletePath(path: string): void {
         this.fileDisplayCache.delete(path);
         this.originalDisplayNames.delete(path);
         this.processedFiles.delete(path);
+        this.fileModificationTimes.delete(path);
+        this.priorityPaths.delete(path);
         
-        // 当删除缓存条目时保存到持久化存储
-        this.saveCacheToData();
+        // 清理fileLinkMap
+        this.fileLinkMap.delete(path);
     }
     
-    // 检查文件是否已处理
+    // 检查是否已经处理过
     public isProcessed(path: string): boolean {
         return this.processedFiles.has(path);
     }
     
     // 清空所有缓存
     public clearAll(): void {
-        this.clear();
+        this.fileDisplayCache.clear();
         this.originalDisplayNames.clear();
-        
-        // 当清空所有缓存时保存到持久化存储
-        this.saveCacheToData();
+        this.processedFiles.clear();
+        this.fileModificationTimes.clear();
+        this.fileLinkMap.clear();
+        this.priorityPaths.clear();
+        this.cacheWarmedUp = false;
     }
     
-    // 清空文件显示缓存
+    // 清空缓存
     public clear(): void {
         this.fileDisplayCache.clear();
         this.processedFiles.clear();
-        
-        // 当清空缓存时保存到持久化存储
-        this.saveCacheToData();
+        this.priorityPaths.clear();
     }
     
-    // 清理过期的缓存项
+    // 清除过期的缓存项
     public clearExpired(): void {
         const now = Date.now();
-        const expiredPaths: string[] = [];
+        const keysToDelete: string[] = [];
         
-        // 收集过期的路径
-        for (const [path, cached] of this.fileDisplayCache.entries()) {
-            if (now - cached.timestamp > this.CACHE_EXPIRY) {
-                expiredPaths.push(path);
+        // 收集过期的项
+        this.fileDisplayCache.forEach((value, key) => {
+            if (now - value.timestamp > this.CACHE_EXPIRY) {
+                keysToDelete.push(key);
             }
-        }
+        });
         
-        // 删除过期的缓存条目
-        expiredPaths.forEach(path => this.deletePath(path));
+        // 批量删除过期项
+        keysToDelete.forEach(key => {
+            this.deletePath(key);
+        });
     }
     
-    // 获取所有原始名称
+    // 获取所有原始名称的映射
     public getAllOriginalNames(): Map<string, string> {
         return this.originalDisplayNames;
     }
@@ -352,5 +396,109 @@ export class FileDisplayCache {
             clearInterval(this.cleanupTimer as number);
             this.cleanupTimer = null;
         }
+    }
+    
+    // 新增：记录文件之间的链接关系
+    public addFileLink(sourcePath: string, targetPath: string): void {
+        // 获取源文件已有的链接集合
+        let links = this.fileLinkMap.get(sourcePath);
+        if (!links) {
+            links = new Set<string>();
+            this.fileLinkMap.set(sourcePath, links);
+        }
+        
+        // 添加目标路径
+        links.add(targetPath);
+        
+        // 将目标路径添加到优先级路径
+        this.priorityPaths.add(targetPath);
+    }
+    
+    // 新增：获取文件链接的所有目标
+    public getFileLinks(path: string): Set<string> {
+        return this.fileLinkMap.get(path) || new Set<string>();
+    }
+    
+    // 新增：预加载相关文件
+    public preloadLinkedFiles(path: string): void {
+        const links = this.getFileLinks(path);
+        
+        // 将所有链接的文件添加到优先级路径
+        links.forEach(linkedPath => {
+            this.priorityPaths.add(linkedPath);
+        });
+    }
+    
+    // 新增：检查缓存是否已预热
+    public isCacheWarmedUp(): boolean {
+        return this.cacheWarmedUp;
+    }
+    
+    // 新增：执行缓存预热
+    public async warmUpCache(): Promise<void> {
+        if (this.cacheWarmedUp) return;
+        
+        try {
+            // 1. 加载所有markdown文件
+            const files = this.plugin?.app?.vault?.getMarkdownFiles() || [];
+            
+            // 2. 对于每个文件，预先解析其中的链接关系
+            for (const file of files) {
+                // 获取文件的缓存
+                const fileCache = this.plugin?.app?.metadataCache?.getFileCache(file);
+                if (!fileCache || !fileCache.links) continue;
+                
+                // 记录链接关系
+                for (const link of fileCache.links) {
+                    if (!link.link) continue;
+                    
+                    // 获取链接目标文件
+                    const targetFile = this.plugin?.app?.metadataCache?.getFirstLinkpathDest(link.link, file.path);
+                    if (!targetFile) continue;
+                    
+                    // 添加链接关系
+                    this.addFileLink(file.path, targetFile.path);
+                }
+            }
+            
+            this.cacheWarmedUp = true;
+            
+            // 保存缓存数据
+            await this.saveCacheToData();
+        } catch (error) {
+            console.error('Failed to warm up cache:', error);
+        }
+    }
+    
+    // 新增：异步获取显示名称，确保缓存有效
+    public async ensureDisplayName(path: string): Promise<string | undefined> {
+        // 检查缓存中是否已有
+        let displayName = this.getDisplayName(path);
+        
+        // 如果没有，可能需要处理文件来获取显示名称
+        if (!displayName) {
+            const file = this.plugin?.app?.vault?.getFileByPath(path);
+            if (!file) return undefined;
+            
+            // 这里需要由外部服务调用处理文件
+            // 这是一个异步过程，这里我们仅返回undefined
+            return undefined;
+        }
+        
+        return displayName;
+    }
+    
+    // 新增：批量预获取多个路径的显示名称
+    public batchGetDisplayNames(paths: string[]): Map<string, string> {
+        const results = new Map<string, string>();
+        
+        paths.forEach(path => {
+            const displayName = this.getDisplayName(path);
+            if (displayName) {
+                results.set(path, displayName);
+            }
+        });
+        
+        return results;
     }
 } 
