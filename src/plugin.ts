@@ -17,8 +17,7 @@ import { errorHandler } from './utils/ErrorHandler';
 import { Extension } from '@codemirror/state';
 import { createEditorExtensions } from './extensions/editor';
 import { Logger } from './utils/logger';
-import { IEditorLinkDecorator } from './services/interfaces/IServices';
-import { IFileExplorerDisplayService } from './services/interfaces/IServices';
+import { IEditorLinkDecorator, IFileExplorerDisplayService, CacheCleanStrategy } from './services/interfaces/IServices';
 import { ExtensionCacheService, ExtensionType } from './services/ExtensionCacheService';
 
 const logger = new Logger('Plugin');
@@ -339,6 +338,23 @@ export default class TitleExtractorPlugin extends Plugin {
                 }
             })
         );
+        
+        // 监听缓存清理策略更新事件
+        window.addEventListener('filename-display:update-cache-strategy', ((event: CustomEvent) => {
+            try {
+                const strategy = event.detail.strategy as CacheCleanStrategy;
+                const fileDisplayCache = this.serviceContainer.get<FileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
+                if (fileDisplayCache) {
+                    fileDisplayCache.setCacheCleanStrategy(strategy);
+                    logger.log(`已更新缓存清理策略为: ${CacheCleanStrategy[strategy]}`);
+                    
+                    // 触发一次手动清理，应用新策略
+                    fileDisplayCache.triggerCleanup();
+                }
+            } catch (error) {
+                logger.error('更新缓存清理策略失败:', error);
+            }
+        }) as EventListener);
     }
 
     /**

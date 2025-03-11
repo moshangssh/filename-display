@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting, Plugin, normalizePath, Notice } from 'obsidian';
 import type { TitleExtractorSettings } from '../types';
+import { CacheCleanStrategy } from '../services/interfaces/IServices';
 
 interface ITitleExtractorPlugin extends Plugin {
     settings: TitleExtractorSettings;
@@ -138,6 +139,31 @@ export class TitleExtractorSettingTab extends PluginSettingTab {
                         })
                     );
                 }));
+
+        // 添加高级设置部分
+        containerEl.createEl('h3', {text: '高级设置'});
+        
+        // 缓存清理策略设置
+        new Setting(containerEl)
+            .setName('缓存清理策略')
+            .setDesc('选择缓存清理策略，影响性能和内存使用')
+            .addDropdown(dropdown => {
+                dropdown
+                    .addOption(CacheCleanStrategy.LRU.toString(), '最近最少使用 (LRU)')
+                    .addOption(CacheCleanStrategy.FIFO.toString(), '先进先出 (FIFO)')
+                    .addOption(CacheCleanStrategy.PRIORITY.toString(), '优先级策略')
+                    .setValue(this.plugin.settings.cacheCleanStrategy.toString())
+                    .onChange(async (value) => {
+                        this.plugin.settings.cacheCleanStrategy = parseInt(value);
+                        await this.plugin.saveSettings();
+                        // 通知插件更新缓存清理策略
+                        const event = new CustomEvent('filename-display:update-cache-strategy', {
+                            detail: { strategy: parseInt(value) }
+                        });
+                        window.dispatchEvent(event);
+                        new Notice('缓存清理策略已更新');
+                    });
+            });
     }
     
     // 新增：渲染文件夹列表

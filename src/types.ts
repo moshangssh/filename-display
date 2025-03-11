@@ -1,5 +1,6 @@
 import { Plugin } from 'obsidian';
 import { Extension } from '@codemirror/state';
+import { CacheCleanStrategy } from './services/interfaces/IServices';
 
 export interface TitleExtractorSettings {
     pattern: string;
@@ -7,6 +8,7 @@ export interface TitleExtractorSettings {
     preferFrontmatterTitle: boolean;
     enabledFolders: string[];
     enableEditorLinkDecorations: boolean;
+    cacheCleanStrategy: CacheCleanStrategy;
 }
 
 export interface ITitleExtractorPlugin extends Plugin {

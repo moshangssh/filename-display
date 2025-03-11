@@ -7,6 +7,13 @@ import { FileEventType, EventCallback, FileEvent } from '../EventManagerService'
 // 导出错误处理服务接口
 export type { IErrorHandler };
 
+// 缓存清理策略枚举
+export enum CacheCleanStrategy {
+    LRU,        // 最近最少使用
+    FIFO,       // 先进先出
+    PRIORITY    // 优先级策略
+}
+
 // 日志服务接口
 export interface ILoggerService {
     log(message: string, ...args: any[]): void;
@@ -45,6 +52,12 @@ export interface IFileDisplayCache {
     getElementData(element: HTMLElement): { path: string; originalName: string } | undefined;
     getAllOriginalNames(): Map<string, string>;
     clearAll(): void;
+    
+    // 缓存清理策略相关方法
+    setCacheCleanStrategy(strategy: CacheCleanStrategy): void;
+    getCacheCleanStrategy(): CacheCleanStrategy;
+    triggerCleanup(): void;
+    
     dispose(): void;
 }
 

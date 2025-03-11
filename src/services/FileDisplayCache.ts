@@ -1,40 +1,45 @@
 // 文件缓存管理器类，负责处理文件显示名称的缓存
 import { TFile } from 'obsidian';
-import { ILoggerService, ITimerService } from './interfaces/IServices';
+import { ILoggerService, ITimerService, CacheCleanStrategy } from './interfaces/IServices';
 import { ServiceContainer, SERVICE_TYPES } from './di/ServiceContainer';
 import { FileProcessorService } from './FileProcessorService';
 
+// 定义文件缓存项类型
+interface FileCacheItem {
+    displayName: string;         // 显示名称
+    originalName: string;        // 原始名称
+    timestamp: number;           // 最后访问时间戳
+    mtime: number;               // 文件修改时间
+    processed: boolean;          // 是否已处理
+    links: Set<string>;          // 该文件引用的其他文件
+    priority: boolean;           // 是否为高优先级
+    accessCount: number;         // 访问计数，用于LRU策略
+}
+
 export class FileDisplayCache {
-    private fileDisplayCache: Map<string, {
-        displayName: string;
-        timestamp: number;
-    }> = new Map();
-    private processedFiles: Set<string> = new Set();
-    // 将字符串映射改为 DOM 元素的 WeakMap
-    private originalDisplayNames: Map<string, string> = new Map();
+    // 主缓存，存储所有文件信息
+    private fileCache: Map<string, FileCacheItem> = new Map();
+    
     // 使用 WeakMap 存储 DOM 元素关联的数据，避免内存泄漏
     private elementCache: WeakMap<HTMLElement, {
         path: string;
         originalName: string;
     }> = new WeakMap();
-    // 存储文件最后修改时间
-    private fileModificationTimes: Map<string, number> = new Map();
+    
     private readonly CACHE_EXPIRY = 5 * 60 * 1000; // 5分钟缓存过期
+    private readonly HIGH_PRIORITY_EXPIRY = 30 * 60 * 1000; // 高优先级项30分钟过期
     private cleanupTimer: NodeJS.Timeout | number | null = null;
     private readonly CLEANUP_INTERVAL = 10 * 60 * 1000; // 10分钟执行一次清理
     private readonly MAX_CACHE_SIZE = 1000; // 最大缓存条目数
+    private readonly CACHE_SIZE_THRESHOLD = Math.floor(this.MAX_CACHE_SIZE * 0.9); // 90%阈值触发清理
     private readonly CACHE_DATA_KEY = 'filename-display-cache'; // 持久化缓存的键名
     private plugin: any; // 存储插件引用，用于访问 app.vault
-    // 新增：存储文件链接关系
-    private fileLinkMap: Map<string, Set<string>> = new Map(); // 文件到其引用的文件的映射
-    // 新增：优先级缓存
-    private priorityPaths: Set<string> = new Set(); // 高优先级路径集合，这些路径会被优先处理
-    // 新增：缓存预热状态
     private cacheWarmedUp: boolean = false;
-    // 日志记录器
     private logger: ILoggerService;
-    // 服务容器引用
     private serviceContainer: ServiceContainer;
+    private cleanStrategy: CacheCleanStrategy = CacheCleanStrategy.LRU; // 默认使用LRU策略
+    private lastCleanupTime: number = 0; // 上次清理时间
+    private pendingCleanup: boolean = false; // 是否有待处理的清理
     
     constructor(
         private timerCallback?: (cleanupCallback: () => void) => number, 
@@ -75,11 +80,19 @@ export class FileDisplayCache {
             this.cleanupTimer = null;
         }
         
-        // 定义清理回调函数
+        // 定义清理回调函数 - 使用惰性清理策略
         const cleanupCallback = () => {
-            this.clearExpired();
-            this.enforceCacheSizeLimit();
-            this.saveCacheToData(); // 定期保存缓存到持久化存储
+            // 检查是否需要清理（缓存大小超过阈值或者有待处理的清理）
+            if (this.fileCache.size > this.CACHE_SIZE_THRESHOLD || this.pendingCleanup) {
+                this.logger.debug(`触发缓存清理: 大小=${this.fileCache.size}, 待处理=${this.pendingCleanup}`);
+                this.clearExpired();
+                this.enforceCacheSizeLimit();
+                this.saveCacheToData(); // 定期保存缓存到持久化存储
+                this.pendingCleanup = false;
+                this.lastCleanupTime = Date.now();
+            } else {
+                this.logger.debug(`跳过缓存清理: 当前大小=${this.fileCache.size}, 阈值=${this.CACHE_SIZE_THRESHOLD}`);
+            }
         };
         
         // 如果提供了定时器回调函数，使用它来创建定时器
@@ -91,55 +104,64 @@ export class FileDisplayCache {
         }
     }
     
-    // 限制缓存大小
+    // 限制缓存大小 - 使用选定的缓存清理策略
     private enforceCacheSizeLimit(): void {
-        // 限制fileDisplayCache大小，按时间戳排序
-        this.limitMapCache(
-            this.fileDisplayCache,
-            this.MAX_CACHE_SIZE,
-            (entries) => entries.sort((a, b) => a[1].timestamp - b[1].timestamp),
-            (path) => this.deletePath(path)
-        );
-        
-        // 限制originalDisplayNames大小
-        if (this.originalDisplayNames.size > this.MAX_CACHE_SIZE) {
-            const entriesToRemove = this.originalDisplayNames.size - this.MAX_CACHE_SIZE;
-            const entries = Array.from(this.originalDisplayNames.keys());
-            
-            for (let i = 0; i < entriesToRemove; i++) {
-                this.originalDisplayNames.delete(entries[i]);
-            }
+        if (this.fileCache.size <= this.MAX_CACHE_SIZE) {
+            return;
         }
         
-        // 新增：限制fileLinkMap大小
-        if (this.fileLinkMap.size > this.MAX_CACHE_SIZE) {
-            const entriesToRemove = this.fileLinkMap.size - this.MAX_CACHE_SIZE;
-            const entries = Array.from(this.fileLinkMap.keys())
-                .filter(key => !this.priorityPaths.has(key)) // 保留高优先级路径
-                .sort(); // 按字母排序，可以根据需要调整
-            
-            for (let i = 0; i < entriesToRemove && i < entries.length; i++) {
-                this.fileLinkMap.delete(entries[i]);
-            }
+        let entries: [string, FileCacheItem][] = [];
+        
+        // 根据不同策略排序缓存项
+        switch (this.cleanStrategy) {
+            case CacheCleanStrategy.LRU:
+                // 按访问计数和时间戳排序，保留高优先级项
+                entries = Array.from(this.fileCache.entries())
+                    .filter(([_, item]) => !item.priority) // 保留优先级项
+                    .sort((a, b) => {
+                        // 首先按访问计数排序
+                        if (a[1].accessCount !== b[1].accessCount) {
+                            return a[1].accessCount - b[1].accessCount;
+                        }
+                        // 访问计数相同时按时间戳排序
+                        return a[1].timestamp - b[1].timestamp;
+                    });
+                break;
+                
+            case CacheCleanStrategy.FIFO:
+                // 按时间戳排序，保留高优先级项
+                entries = Array.from(this.fileCache.entries())
+                    .filter(([_, item]) => !item.priority)
+                    .sort((a, b) => a[1].timestamp - b[1].timestamp);
+                break;
+                
+            case CacheCleanStrategy.PRIORITY:
+                // 按优先级和访问计数排序
+                entries = Array.from(this.fileCache.entries())
+                    .sort((a, b) => {
+                        // 优先级高的保留
+                        if (a[1].priority !== b[1].priority) {
+                            return a[1].priority ? 1 : -1;
+                        }
+                        // 访问计数高的保留
+                        if (a[1].accessCount !== b[1].accessCount) {
+                            return a[1].accessCount - b[1].accessCount;
+                        }
+                        // 最后按时间戳
+                        return a[1].timestamp - b[1].timestamp;
+                    });
+                break;
         }
-    }
-    
-    // 通用方法：限制Map缓存大小
-    private limitMapCache<T, V>(
-        cache: Map<T, V>, 
-        maxSize: number,
-        sortFn: (entries: [T, V][]) => [T, V][],
-        deleteFn: (key: T) => void
-    ): void {
-        if (cache.size > maxSize) {
-            const entriesToRemove = cache.size - maxSize;
-            const entries = sortFn(Array.from(cache.entries()));
-            
-            for (let i = 0; i < entriesToRemove; i++) {
-                const key = entries[i][0];
-                deleteFn(key);
-            }
+        
+        // 计算要删除的条目数
+        const deleteCount = this.fileCache.size - this.MAX_CACHE_SIZE;
+        
+        // 删除条目
+        for (let i = 0; i < deleteCount && i < entries.length; i++) {
+            this.fileCache.delete(entries[i][0]);
         }
+        
+        this.logger.debug(`缓存清理完成: 删除了${Math.min(deleteCount, entries.length)}个条目, 当前大小=${this.fileCache.size}`);
     }
     
     // 从持久化存储加载缓存数据
@@ -150,68 +172,42 @@ export class FileDisplayCache {
         
         try {
             const data = await this.plugin.app.loadData(this.CACHE_DATA_KEY);
-            if (data && typeof data === 'object') {
-                // 恢复文件显示缓存
-                if (data.fileDisplayCache && Array.isArray(data.fileDisplayCache)) {
-                    data.fileDisplayCache.forEach((entry: [string, { displayName: string, timestamp: number }]) => {
-                        const [path, value] = entry;
-                        // 验证缓存项是否有效
-                        if (path && value && value.displayName && value.timestamp) {
-                            this.fileDisplayCache.set(path, value);
-                        }
-                    });
-                }
-                
-                // 恢复原始文件名缓存
-                if (data.originalDisplayNames && Array.isArray(data.originalDisplayNames)) {
-                    data.originalDisplayNames.forEach((entry: [string, string]) => {
-                        const [path, name] = entry;
-                        if (path && name) {
-                            this.originalDisplayNames.set(path, name);
-                        }
-                    });
-                }
-                
-                // 恢复已处理文件集合
-                if (data.processedFiles && Array.isArray(data.processedFiles)) {
-                    data.processedFiles.forEach((path: string) => {
-                        if (path) {
-                            this.processedFiles.add(path);
-                        }
-                    });
-                }
-                
-                // 恢复文件修改时间缓存
-                if (data.fileModificationTimes && Array.isArray(data.fileModificationTimes)) {
-                    data.fileModificationTimes.forEach((entry: [string, number]) => {
-                        const [path, mtime] = entry;
-                        if (path && typeof mtime === 'number') {
-                            this.fileModificationTimes.set(path, mtime);
-                        }
-                    });
-                }
-                
-                // 新增：恢复文件链接映射
-                if (data.fileLinkMap && Array.isArray(data.fileLinkMap)) {
-                    data.fileLinkMap.forEach((entry: [string, string[]]) => {
-                        const [path, links] = entry;
-                        if (path && Array.isArray(links)) {
-                            this.fileLinkMap.set(path, new Set(links));
-                        }
-                    });
+            if (data && typeof data === 'object' && data.fileCache) {
+                for (const [path, item] of data.fileCache) {
+                    if (this.isValidCacheItem(path, item)) {
+                        // 恢复链接集合
+                        const links = new Set<string>(Array.isArray(item.links) ? item.links : []);
+                        
+                        this.fileCache.set(path, {
+                            ...item,
+                            links: links,
+                        });
+                    }
                 }
                 
                 // 检查缓存是否有足够的数据来标记为已预热
-                const hasEnoughData = this.fileDisplayCache.size > 0 && this.fileLinkMap.size > 0;
-                this.cacheWarmedUp = hasEnoughData;
+                this.cacheWarmedUp = this.fileCache.size > 0;
                 
-                if (hasEnoughData) {
-                    this.logger?.log(`从持久化存储加载了 ${this.fileDisplayCache.size} 个文件显示缓存和 ${this.fileLinkMap.size} 个文件链接关系`);
+                if (this.cacheWarmedUp) {
+                    this.logger?.log(`从持久化存储加载了 ${this.fileCache.size} 个文件缓存项`);
                 }
             }
         } catch (error) {
             console.error('Failed to load filename display cache:', error);
         }
+    }
+    
+    // 验证缓存项的完整性
+    private isValidCacheItem(path: string, item: any): boolean {
+        return (
+            path && 
+            item && 
+            typeof item === 'object' &&
+            typeof item.displayName === 'string' &&
+            typeof item.originalName === 'string' &&
+            typeof item.timestamp === 'number' &&
+            typeof item.mtime === 'number'
+        );
     }
     
     // 保存缓存数据到持久化存储
@@ -221,29 +217,23 @@ export class FileDisplayCache {
         }
         
         try {
-            // 转换fileLinkMap为可序列化的格式
-            const serializedLinkMap: [string, string[]][] = [];
-            this.fileLinkMap.forEach((links, path) => {
-                serializedLinkMap.push([path, Array.from(links)]);
+            // 转换为可序列化格式
+            const serializedCache: [string, any][] = Array.from(this.fileCache.entries()).map(
+                ([path, item]) => [
+                    path, 
+                    {
+                        ...item,
+                        links: Array.from(item.links)
+                    }
+                ]
+            );
+            
+            await this.plugin.app.saveData(this.CACHE_DATA_KEY, {
+                fileCache: serializedCache
             });
-            
-            const data = {
-                fileDisplayCache: Array.from(this.fileDisplayCache.entries()),
-                originalDisplayNames: Array.from(this.originalDisplayNames.entries()),
-                processedFiles: Array.from(this.processedFiles),
-                fileModificationTimes: Array.from(this.fileModificationTimes.entries()),
-                fileLinkMap: serializedLinkMap
-            };
-            
-            await this.plugin.app.saveData(this.CACHE_DATA_KEY, data);
         } catch (error) {
             console.error('Failed to save filename display cache:', error);
         }
-    }
-    
-    // 保存原始文件名
-    public saveOriginalName(path: string, originalName: string): void {
-        this.originalDisplayNames.set(path, originalName);
     }
     
     // 保存元素数据到元素缓存
@@ -258,16 +248,42 @@ export class FileDisplayCache {
     
     // 获取原始文件名
     public getOriginalName(path: string): string | undefined {
-        return this.originalDisplayNames.get(path);
+        return this.fileCache.get(path)?.originalName;
+    }
+    
+    // 保存原始文件名
+    public saveOriginalName(path: string, originalName: string): void {
+        if (!this.fileCache.has(path)) {
+            this.initCacheItem(path);
+        }
+        
+        const item = this.fileCache.get(path);
+        if (item) {
+            item.originalName = originalName;
+        }
+    }
+    
+    // 初始化缓存项
+    private initCacheItem(path: string): void {
+        this.fileCache.set(path, {
+            displayName: path.split('/').pop() || path,
+            originalName: path.split('/').pop() || path,
+            timestamp: Date.now(),
+            mtime: 0,
+            processed: false,
+            links: new Set<string>(),
+            priority: false,
+            accessCount: 0
+        });
     }
     
     // 检查路径是否有显示名称
     public hasDisplayName(path: string): boolean {
-        if (!this.fileDisplayCache.has(path)) {
+        if (!this.fileCache.has(path)) {
             return false;
         }
         
-        const cached = this.fileDisplayCache.get(path);
+        const cached = this.fileCache.get(path);
         if (!cached) {
             return false;
         }
@@ -290,11 +306,11 @@ export class FileDisplayCache {
         const file = this.plugin?.app?.vault?.getFileByPath(path);
         if (!file) return false;
         
-        const cachedMtime = this.fileModificationTimes.get(path);
+        const item = this.fileCache.get(path);
         const currentMtime = file.stat?.mtime;
         
         // 如果没有缓存的修改时间或者文件被修改过，则缓存无效
-        if (!cachedMtime || !currentMtime || cachedMtime < currentMtime) {
+        if (!item || !currentMtime || item.mtime < currentMtime) {
             return false;
         }
         
@@ -303,13 +319,23 @@ export class FileDisplayCache {
     
     // 更新文件修改时间
     public updateFileMTime(path: string): void {
-        const file = this.plugin?.app?.vault?.getFileByPath(path);
-        if (file && file.stat) {
-            this.fileModificationTimes.set(path, file.stat.mtime);
+        try {
+            const file = this.plugin?.app?.vault?.getFileByPath(path);
+            if (!file) return;
+            
+            const item = this.fileCache.get(path);
+            if (item) {
+                item.mtime = file.stat?.mtime || 0;
+                // 更新访问时间戳和访问计数
+                item.timestamp = Date.now();
+                item.accessCount++;
+            }
+        } catch (error) {
+            this.logger.error(`更新文件修改时间时出错: ${path}`, error);
         }
     }
     
-    // 获取显示名称（增加时间戳检查）
+    // 获取显示名称
     public getDisplayName(path: string): string | undefined {
         try {
             // 安全检查
@@ -318,28 +344,54 @@ export class FileDisplayCache {
                 return undefined;
             }
             
-            // 在返回缓存前检查缓存是否有效
-            if (!this.isCacheValid(path)) {
-                // 如果缓存无效，返回 undefined 促使重新处理
+            // 检查缓存中是否存在
+            if (!this.fileCache.has(path)) {
                 return undefined;
             }
             
-            if (!this.fileDisplayCache.has(path)) {
+            const item = this.fileCache.get(path);
+            if (!item) return undefined;
+            
+            // 检查是否过期 - 根据优先级使用不同的过期时间
+            const expiryTime = item.priority ? this.HIGH_PRIORITY_EXPIRY : this.CACHE_EXPIRY;
+            if (Date.now() - item.timestamp > expiryTime) {
+                // 标记为需要清理，但不立即删除
+                this.pendingCleanup = true;
                 return undefined;
             }
             
-            const entry = this.fileDisplayCache.get(path);
-            if (!entry) {
-                return undefined;
-            }
+            // 更新访问时间戳和访问计数
+            item.timestamp = Date.now();
+            item.accessCount++;
             
-            // 更新时间戳表示最近访问
-            entry.timestamp = Date.now();
+            // 检查是否需要触发按需清理
+            this.checkAndTriggerLazyCleanup();
             
-            return entry.displayName;
+            return item.displayName;
         } catch (error) {
             this.logger.error(`获取路径 ${path} 的显示名称时出错:`, error);
             return undefined;
+        }
+    }
+    
+    // 检查是否需要触发惰性清理
+    private checkAndTriggerLazyCleanup(): void {
+        // 如果缓存大小超过阈值且距离上次清理已经过去了一定时间
+        const now = Date.now();
+        if (this.fileCache.size > this.CACHE_SIZE_THRESHOLD && 
+            now - this.lastCleanupTime > this.CLEANUP_INTERVAL / 2) {
+            
+            // 使用requestIdleCallback在浏览器空闲时执行清理
+            if (this.serviceContainer) {
+                const timerService = this.serviceContainer.get<ITimerService>(SERVICE_TYPES.TimerService);
+                if (timerService) {
+                    timerService.requestIdleCallback(() => {
+                        this.clearExpired();
+                        this.enforceCacheSizeLimit();
+                        this.lastCleanupTime = Date.now();
+                    });
+                }
+            }
         }
     }
     
@@ -358,20 +410,22 @@ export class FileDisplayCache {
                 displayName = path.split('/').pop() || path;
             }
             
-            // 添加到缓存中
-            this.fileDisplayCache.set(path, {
-                displayName: displayName,
-                timestamp: Date.now()
-            });
+            // 如果没有缓存项，创建一个新的
+            if (!this.fileCache.has(path)) {
+                this.initCacheItem(path);
+            }
             
-            // 添加到已处理文件集合
-            this.processedFiles.add(path);
-            
-            // 更新文件修改时间记录
-            this.updateFileMTime(path);
-            
-            // 添加到优先级路径
-            this.priorityPaths.add(path);
+            // 更新缓存项
+            const item = this.fileCache.get(path);
+            if (item) {
+                item.displayName = displayName;
+                item.timestamp = Date.now();
+                item.processed = true;
+                item.priority = true;
+                
+                // 更新文件修改时间记录
+                this.updateFileMTime(path);
+            }
         } catch (error) {
             this.logger.error(`设置路径 ${path} 的显示名称时出错:`, error);
         }
@@ -391,23 +445,22 @@ export class FileDisplayCache {
                 entry && Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && typeof entry[1] === 'string'
             );
             
-            if (validEntries.length !== entries.length) {
-                this.logger.warn(`批量更新中发现 ${entries.length - validEntries.length} 个无效条目`);
-            }
-            
-            // 批量更新displayCache
+            // 批量更新缓存
             validEntries.forEach(([path, displayName]) => {
                 try {
-                    this.fileDisplayCache.set(path, {
-                        displayName: displayName,
-                        timestamp: now
-                    });
+                    if (!this.fileCache.has(path)) {
+                        this.initCacheItem(path);
+                    }
                     
-                    // 添加到已处理文件集合
-                    this.processedFiles.add(path);
-                    
-                    // 更新文件修改时间记录
-                    this.updateFileMTime(path);
+                    const item = this.fileCache.get(path);
+                    if (item) {
+                        item.displayName = displayName;
+                        item.timestamp = now;
+                        item.processed = true;
+                        
+                        // 更新文件修改时间记录
+                        this.updateFileMTime(path);
+                    }
                 } catch (entryError) {
                     this.logger.error(`更新路径 ${path} 时出错:`, entryError);
                 }
@@ -426,100 +479,37 @@ export class FileDisplayCache {
                 return;
             }
             
-            this.fileDisplayCache.delete(path);
-            this.originalDisplayNames.delete(path);
-            this.processedFiles.delete(path);
-            this.fileModificationTimes.delete(path);
-            this.priorityPaths.delete(path);
-            
-            // 清理fileLinkMap
-            this.fileLinkMap.delete(path);
+            this.fileCache.delete(path);
         } catch (error) {
             this.logger.error(`删除路径 ${path} 的缓存时出错:`, error);
-            
-            // 尝试单独删除每个缓存条目以最大程度保持一致性
-            try {
-                this.fileDisplayCache.delete(path);
-            } catch {}
-            try {
-                this.originalDisplayNames.delete(path);
-            } catch {}
-            try {
-                this.processedFiles.delete(path);
-            } catch {}
-            try {
-                this.fileModificationTimes.delete(path);
-            } catch {}
-            try {
-                this.priorityPaths.delete(path);
-            } catch {}
-            try {
-                this.fileLinkMap.delete(path);
-            } catch {}
         }
     }
     
     // 检查是否已经处理过
     public isProcessed(path: string): boolean {
-        return this.processedFiles.has(path);
+        return this.fileCache.get(path)?.processed || false;
     }
     
     // 清空所有缓存
     public clearAll(): void {
         try {
-            this.fileDisplayCache.clear();
-            this.originalDisplayNames.clear();
-            this.processedFiles.clear();
-            this.fileModificationTimes.clear();
-            this.fileLinkMap.clear();
-            this.priorityPaths.clear();
+            this.fileCache.clear();
             this.cacheWarmedUp = false;
         } catch (error) {
             this.logger.error('清空所有缓存时出错:', error);
-            
-            // 尝试单独清除每个缓存以最大程度保持一致性
-            try {
-                this.fileDisplayCache.clear();
-            } catch {}
-            try {
-                this.originalDisplayNames.clear();
-            } catch {}
-            try {
-                this.processedFiles.clear();
-            } catch {}
-            try {
-                this.fileModificationTimes.clear();
-            } catch {}
-            try {
-                this.fileLinkMap.clear();
-            } catch {}
-            try {
-                this.priorityPaths.clear();
-            } catch {}
-            
-            this.cacheWarmedUp = false;
         }
     }
     
-    // 清空缓存
+    // 清空缓存但保留元数据（如原始名称）
     public clear(): void {
         try {
-            this.fileDisplayCache.clear();
-            this.processedFiles.clear();
-            this.priorityPaths.clear();
+            // 清除处理标记和显示名称，但保留元数据
+            for (const [path, item] of this.fileCache.entries()) {
+                item.processed = false;
+                item.priority = false;
+            }
         } catch (error) {
             this.logger.error('清空缓存时出错:', error);
-            
-            // 尝试单独清除每个缓存以最大程度保持一致性
-            try {
-                this.fileDisplayCache.clear();
-            } catch {}
-            try {
-                this.processedFiles.clear();
-            } catch {}
-            try {
-                this.priorityPaths.clear();
-            } catch {}
         }
     }
     
@@ -527,10 +517,18 @@ export class FileDisplayCache {
     public clearExpired(): void {
         const now = Date.now();
         const keysToDelete: string[] = [];
+        let normalExpired = 0;
+        let priorityExpired = 0;
         
         // 收集过期的项
-        this.fileDisplayCache.forEach((value, key) => {
-            if (now - value.timestamp > this.CACHE_EXPIRY) {
+        this.fileCache.forEach((value, key) => {
+            const expiryTime = value.priority ? this.HIGH_PRIORITY_EXPIRY : this.CACHE_EXPIRY;
+            if (now - value.timestamp > expiryTime) {
+                if (value.priority) {
+                    priorityExpired++;
+                } else {
+                    normalExpired++;
+                }
                 keysToDelete.push(key);
             }
         });
@@ -539,11 +537,23 @@ export class FileDisplayCache {
         keysToDelete.forEach(key => {
             this.deletePath(key);
         });
+        
+        if (keysToDelete.length > 0) {
+            this.logger.debug(`清理过期缓存: 删除了${keysToDelete.length}个条目 (普通: ${normalExpired}, 高优先级: ${priorityExpired})`);
+        }
     }
     
     // 获取所有原始名称的映射
     public getAllOriginalNames(): Map<string, string> {
-        return this.originalDisplayNames;
+        const result = new Map<string, string>();
+        
+        for (const [path, item] of this.fileCache.entries()) {
+            if (item.originalName) {
+                result.set(path, item.originalName);
+            }
+        }
+        
+        return result;
     }
     
     // 停止定期清理
@@ -554,43 +564,63 @@ export class FileDisplayCache {
         }
     }
     
-    // 新增：记录文件之间的链接关系
+    // 记录文件之间的链接关系
     public addFileLink(sourcePath: string, targetPath: string): void {
-        // 获取源文件已有的链接集合
-        let links = this.fileLinkMap.get(sourcePath);
-        if (!links) {
-            links = new Set<string>();
-            this.fileLinkMap.set(sourcePath, links);
+        // 确保源文件存在缓存项
+        if (!this.fileCache.has(sourcePath)) {
+            this.initCacheItem(sourcePath);
         }
         
-        // 添加目标路径
-        links.add(targetPath);
+        // 确保目标文件存在缓存项
+        if (!this.fileCache.has(targetPath)) {
+            this.initCacheItem(targetPath);
+        }
         
-        // 将目标路径添加到优先级路径
-        this.priorityPaths.add(targetPath);
+        // 添加链接关系
+        const sourceItem = this.fileCache.get(sourcePath);
+        if (sourceItem) {
+            sourceItem.links.add(targetPath);
+            
+            // 设置目标为高优先级
+            const targetItem = this.fileCache.get(targetPath);
+            if (targetItem) {
+                targetItem.priority = true;
+            }
+        }
     }
     
-    // 新增：获取文件链接的所有目标
+    // 获取文件链接的所有目标
     public getFileLinks(path: string): Set<string> {
-        return this.fileLinkMap.get(path) || new Set<string>();
+        return this.fileCache.get(path)?.links || new Set<string>();
     }
     
-    // 新增：预加载相关文件
+    // 预加载相关文件
     public preloadLinkedFiles(path: string): void {
         const links = this.getFileLinks(path);
         
-        // 将所有链接的文件添加到优先级路径
+        // 将所有链接的文件标记为高优先级
         links.forEach(linkedPath => {
-            this.priorityPaths.add(linkedPath);
+            if (this.fileCache.has(linkedPath)) {
+                const item = this.fileCache.get(linkedPath);
+                if (item) {
+                    item.priority = true;
+                }
+            } else {
+                this.initCacheItem(linkedPath);
+                const item = this.fileCache.get(linkedPath);
+                if (item) {
+                    item.priority = true;
+                }
+            }
         });
     }
     
-    // 新增：检查缓存是否已预热
+    // 检查缓存是否已预热
     public isCacheWarmedUp(): boolean {
         return this.cacheWarmedUp;
     }
     
-    // 新增：执行缓存预热
+    // 执行缓存预热
     public async warmUpCache(): Promise<void> {
         if (this.cacheWarmedUp) return;
         
@@ -683,7 +713,7 @@ export class FileDisplayCache {
         }
     }
     
-    // 新增：异步获取显示名称，确保缓存有效
+    // 异步获取显示名称，确保缓存有效
     public async ensureDisplayName(path: string): Promise<string | undefined> {
         // 检查缓存中是否已有
         let displayName = this.getDisplayName(path);
@@ -701,7 +731,7 @@ export class FileDisplayCache {
         return displayName;
     }
     
-    // 新增：批量预获取多个路径的显示名称
+    // 批量预获取多个路径的显示名称
     public batchGetDisplayNames(paths: string[]): Map<string, string> {
         const results = new Map<string, string>();
         
@@ -713,6 +743,33 @@ export class FileDisplayCache {
         });
         
         return results;
+    }
+    
+    /**
+     * 设置缓存清理策略
+     * @param strategy 清理策略
+     */
+    public setCacheCleanStrategy(strategy: CacheCleanStrategy): void {
+        this.cleanStrategy = strategy;
+        this.logger.log(`已设置缓存清理策略: ${CacheCleanStrategy[strategy]}`);
+    }
+    
+    /**
+     * 获取当前缓存清理策略
+     */
+    public getCacheCleanStrategy(): CacheCleanStrategy {
+        return this.cleanStrategy;
+    }
+    
+    /**
+     * 手动触发缓存清理
+     */
+    public triggerCleanup(): void {
+        this.clearExpired();
+        this.enforceCacheSizeLimit();
+        this.saveCacheToData();
+        this.lastCleanupTime = Date.now();
+        this.pendingCleanup = false;
     }
     
     /**
