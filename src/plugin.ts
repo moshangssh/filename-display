@@ -16,8 +16,10 @@ import { LoggerService } from './services/LoggerService';
 import { errorHandler } from './utils/ErrorHandler';
 import { Extension } from '@codemirror/state';
 import { createEditorExtensions } from './extensions/editor';
+import { Logger } from './utils/logger';
+import { IEditorLinkDecorator } from './services/interfaces/IServices';
 
-const logger = new LoggerService().getLogger('TitleExtractorPlugin');
+const logger = new Logger('Plugin');
 
 // 创建 CodeMirror 扩展集合
 function createCombinedExtensions(plugin: TitleExtractorPlugin): Extension {
@@ -29,7 +31,18 @@ function createCombinedExtensions(plugin: TitleExtractorPlugin): Extension {
     // 收集所有服务的 CodeMirror 扩展
     const extensions: Extension[] = [];
     
-    // 将在 registerServices 中把扩展添加到这个数组
+    // 添加编辑器链接装饰器服务的扩展
+    if (container.has(SERVICE_TYPES.EditorLinkDecorator)) {
+        const editorLinkDecorator = container.get<EditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator);
+        extensions.push(...editorLinkDecorator.getExtension());
+    }
+
+    // 添加来自editor.ts的编辑器扩展
+    extensions.push(createEditorExtensions(plugin));
+
+    // 如果后续有其他服务提供CodeMirror扩展，可以在这里添加
+    
+    logger.log(`已收集 ${extensions.length} 个 CodeMirror 扩展`);
     
     return extensions;
 }

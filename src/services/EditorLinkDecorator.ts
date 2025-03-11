@@ -500,4 +500,15 @@ export class EditorLinkDecorator extends LinkHandler {
         this.isProcessing = false;
         this.pendingUpdate = false;
     }
+
+    /**
+     * 获取编辑器链接装饰扩展
+     * 实现IEditorLinkDecorator接口
+     */
+    public getExtension(): Extension[] {
+        // 返回需要的编辑器扩展
+        return [
+            createLinkDecorationExtension(this.plugin, (view) => this.onEditorChange(view))
+        ];
+    }
 } 
