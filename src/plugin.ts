@@ -25,13 +25,8 @@ const logger = new Logger('Plugin');
 
 // 创建 CodeMirror 扩展集合 - 使用扩展缓存服务
 function createCombinedExtensions(plugin: TitleExtractorPlugin): Extension {
-    logger.log('创建 CodeMirror 扩展集合');
-    
-    // 获取服务容器中的扩展缓存服务
-    const container = plugin.serviceContainer;
-    const extensionCacheService = container.get<ExtensionCacheService>(SERVICE_TYPES.ExtensionCacheService);
-    
-    // 使用缓存服务获取组合扩展
+    // 从服务容器获取扩展缓存服务
+    const extensionCacheService = plugin.serviceContainer.get<ExtensionCacheService>(SERVICE_TYPES.ExtensionCacheService);
     return extensionCacheService.getCombinedExtensions();
 }
 

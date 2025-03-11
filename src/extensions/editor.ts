@@ -81,26 +81,14 @@ export class LinkReplaceWidget extends WidgetType {
         // 标记为已销毁
         this.isDestroyed = true;
         
-        // 无条件清理事件监听器，即使dom参数不是HTMLElement
-        if (this.clickListener) {
-            // 尝试从spanElement中清理事件监听器（如果存在）
-            if (this.spanElement) {
-                this.spanElement.removeEventListener('click', this.clickListener);
-            }
-            // 从传入的dom元素中也清理事件监听器
-            if (dom) {
-                dom.removeEventListener('click', this.clickListener);
-            }
-            // 释放监听器引用
+        // 清理事件监听器
+        if (this.clickListener && this.spanElement) {
+            this.spanElement.removeEventListener('click', this.clickListener);
             this.clickListener = null;
         }
         
         // 清除DOM引用
         this.spanElement = null;
-        
-        // 注意：plugin是只读属性，无法置空
-        // 由于plugin是应用级别的单例，不需要在这里特别处理
-        // 确保不在此类中存储任何可能导致循环引用的临时数据
     }
 
     ignoreEvent() {
@@ -300,22 +288,18 @@ export function createLinkDecorationExtension(
  * 创建所有编辑器扩展的组合
  */
 export function createEditorExtensions(plugin: ITitleExtractorPlugin): Extension {
-    // 收集所有扩展
-    const extensions: Extension[] = [];
-    
-    // 链接装饰扩展
+    // 仅当启用链接装饰时返回扩展
     if (plugin.settings.enableEditorLinkDecorations) {
-        const linkDecorationExt = createLinkDecorationExtension(plugin, (view) => {
-            // 当编辑器内容变化时，通知装饰器
+        return createLinkDecorationExtension(plugin, (view) => {
             if (plugin._linkDecorator) {
                 plugin._linkDecorator.onEditorChange?.(view);
             }
         });
-        extensions.push(linkDecorationExt);
     }
     
-    return extensions;
-} 
+    // 未启用时返回空扩展
+    return [];
+}
 
 // 新增：更新链接文本但保持装饰
 export function updateLinkDisplayName(

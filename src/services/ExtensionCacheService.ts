@@ -116,23 +116,17 @@ export class ExtensionCacheService {
         // 创建新的组合扩展
         logger.debug(`创建新的组合扩展`);
         
-        // 收集所有需要的扩展
+        // 收集扩展
         const extensions: Extension[] = [];
         
-        // 添加链接装饰扩展
+        // 仅当启用了链接装饰时添加链接装饰扩展
         if (this.plugin.settings.enableEditorLinkDecorations) {
             extensions.push(this.getLinkDecorationExtension((view) => {
-                // 当编辑器内容变化时，通知装饰器
                 if (this.plugin._linkDecorator) {
                     this.plugin._linkDecorator.onEditorChange?.(view);
                 }
             }));
         }
-        
-        // 添加编辑器扩展
-        extensions.push(this.getEditorExtension());
-        
-        // 如果后续有其他类型的扩展，可以在这里添加
         
         // 缓存并返回组合扩展
         const combinedExtension = extensions;

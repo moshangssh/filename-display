@@ -167,31 +167,18 @@ export class EditorLinkDecorator extends LinkHandler {
     // 更新编辑器视图引用
     private updateEditorView(editor: Editor, view: MarkdownView): void {
         try {
-            // 通过非类型安全的方式访问内部 CM 实例
-            // 注：Obsidian 的 API 并未完全暴露 CM 实例，所以我们需要使用这种方式
+            // 通过非类型安全的方式访问内部CM实例
             const editorView = (editor as any).cm;
             if (editorView instanceof EditorView) {
                 this.activeEditorView = editorView;
                 return;
             }
             
-            // 备用方法：尝试从视图获取
-            if ((view as any).editMode?.editor?.cm instanceof EditorView) {
-                this.activeEditorView = (view as any).editMode.editor.cm;
-                return;
-            }
-            
-            // 第三种方法：尝试获取通过其他字段
-            if ((view as any).editor?.cm instanceof EditorView) {
-                this.activeEditorView = (view as any).editor.cm;
-                return;
-            }
-            
-            // 如果所有方法都失败，记录错误
-            logger.log("无法获取 EditorView：当前视图或编辑器的结构与预期不符");
+            // 如果无法获取EditorView，记录错误
+            logger.log("无法获取EditorView：当前视图或编辑器的结构与预期不符");
             this.activeEditorView = null;
         } catch (e) {
-            logger.log("获取 EditorView 时出现错误，可能当前不是编辑模式：", e);
+            logger.log("获取EditorView时出现错误，可能当前不是编辑模式：", e);
             this.activeEditorView = null;
         }
     }
