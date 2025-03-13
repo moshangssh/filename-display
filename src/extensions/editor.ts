@@ -3,6 +3,9 @@ import { EditorView, Decoration, WidgetType, ViewPlugin, ViewUpdate, DecorationS
 import { StateField, StateEffect, RangeSet } from '@codemirror/state';
 import type { ITitleExtractorPlugin } from '../types';
 import { Logger } from '../utils/logger';
+import { viewportExtension } from './viewport';
+import { incrementalUpdateExtension } from './incremental-update';
+import { editorSyncExtension } from './editor-sync';
 
 // 创建服务特定的日志记录器
 const logger = new Logger('EditorExtensions');
@@ -288,17 +291,26 @@ export function createLinkDecorationExtension(
  * 创建所有编辑器扩展的组合
  */
 export function createEditorExtensions(plugin: ITitleExtractorPlugin): Extension {
-    // 仅当启用链接装饰时返回扩展
-    if (plugin.settings.enableEditorLinkDecorations) {
-        return createLinkDecorationExtension(plugin, (view) => {
-            if (plugin._linkDecorator) {
-                plugin._linkDecorator.onEditorChange?.(view);
-            }
-        });
-    }
-    
-    // 未启用时返回空扩展
-    return [];
+    return [
+        // 添加视口检测扩展
+        viewportExtension(),
+        // 添加增量更新扩展
+        incrementalUpdateExtension(),
+        // 添加编辑器状态同步扩展
+        editorSyncExtension(plugin),
+        // 添加链接观察器扩展
+        createLinkObserverExtension(plugin, (view) => {
+            // 处理链接变化
+            logger.log('链接变化检测到');
+        }),
+        // 添加链接装饰扩展
+        createLinkDecorationExtension(plugin, (view) => {
+            // 处理装饰变化
+            logger.log('装饰变化检测到');
+        }),
+        // 添加装饰状态字段
+        linkDecorationField,
+    ];
 }
 
 // 新增：更新链接文本但保持装饰

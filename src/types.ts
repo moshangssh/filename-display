@@ -8,7 +8,8 @@ export interface TitleExtractorSettings {
     preferFrontmatterTitle: boolean;
     enabledFolders: string[];
     enableEditorLinkDecorations: boolean;
-    cacheCleanStrategy: CacheCleanStrategy;
+    cacheCleanStrategy: string;
+    persistentCacheHeatThreshold: number;
 }
 
 export interface ITitleExtractorPlugin extends Plugin {
