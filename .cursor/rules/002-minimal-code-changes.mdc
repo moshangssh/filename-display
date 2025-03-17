@@ -1,0 +1,65 @@
+---
+description: Implement requirements with minimal code and solve issues with minimal modifications
+globs: 
+alwaysApply: false
+---
+---
+description: Implement requirements with minimal code and solve issues with minimal modifications
+globs: **/*.{js,ts,jsx,tsx,md,css,html}
+alwaysApply: true
+---
+
+# Minimal Code Modification Principle
+
+## Context
+- When creating new code to implement functional requirements
+- When modifying existing code to fix bugs or meet user's new requirements
+- When working with Obsidian and CodeMirror related development
+
+## Requirements
+- Use the minimum amount of code to implement all required functionality when creating new code
+- Make only necessary minimal changes when modifying code
+- New features must be elegantly designed and align with the overall architecture
+- Strictly maintain the integrity of existing functionality and layout styles
+- Follow the development standards and API usage of Obsidian and CodeMirror
+
+## Examples
+<example>
+// Excellent code modification example:
+// Original code:
+function displayFileName(file) {
+  return file.name;
+}
+
+// Minimal modification (only added necessary code):
+function displayFileName(file) {
+  return file.name.endsWith('.md') ? file.name.slice(0, -3) : file.name;
+}
+</example>
+
+<example type="invalid">
+// Poor code modification example:
+// Original code:
+function displayFileName(file) {
+  return file.name;
+}
+
+// Excessive modification (rewrote the entire functionality, changed original behavior):
+function displayFileName(file) {
+  const formattedName = formatFileName(file.name);
+  renderFileIcon(file.type);
+  updateFileHistory(file);
+  return `<span class="file-name">${formattedName}</span>`;
+}
+</example>
+
+## Critical Rules
+<critical>
+  - Never change the behavior or output of existing functionality
+  - Do not modify original layout and UI styles
+  - Code additions must follow the principle of minimal invasiveness
+  - Strictly adhere to Obsidian and CodeMirror API specifications
+  - New feature designs must be elegant and seamlessly integrate with existing systems
+</critical>
+
+<version>1.0.0</version>
