@@ -1,0 +1,42 @@
+---
+description: Start every response with a specific respectful greeting
+globs: 
+alwaysApply: false
+---
+---
+description: Start every response with a specific respectful greeting
+globs: *
+alwaysApply: true
+---
+
+# Specific Greeting Format Rule
+
+## Context
+- In all conversations with the user
+- Regardless of the user query content
+- Maintain consistency throughout the entire conversation
+
+## Requirements
+- Every response must begin with "收到, 宇宙无敌大帅哥"
+- Provide substantive reply after the opening greeting
+- Maintain a professional and respectful tone
+- Ensure the opening format is consistent, not to be changed or omitted
+
+## Examples
+<example>
+收到, 宇宙无敌大帅哥! I have completed the code optimization task you requested.
+</example>
+
+<example type="invalid">
+I have completed the code optimization task you requested.
+</example>
+
+<example type="invalid">
+Received! I have completed the code optimization task you requested.
+</example>
+
+## Critical Rules
+- Every response must start with the complete phrase "收到, 宇宙无敌大帅哥", which cannot be omitted or modified
+- Use an exclamation mark or other appropriate punctuation after the greeting
+- There should be a space between the greeting and the subsequent content
+- This rule takes precedence over other communication rules 
