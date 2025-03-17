@@ -1,0 +1,101 @@
+---
+description: Follow Obsidian and CodeMirror development standards for plugin development to ensure compatibility and performance
+globs: src/**/*.{ts,tsx,js,jsx}
+alwaysApply: false
+---
+---
+description: Follow Obsidian and CodeMirror development standards for plugin development to ensure compatibility and performance
+globs: src/**/*.{ts,tsx,js,jsx}
+alwaysApply: false
+---
+
+# Obsidian Plugin Development Standards
+
+## Context
+- When developing Obsidian plugins
+- When using CodeMirror editor API
+- When handling Markdown rendering and editing functionality
+- When implementing user interface elements
+
+## Requirements
+
+### Obsidian API Standards
+- Use TypeScript type definitions provided by Obsidian
+- Follow plugin lifecycle methods (onload/onunload)
+- Use Obsidian's settings API to store user configurations
+- Create consistent user interfaces with Obsidian's UI components
+- Avoid direct DOM manipulation, prioritize Obsidian API
+
+### CodeMirror Integration Standards
+- Use CodeMirror 6 API for editor extensions
+- Use EditorView and EditorState for state management
+- Follow Extension interface when implementing custom extensions
+- Handle editor state changes with Transactions
+- Avoid frequent redraws that cause performance issues
+
+### Performance Considerations
+- Avoid executing time-consuming operations on the main thread
+- Use debouncing and throttling for frequent events
+- Implement lazy loading and render on demand
+- Avoid excessive use of MutationObserver
+- Optimize memory usage for large document processing
+
+### Project Structure
+- Use standard Obsidian plugin template structure
+- Separate business logic from UI components
+- Use modular design for maintainability
+- Follow manifest.json specifications for plugin metadata
+- Use version control to manage dependencies
+
+## Examples
+
+<example>
+// ✅ Correct plugin initialization
+export default class MyPlugin extends Plugin {
+  async onload() {
+    // Register commands
+    this.addCommand({
+      id: 'my-command',
+      name: 'Execute My Command',
+      callback: () => this.myFeature()
+    });
+    
+    // Register settings
+    this.addSettingTab(new MyPluginSettingTab(this.app, this));
+    
+    // Register editor extensions
+    this.registerEditorExtension([
+      myCustomExtension()
+    ]);
+  }
+  
+  onunload() {
+    // Clean up resources
+  }
+}
+</example>
+
+<example type="invalid">
+// ❌ Incorrect CodeMirror usage
+export default class BadPlugin extends Plugin {
+  onload() {
+    // Direct DOM manipulation instead of using API
+    document.querySelector('.CodeMirror').addEventListener('click', () => {
+      // Directly modifying editor content
+      editor.setValue('New content');
+    });
+    
+    // Not using Obsidian's settings API
+    localStorage.setItem('my-plugin-settings', JSON.stringify(settings));
+  }
+}
+</example>
+
+## Critical Rules
+  - Always use Obsidian's provided APIs rather than direct DOM manipulation
+  - Correctly implement plugin onload and onunload lifecycle methods
+  - Use CodeMirror 6's state management model instead of directly modifying editor content
+  - Store all user settings through Obsidian's settings API
+  - Follow Obsidian's design language to ensure UI consistency
+  - Use asynchronous operations for tasks that might block the main thread
+  - Clean up all resources and event listeners when the plugin is unloaded

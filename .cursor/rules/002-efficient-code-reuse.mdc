@@ -1,0 +1,44 @@
+---
+description: Prioritize reusing existing code and services, use minimal code to fulfill requirements, ensure code is elegant and refined
+globs: 
+alwaysApply: true
+---
+---
+description: Prioritize reusing existing code and services, use minimal code to fulfill requirements, ensure code is elegant and refined
+globs: null
+alwaysApply: true
+---
+
+# Efficient Code Utilization Principles
+
+## Context
+- When developing new features or services
+- When refactoring or optimizing existing code
+- When solving problems or fixing bugs
+
+## Requirements
+- Evaluate reusable functions or services in the existing codebase before creating new services
+- Prioritize using and extending existing functionality rather than redeveloping
+- Write minimal code to meet requirements
+- Ensure code structure is clear, easy to understand and maintain
+- Avoid unnecessary code duplication
+
+## Examples
+<example>
+✅ "Before adding user verification functionality, I noticed similar functions in the authentication service that could be extended to meet new requirements"
+✅ "By extracting common logic into utility functions, I reduced 30 lines of duplicate code"
+✅ "Reused existing data processing pipeline, only adding a new transformation step"
+</example>
+
+<example type="invalid">
+❌ "Creating a completely new service for new functionality without checking if existing code could be reused"
+❌ "Copying and pasting similar functionality code instead of creating shared components"
+❌ "Implemented the feature but the code is verbose and complex, difficult to maintain"
+</example>
+
+## Critical Rules
+  - Always search and understand the existing codebase before writing new code
+  - Before creating new functions or services, confirm that existing code cannot meet requirements
+  - Code should be concise without losing functionality, pursuing the "less is more" design philosophy
+  - Refactor regularly to improve code reusability and maintainability
+  - Prioritize extending existing interfaces rather than creating new ones
