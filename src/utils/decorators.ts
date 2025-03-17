@@ -58,6 +58,7 @@ export function CatchError(
 /**
  * 异步方法重试装饰器
  * 当方法失败时自动重试指定次数
+ * 使用ErrorHandler的retryOperation方法实现
  */
 export function RetryAsync(
     maxRetries: number = 3,
@@ -79,36 +80,19 @@ export function RetryAsync(
         
         // 重写方法以添加重试逻辑
         descriptor.value = async function(...args: any[]) {
-            let lastError: unknown;
-            
-            for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
-                try {
-                    return await originalMethod.apply(this, args);
-                } catch (error) {
-                    lastError = error;
-                    
-                    if (attempt <= maxRetries) {
-                        // 记录警告但继续重试
-                        errorHandler.captureError(error, {
-                            ...context,
-                            operation: `${propertyKey.toString()} (尝试 ${attempt}/${maxRetries + 1})`,
-                            data: { args, 'this': this }
-                        }, ErrorLevel.WARNING);
-                        
-                        // 等待指定时间后重试
-                        await new Promise(resolve => setTimeout(resolve, delayMs));
-                    }
+            return await errorHandler.retryOperation(
+                () => originalMethod.apply(this, args),
+                {
+                    maxRetries,
+                    delayMs,
+                    context: {
+                        ...context,
+                        operation: propertyKey.toString(),
+                        data: { args, 'this': this }
+                    },
+                    errorLevel
                 }
-            }
-            
-            // 所有重试都失败，记录最终错误
-            errorHandler.captureError(lastError, {
-                ...context,
-                operation: `${propertyKey.toString()} (所有尝试都失败)`,
-                data: { args, 'this': this }
-            }, errorLevel);
-            
-            return undefined;
+            );
         };
         
         return descriptor;

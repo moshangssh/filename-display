@@ -1,7 +1,5 @@
-import { Logger } from '../utils/logger';
 import type { ITitleExtractorPlugin } from '../types';
-
-const logger = new Logger('CacheHeatService');
+import { BaseCacheService } from './base/BaseCacheService';
 
 interface HeatRecord {
   count: number;          // 访问次数
@@ -9,16 +7,15 @@ interface HeatRecord {
   weight: number;         // 计算得到的权重
 }
 
-export class CacheHeatService {
+export class CacheHeatService extends BaseCacheService<Map<string, HeatRecord>> {
   private heatMap: Map<string, HeatRecord> = new Map();
   private readonly DECAY_FACTOR = 0.5;  // 时间衰减因子
   private readonly MAX_HEAT = 100;      // 最大热度值
   private readonly MIN_HEAT = 0;        // 最小热度值
-  private readonly STORAGE_KEY = 'title-extractor-cache-heat';
 
-  constructor(
-    private readonly plugin: ITitleExtractorPlugin
-  ) {
+  constructor(plugin: ITitleExtractorPlugin) {
+    super(plugin, 'title-extractor-cache-heat', 'CacheHeatService');
+    
     // 从本地存储加载热度数据
     this.loadHeatMap();
   }
@@ -46,7 +43,7 @@ export class CacheHeatService {
     // 异步保存热度数据
     this.saveHeatMap();
 
-    logger.log('更新文件热度:', {
+    this.logger.log('更新文件热度:', {
       filePath,
       record
     });
@@ -70,7 +67,7 @@ export class CacheHeatService {
    * 清理低热度记录
    * @param threshold 热度阈值，默认为 10
    */
-  public cleanupLowHeat(threshold: number = 10): void {
+  public async cleanup(threshold: number = 10): Promise<void> {
     const now = Date.now();
     let cleaned = 0;
 
@@ -86,7 +83,7 @@ export class CacheHeatService {
     }
 
     if (cleaned > 0) {
-      logger.log(`清理了 ${cleaned} 条低热度记录`);
+      this.logger.log(`清理了 ${cleaned} 条低热度记录`);
       this.saveHeatMap();
     }
   }
@@ -106,34 +103,19 @@ export class CacheHeatService {
    * 保存热度图到本地存储
    */
   private async saveHeatMap(): Promise<void> {
-    try {
-      const data = Object.fromEntries(this.heatMap);
-      await this.plugin.app.vault.adapter.write(
-        `${this.plugin.app.vault.configDir}/${this.STORAGE_KEY}.json`,
-        JSON.stringify(data, null, 2)
-      );
-    } catch (error) {
-      logger.error('保存热度数据失败:', error);
-    }
+    // 将Map转换为普通对象以便JSON序列化
+    const data = Object.fromEntries(this.heatMap);
+    await this.saveData(data);
   }
 
   /**
    * 从本地存储加载热度图
    */
   private async loadHeatMap(): Promise<void> {
-    try {
-      const path = `${this.plugin.app.vault.configDir}/${this.STORAGE_KEY}.json`;
-      const exists = await this.plugin.app.vault.adapter.exists(path);
-      
-      if (exists) {
-        const data = JSON.parse(
-          await this.plugin.app.vault.adapter.read(path)
-        );
-        this.heatMap = new Map(Object.entries(data));
-        logger.log('加载热度数据成功');
-      }
-    } catch (error) {
-      logger.error('加载热度数据失败:', error);
+    const data = await this.loadData<Record<string, HeatRecord>>();
+    if (data) {
+      this.heatMap = new Map(Object.entries(data));
+      this.logger.log('加载热度数据成功');
     }
   }
 } 

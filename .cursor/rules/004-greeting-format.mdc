@@ -1,7 +1,7 @@
 ---
 description: Start every response with a specific respectful greeting
 globs: 
-alwaysApply: false
+alwaysApply: true
 ---
 ---
 description: Start every response with a specific respectful greeting

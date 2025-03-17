@@ -69,6 +69,57 @@ export abstract class LinkHandler {
         };
     }
 
+    // 检查文本是否看起来是重复的（如AAAABBBBAAAABBBB）
+    protected isRepeatedText(text: string | null): boolean {
+        if (!text || text.length < 4) return false;
+        
+        const halfLength = Math.floor(text.length / 2);
+        const firstHalf = text.substring(0, halfLength);
+        const secondHalf = text.substring(halfLength, halfLength * 2);
+        
+        // 检查前半部分是否与后半部分相同
+        return firstHalf === secondHalf;
+    }
+
+    // 检查并修复重复文本的通用方法
+    protected checkAndFixRepeatedNames(linkElements: NodeListOf<Element> | HTMLElement[]): void {
+        for (let i = 0; i < linkElements.length; i++) {
+            const linkEl = linkElements[i] as HTMLElement;
+            const text = linkEl.textContent || '';
+            
+            // 如果文本看起来是重复的，则修复它
+            if (this.isRepeatedText(text)) {
+                logger.log(`检测到重复文本: ${text}，正在修复...`);
+                
+                // 获取原始路径
+                const originalPath = linkEl.dataset.originalPath;
+                const href = linkEl.getAttribute('href');
+                
+                if (originalPath || href) {
+                    const path = originalPath || href;
+                    if (!path) continue;
+                    
+                    // 查找对应的文件
+                    const file = this.plugin.app.vault.getAbstractFileByPath(path);
+                    if (!(file instanceof TFile)) continue;
+                    
+                    // 获取正确的显示名称
+                    const result = this.processFile(file);
+                    if (result.success && result.displayName) {
+                        // 更新文本
+                        linkEl.textContent = result.displayName;
+                        logger.log(`已修复重复文本: ${text} -> ${result.displayName}`);
+                    } else {
+                        // 如果无法获取正确名称，至少删除重复部分
+                        const halfLength = Math.floor(text.length / 2);
+                        linkEl.textContent = text.substring(0, halfLength);
+                        logger.log(`已移除重复部分: ${text} -> ${linkEl.textContent}`);
+                    }
+                }
+            }
+        }
+    }
+
     // 处理文件，获取显示名称
     protected processFile(file: TFile): FileDisplayResult {
         // 检查文件是否在启用的文件夹中

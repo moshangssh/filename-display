@@ -1,7 +1,7 @@
 import { TFile, TAbstractFile } from 'obsidian';
 import type { ITitleExtractorPlugin } from '../types';
 import { IEventManagerService, ILoggerService } from './interfaces/IServices';
-import { EventQueueManager } from './EventQueueManager';
+import { EventBus } from '../utils/EventBus';
 
 // 定义事件类型
 export enum FileEventType {
@@ -29,23 +29,22 @@ export type EventCallback = (event: FileEvent) => Promise<void> | void;
 
 export class EventManagerService implements IEventManagerService {
     private plugin: ITitleExtractorPlugin;
-    private eventSubscribers: Map<FileEventType, Set<EventCallback>> = new Map();
     private eventHandlers: Map<string, any[]> = new Map();
     private logger: ILoggerService;
-    private eventQueue: EventQueueManager;
+    private eventBus: EventBus<FileEventType>;
     
     constructor(plugin: ITitleExtractorPlugin, loggerService: ILoggerService) {
         this.plugin = plugin;
         this.logger = loggerService.getLogger('EventManagerService');
-        this.eventQueue = new EventQueueManager(loggerService);
         
-        // 初始化事件类型映射
-        Object.values(FileEventType).forEach(type => {
-            this.eventSubscribers.set(type as FileEventType, new Set());
+        // 初始化事件总线
+        this.eventBus = new EventBus<FileEventType>({
+            loggerService,
+            batchSize: 5,
+            batchDelay: 100,
+            maxQueueSize: 100,
+            duplicateFilterMs: 500
         });
-        
-        // 设置事件处理器
-        this.eventQueue.setEventProcessor(this.processEvent.bind(this));
         
         this.logger.info('EventManagerService 初始化完成');
     }
@@ -53,17 +52,20 @@ export class EventManagerService implements IEventManagerService {
     // 订阅事件
     public subscribe(eventType: FileEventType, callback: EventCallback): () => void {
         this.logger.log(`订阅事件：${eventType}`);
-        const callbacks = this.eventSubscribers.get(eventType);
-        if (!callbacks) {
-            throw new Error(`未知的事件类型: ${eventType}`);
-        }
         
-        callbacks.add(callback);
+        // 使用事件总线注册事件处理器
+        return this.eventBus.on(eventType, (data: any) => {
+            // 调用回调函数处理事件
+            return callback(data);
+        });
+    }
+    
+    // 取消订阅事件
+    public unsubscribe(eventType: FileEventType, callback: EventCallback): void {
+        this.logger.log(`取消订阅事件：${eventType}`);
         
-        // 返回取消订阅函数
-        return () => {
-            callbacks.delete(callback);
-        }
+        // 使用事件总线取消注册事件处理器
+        this.eventBus.off(eventType, callback);
     }
     
     // 分发事件
@@ -72,93 +74,36 @@ export class EventManagerService implements IEventManagerService {
             const filePath = event.file ? event.file.path : 'no-file';
             this.logger.log(`分发事件: ${event.type} - 文件: ${filePath}`);
             
-            // 将事件添加到队列中
-            this.eventQueue.enqueue(event);
+            // 计算事件优先级
+            const priority = this.calculatePriority(event);
+            
+            // 使用事件总线发送事件
+            this.eventBus.emit(event.type, event, priority);
         } catch (error) {
             this.logger.error(`分发事件 ${event.type} 时发生致命错误`, error);
         }
     }
+    
+    /**
+     * 计算事件优先级
+     */
+    private calculatePriority(event: FileEvent): number {
+        let priority = 1;
 
-    // 处理单个事件
-    private async processEvent(event: FileEvent): Promise<void> {
-        try {
-            const callbacks = this.eventSubscribers.get(event.type);
-            
-            if (!callbacks || callbacks.size === 0) {
-                this.logger.log(`没有订阅者处理事件: ${event.type}`);
-                return;
-            }
-            
-            this.logger.log(`找到 ${callbacks.size} 个订阅者处理事件: ${event.type}`);
-            
-            // 并行执行所有回调，但捕获潜在错误
-            const results = await Promise.allSettled(
-                Array.from(callbacks).map(async (callback) => {
-                    try {
-                        const result = callback(event);
-                        if (result instanceof Promise) {
-                            return await result;
-                        }
-                        return result;
-                    } catch (error) {
-                        this.logger.error(`处理事件 ${event.type} 时发生错误:`, error);
-                        throw error;
-                    }
-                })
-            );
-            
-            // 检查结果，记录失败的处理程序
-            const failedPromises = results.filter((result): result is PromiseRejectedResult => 
-                result.status === 'rejected'
-            );
-            
-            if (failedPromises.length > 0) {
-                this.logger.warn(
-                    `事件 ${event.type} 的 ${failedPromises.length}/${results.length} 个处理程序失败执行`,
-                    failedPromises.map(p => p.reason)
-                );
-                
-                // 对于文件相关事件，如果有失败的处理程序，可以尝试在下一个循环中重新触发特定事件
-                if (
-                    [
-                        FileEventType.CREATE, 
-                        FileEventType.MODIFY, 
-                        FileEventType.RENAME, 
-                        FileEventType.DELETE, 
-                        FileEventType.METADATA
-                    ].includes(event.type)
-                ) {
-                    // 标记这是重试，以避免无限循环
-                    if (!event.data?.isRetry) {
-                        setTimeout(() => {
-                            try {
-                                // 确保文件仍然存在
-                                if (event.file && this.plugin.app.vault.getFileByPath(event.file.path)) {
-                                    this.logger.log(`尝试重新触发事件: ${event.type} - 文件: ${event.file.path}`);
-                                    
-                                    // 创建带有重试标记的新事件对象
-                                    this.dispatch({
-                                        ...event,
-                                        data: {
-                                            ...event.data,
-                                            isRetry: true
-                                        }
-                                    }).catch(err => {
-                                        this.logger.error(`重试事件处理失败: ${event.type}`, err);
-                                    });
-                                }
-                            } catch (retryError) {
-                                this.logger.error(`准备重试事件时出错: ${event.type}`, retryError);
-                            }
-                        }, 500); // 延迟半秒后重试
-                    } else {
-                        this.logger.warn(`事件 ${event.type} 已经是重试，不再继续重试`);
-                    }
-                }
-            }
-        } catch (error) {
-            this.logger.error(`处理事件 ${event.type} 时发生错误`, error);
+        // 文件创建和删除事件优先级最高
+        if (event.type === FileEventType.CREATE || event.type === FileEventType.DELETE) {
+            priority += 3;
         }
+        // 重命名事件次之
+        else if (event.type === FileEventType.RENAME) {
+            priority += 2;
+        }
+        // 修改事件优先级最低
+        else if (event.type === FileEventType.MODIFY) {
+            priority += 1;
+        }
+
+        return priority;
     }
     
     // 设置 Vault 事件监听器
@@ -256,21 +201,12 @@ export class EventManagerService implements IEventManagerService {
         this.eventHandlers.get(source)?.push(handler);
     }
     
-    // 取消订阅
-    public unsubscribe(eventType: FileEventType, callback: EventCallback): void {
-        this.logger.log(`取消订阅事件：${eventType}`);
-        const callbacks = this.eventSubscribers.get(eventType);
-        if (callbacks) {
-            callbacks.delete(callback);
-        }
-    }
-
     // 清理所有资源
     public dispose(): void {
         this.logger.log('正在清理事件管理器资源...');
         
-        // 清理事件队列
-        this.eventQueue.clear();
+        // 清理事件总线
+        this.eventBus.clear();
         
         // 清理所有事件处理器
         this.eventHandlers.forEach(handlers => {
@@ -281,9 +217,6 @@ export class EventManagerService implements IEventManagerService {
             });
         });
         this.eventHandlers.clear();
-        
-        // 清理所有订阅者
-        this.eventSubscribers.clear();
         
         this.logger.log('事件管理器资源已清理');
     }

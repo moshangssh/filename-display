@@ -241,6 +241,49 @@ export class ErrorHandler {
                 break;
         }
     }
+
+    /**
+     * 通用的重试操作逻辑
+     * @param operation 要执行的操作函数
+     * @param options 重试选项
+     * @returns 操作结果或undefined（如果所有尝试都失败）
+     */
+    public async retryOperation<T>(
+        operation: () => Promise<T>,
+        options: {
+            maxRetries: number,
+            delayMs: number,
+            context: ErrorContext,
+            errorLevel?: ErrorLevel
+        }
+    ): Promise<T | undefined> {
+        const { maxRetries, delayMs, context, errorLevel = ErrorLevel.WARNING } = options;
+        let lastError: unknown;
+        
+        for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+            try {
+                return await operation();
+            } catch (error) {
+                lastError = error;
+                
+                if (attempt <= maxRetries) {
+                    this.captureError(error, {
+                        ...context,
+                        operation: `${context.operation} (尝试 ${attempt}/${maxRetries + 1})`
+                    }, ErrorLevel.WARNING);
+                    
+                    await new Promise(resolve => setTimeout(resolve, delayMs));
+                }
+            }
+        }
+        
+        this.captureError(lastError, {
+            ...context,
+            operation: `${context.operation} (所有尝试都失败)`
+        }, errorLevel);
+        
+        return undefined;
+    }
 }
 
 // 导出单例实例

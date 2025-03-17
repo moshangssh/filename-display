@@ -201,17 +201,6 @@ export class MarkdownLinkService extends LinkHandler {
     }
     
     // 检查文本是否看起来是重复的（如AAAABBBBAAAABBBB）
-    private isRepeatedText(text: string | null): boolean {
-        if (!text || text.length < 4) return false;
-        
-        const halfLength = Math.floor(text.length / 2);
-        const firstHalf = text.substring(0, halfLength);
-        const secondHalf = text.substring(halfLength, halfLength * 2);
-        
-        // 检查前半部分是否与后半部分相同
-        return firstHalf === secondHalf;
-    }
-    
     // 实现抽象方法：应用显示名称到链接
     protected applyDisplayName(linkProcessResult: LinkProcessResult): void {
         const { originalInfo, displayName } = linkProcessResult;
@@ -343,7 +332,7 @@ export class MarkdownLinkService extends LinkHandler {
     }
     
     // 检查并修复可能存在的重复文本问题
-    private checkAndFixRepeatedNames(): void {
+    protected checkAndFixRepeatedNames(): void {
         // 获取所有打开的Markdown视图
         const markdownViews = this.plugin.app.workspace.getLeavesOfType('markdown');
         if (markdownViews.length === 0) return;
@@ -359,41 +348,8 @@ export class MarkdownLinkService extends LinkHandler {
             // 查找所有内部链接元素
             const linkElements = contentEl.querySelectorAll('a.internal-link');
             
-            for (let i = 0; i < linkElements.length; i++) {
-                const linkEl = linkElements[i] as HTMLElement;
-                const text = linkEl.textContent || '';
-                
-                // 如果文本看起来是重复的，则修复它
-                if (this.isRepeatedText(text)) {
-                    logger.log(`检测到重复文本: ${text}，正在修复...`);
-                    
-                    // 获取原始路径
-                    const originalPath = linkEl.dataset.originalPath;
-                    const href = linkEl.getAttribute('href');
-                    
-                    if (originalPath || href) {
-                        const path = originalPath || href;
-                        if (!path) continue;
-                        
-                        // 查找对应的文件
-                        const file = this.plugin.app.vault.getAbstractFileByPath(path);
-                        if (!(file instanceof TFile)) continue;
-                        
-                        // 获取正确的显示名称
-                        const result = this.processFile(file);
-                        if (result.success && result.displayName) {
-                            // 更新文本
-                            linkEl.textContent = result.displayName;
-                            logger.log(`已修复重复文本: ${text} -> ${result.displayName}`);
-                        } else {
-                            // 如果无法获取正确名称，至少删除重复部分
-                            const halfLength = Math.floor(text.length / 2);
-                            linkEl.textContent = text.substring(0, halfLength);
-                            logger.log(`已移除重复部分: ${text} -> ${linkEl.textContent}`);
-                        }
-                    }
-                }
-            }
+            // 使用基类的共享方法处理重复名称
+            super.checkAndFixRepeatedNames(linkElements);
         }
     }
 } 
