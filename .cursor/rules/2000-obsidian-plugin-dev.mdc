@@ -3,11 +3,6 @@ description: Follow Obsidian and CodeMirror development standards for plugin dev
 globs: src/**/*.{ts,tsx,js,jsx}
 alwaysApply: false
 ---
----
-description: Follow Obsidian and CodeMirror development standards for plugin development to ensure compatibility and performance
-globs: src/**/*.{ts,tsx,js,jsx}
-alwaysApply: false
----
 
 # Obsidian Plugin Development Standards
 
@@ -98,4 +93,4 @@ export default class BadPlugin extends Plugin {
   - Store all user settings through Obsidian's settings API
   - Follow Obsidian's design language to ensure UI consistency
   - Use asynchronous operations for tasks that might block the main thread
-  - Clean up all resources and event listeners when the plugin is unloaded
+  - Clean up all resources and event listeners when the plugin is unloaded 

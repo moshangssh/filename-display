@@ -1,10 +1,5 @@
 ---
 description: Prioritize reusing existing code and services, use minimal code to fulfill requirements, ensure code is elegant and refined
-globs: 
-alwaysApply: true
----
----
-description: Prioritize reusing existing code and services, use minimal code to fulfill requirements, ensure code is elegant and refined
 globs: null
 alwaysApply: true
 ---
@@ -41,4 +36,4 @@ alwaysApply: true
   - Before creating new functions or services, confirm that existing code cannot meet requirements
   - Code should be concise without losing functionality, pursuing the "less is more" design philosophy
   - Refactor regularly to improve code reusability and maintainability
-  - Prioritize extending existing interfaces rather than creating new ones
+  - Prioritize extending existing interfaces rather than creating new ones 

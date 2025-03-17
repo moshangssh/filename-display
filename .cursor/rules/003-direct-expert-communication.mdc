@@ -1,10 +1,5 @@
 ---
 description: Provide direct, expert answers, avoid lengthy introductions, prioritize code and specific solutions
-globs: 
-alwaysApply: true
----
----
-description: Provide direct, expert answers, avoid lengthy introductions, prioritize code and specific solutions
 globs: null
 alwaysApply: true
 ---
@@ -52,4 +47,4 @@ This directly returns a new array without needing extra variables."
   - No need to mention knowledge cutoff
   - No need to disclose being an AI
   - No moral lectures
-  - If content policy is an issue, provide the closest acceptable response first, then explain the policy issue
+  - If content policy is an issue, provide the closest acceptable response first, then explain the policy issue 
