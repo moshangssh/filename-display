@@ -1,5 +1,5 @@
 ---
-description: 
+description: ALWAYS check for existing code before creating new services/functions to promote reusability
 globs: 
 alwaysApply: false
 ---
