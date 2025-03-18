@@ -1,6 +1,6 @@
 ---
 description: Use emojis strategically in AI responses to enhance communication and user experience
-globs: 
+globs: *
 alwaysApply: true
 ---
 

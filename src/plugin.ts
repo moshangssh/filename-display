@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Notice, Plugin, TFile, TAbstractFile } from 'obsidian';
+import { App, Editor, MarkdownView, Notice, Plugin, TFile, TAbstractFile, editorViewField } from 'obsidian';
 import { TitleExtractorSettings } from './types';
 import { DEFAULT_SETTINGS } from './constants';
 import { TitleExtractorSettingTab } from './settings/SettingsTab';
@@ -15,7 +15,9 @@ import { ServiceContainer, SERVICE_TYPES } from './services/di/ServiceContainer'
 import { LoggerService } from './services/LoggerService';
 import { errorHandler } from './utils/ErrorHandler';
 import { Extension } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
 import { createEditorExtensions } from './extensions/editor';
+import { removeLinkDecoration } from './extensions/editor';
 import { Logger } from './utils/logger';
 import { IEditorLinkDecorator, IFileExplorerDisplayService, CacheCleanStrategy } from './services/interfaces/IServices';
 import { ExtensionCacheService, ExtensionType } from './services/ExtensionCacheService';
@@ -216,16 +218,41 @@ export default class TitleExtractorPlugin extends Plugin {
 
     onunload() {
         // 恢复所有显示名称并清理资源
-        logger.log('卸载TitleExtrator插件...');
+        logger.log('卸载TitleExtractor插件...');
         
         try {
             // Obsidian 会自动清理所有通过 registerXXX 注册的资源
             // 不需要手动调用 this.app.workspace.updateOptions()
             
+            // 清理所有活跃编辑器中的 CodeMirror 装饰
+            this.cleanupAllCodeMirrorDecorations();
+            
             // 恢复所有文件显示（必要的自定义清理）
             if (this.fileDisplayService) {
                 logger.log('恢复所有文件显示...');
                 this.fileDisplayService.restoreAllDisplayNames();
+            }
+            
+            // 获取并清理编辑器链接装饰器
+            try {
+                const editorLinkDecorator = this.serviceContainer?.get<IEditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator);
+                if (editorLinkDecorator) {
+                    logger.log('清理编辑器链接装饰器...');
+                    editorLinkDecorator.dispose();
+                }
+            } catch (e) {
+                logger.error('清理编辑器链接装饰器时出错:', e);
+            }
+            
+            // 清理扩展缓存
+            try {
+                const extensionCacheService = this.serviceContainer?.get<ExtensionCacheService>(SERVICE_TYPES.ExtensionCacheService);
+                if (extensionCacheService) {
+                    logger.log('清理扩展缓存服务...');
+                    extensionCacheService.clearCache();
+                }
+            } catch (e) {
+                logger.error('清理扩展缓存服务时出错:', e);
             }
             
             // 清理服务容器
@@ -236,9 +263,9 @@ export default class TitleExtractorPlugin extends Plugin {
                 this.serviceContainer = ServiceContainer.getInstance();
             }
             
-            logger.log('TitleExtrator插件已成功卸载并清理所有资源');
+            logger.log('TitleExtractor插件已成功卸载并清理所有资源');
         } catch (error) {
-            logger.error('卸载TitleExtrator插件时出错:', error);
+            logger.error('卸载TitleExtractor插件时出错:', error);
             
             // 即使有错误，也尝试清理服务容器
             try {
@@ -383,5 +410,42 @@ export default class TitleExtractorPlugin extends Plugin {
         
         // 开始检查
         checkExplorer();
+    }
+
+    /**
+     * 清理所有活跃编辑器中的 CodeMirror 装饰
+     * 这确保插件卸载时不会有装饰残留
+     */
+    private cleanupAllCodeMirrorDecorations(): void {
+        logger.log('清理所有CodeMirror装饰...');
+        
+        try {
+            // 迭代所有活跃的MarkdownView
+            this.app.workspace.iterateAllLeaves(leaf => {
+                if (leaf.view instanceof MarkdownView) {
+                    const view = leaf.view;
+                    const editor = view.editor;
+                    
+                    // 获取CodeMirror实例
+                    const editorView = (editor as any).cm instanceof EditorView ? 
+                      (editor as any).cm : 
+                      (editor as any).cm?.state?.field?.(editorViewField);
+                    
+                    if (editorView instanceof EditorView) {
+                        // 发送清除所有装饰的效果
+                        try {
+                            editorView.dispatch({
+                                effects: removeLinkDecoration.of(null)
+                            });
+                            logger.log(`已清理编辑器装饰: ${view.file?.path || 'unknown file'}`);
+                        } catch (e) {
+                            logger.error(`清理编辑器装饰失败: ${view.file?.path || 'unknown file'}`, e);
+                        }
+                    }
+                }
+            });
+        } catch (e) {
+            logger.error('清理所有CodeMirror装饰时出错:', e);
+        }
     }
 } 

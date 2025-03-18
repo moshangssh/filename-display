@@ -6,7 +6,7 @@ import { Logger } from '../utils/logger';
 import { viewportExtension } from './viewport';
 import { incrementalUpdateExtension } from './incremental-update';
 import { editorSyncExtension } from './editor-sync';
-import { MarkdownView } from 'obsidian';
+import { MarkdownView, editorViewField } from 'obsidian';
 
 // 创建服务特定的日志记录器
 const logger = new Logger('EditorExtensions');
@@ -91,38 +91,73 @@ export class LinkReplaceWidget extends WidgetType {
     
     // 使用纯函数式方式更新文本 - 通过状态效果
     updateText(newDisplayName: string): void {
-        // 防御性检查：如果已被销毁则不执行更新
-        if (this.isDestroyed) {
-            return;
-        }
-        
-        // 创建状态效果
-        const effect = updateTextEffect.of({
-            id: this.id,
-            displayName: newDisplayName
-        });
-        
-        // 通过事务分发效果
-        if (this.plugin.app.workspace.activeLeaf?.view instanceof MarkdownView) {
-            const view = this.plugin.app.workspace.activeLeaf.view as MarkdownView;
-            // 使用 any 类型来访问 cm 属性
-            const editorView = (view.editor as any).cm;
-            if (editorView instanceof EditorView) {
-                editorView.dispatch({ effects: [effect] });
+        try {
+            // 防御性检查：如果已被销毁则不执行更新
+            if (this.isDestroyed) {
+                return;
             }
+            
+            // 创建状态效果
+            const effect = updateTextEffect.of({
+                id: this.id,
+                displayName: newDisplayName
+            });
+            
+            // 通过事务分发效果
+            if (this.plugin.app.workspace.activeLeaf?.view instanceof MarkdownView) {
+                const view = this.plugin.app.workspace.activeLeaf.view as MarkdownView;
+                // 使用更规范的方式获取EditorView实例
+                const editorView = (view.editor as any).cm instanceof EditorView ? 
+                  (view.editor as any).cm : 
+                  (view.editor as any).cm?.state?.field?.(editorViewField);
+                
+                if (editorView instanceof EditorView) {
+                    // 使用错误处理工具类封装操作
+                    EditorErrorHandler.withErrorHandling(
+                        () => editorView.dispatch({ effects: [effect] }),
+                        EditorErrorType.WIDGET_UPDATE,
+                        {
+                            widgetId: this.id,
+                            displayName: newDisplayName,
+                            originalPath: this.originalPath
+                        }
+                    );
+                } else {
+                    throw new Error('无法获取有效的编辑器视图');
+                }
+            } else {
+                // 记录无法获取编辑器视图的情况
+                logger.warn(`无法更新小部件文本: 找不到活动的Markdown视图, ID: ${this.id}`);
+            }
+        } catch (error) {
+            // 捕获并处理所有错误
+            EditorErrorHandler.handleError(
+                error as Error, 
+                EditorErrorType.WIDGET_UPDATE, 
+                {
+                    widgetId: this.id,
+                    displayName: newDisplayName,
+                    originalPath: this.originalPath
+                }
+            );
         }
     }
 
     // 添加eq方法以优化重新渲染
     eq(other: LinkReplaceWidget): boolean {
         // 如果小部件已被销毁，则始终返回false触发完全重新渲染
-        if (this.isDestroyed) {
+        if (this.isDestroyed || other.isDestroyed) {
             return false;
         }
         
+        // 先比较ID，这通常是最快的比较
+        if (this.id === other.getId()) {
+            return true;
+        }
+        
         // 只有当显示名称和原始路径都相同时才认为两个小部件相等
-        return this.displayName === other.displayName && 
-               this.originalPath === other.originalPath;
+        return this.displayName === other.getDisplayName() && 
+               this.originalPath === other.getOriginalPath();
     }
 }
 
@@ -240,43 +275,45 @@ export const linkDecorationField = StateField.define<DecorationSet>({
             else if (effect.is(updateTextEffect)) {
                 const { id, displayName } = effect.value;
                 
-                // 创建一个数组来存储需要更新的装饰
-                const updatedDecorations: { from: number; to: number; widget: LinkReplaceWidget }[] = [];
+                // 函数式方式：查找需要更新的装饰位置和数据
+                const decorationsToUpdate: { from: number; to: number; originalPath: string; plugin: ITitleExtractorPlugin }[] = [];
                 
-                // 遍历查找匹配ID的小部件
+                // 仅查找位置和必要数据，不修改原有小部件
                 decorations.between(0, tr.state.doc.length, (from, to, deco) => {
                     if (deco.spec.widget instanceof LinkReplaceWidget) {
                         const widget = deco.spec.widget as LinkReplaceWidget;
                         if (widget.getId() === id) {
-                            // 添加更新后的装饰到数组
-                            updatedDecorations.push({
+                            decorationsToUpdate.push({
                                 from,
                                 to,
-                                widget: new LinkReplaceWidget(
-                                    displayName,
-                                    widget.getOriginalPath(),
-                                    widget.getPlugin()
-                                )
+                                originalPath: widget.getOriginalPath(),
+                                plugin: widget.getPlugin()
                             });
                         }
                     }
                     return false;
                 });
                 
-                // 如果找到了需要更新的装饰，应用更新
-                if (updatedDecorations.length > 0) {
-                    // 一次性更新所有装饰
-                    const toAdd = updatedDecorations.map(update => 
+                // 如果找到了需要更新的装饰，创建新的装饰集合
+                if (decorationsToUpdate.length > 0) {
+                    // 创建新的装饰集合
+                    const toAdd = decorationsToUpdate.map(update => 
                         Decoration.replace({
-                            widget: update.widget,
+                            widget: new LinkReplaceWidget(
+                                displayName,
+                                update.originalPath,
+                                update.plugin
+                            ),
                             inclusive: false
                         }).range(update.from, update.to)
                     );
                     
-                    const toRemove = updatedDecorations.map(update => 
+                    // 要移除的位置
+                    const toRemove = decorationsToUpdate.map(update => 
                         ({ from: update.from, to: update.to })
                     );
                     
+                    // 函数式更新装饰集合
                     decorations = decorations.update({
                         filter: (from, to) => !toRemove.some(range => range.from === from && range.to === to),
                         add: toAdd,
@@ -744,14 +781,36 @@ export function updateWidgetText(view: EditorView, widgetId: string, newDisplayN
 // 帮助函数：从装饰集合中查找指定位置的原始路径
 function findOriginalPath(decorations: DecorationSet, from: number, to: number): string {
     let path = '';
-    decorations.between(from, to, (f, t, deco) => {
-        if (deco.spec.widget instanceof LinkReplaceWidget) {
-            path = (deco.spec.widget as LinkReplaceWidget).getOriginalPath();
-            return false; // 继续遍历直到处理完整个范围
+    
+    try {
+        // 添加类型安全性
+        interface DecorationWithWidget {
+            spec: {
+                widget?: unknown;
+            };
         }
-        return false;
-    });
-    return path || 'unknown-path';
+        
+        // DecorationSet.between 回调必须返回 false 或 void
+        decorations.between(from, to, (f, t, deco) => {
+            // 类型安全的检查
+            const decoWithWidget = deco as DecorationWithWidget;
+            
+            if (decoWithWidget.spec && 
+                decoWithWidget.spec.widget instanceof LinkReplaceWidget) {
+                const widget = decoWithWidget.spec.widget as LinkReplaceWidget;
+                path = widget.getOriginalPath();
+                // 设置了路径但继续遍历，以防有多个匹配的小部件
+            }
+            // 返回 false 表示继续遍历
+            return false;
+        });
+        
+        return path || 'unknown-path';
+    } catch (error) {
+        // 错误处理：记录错误但返回默认值
+        logger.error(`查找原始路径时出错 [${from}-${to}]:`, error);
+        return 'error-finding-path';
+    }
 }
 
 /**
