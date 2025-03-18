@@ -138,17 +138,40 @@ export class FileExplorerDisplayService implements IFileExplorerDisplayService {
                 return;
             }
             
-            // 查找文件资源管理器中的文件元素
-            const fileItems = document.querySelectorAll('.nav-file-title[data-path="' + file.path + '"]');
-            if (fileItems.length === 0) {
+            // 使用 Obsidian 的工作区 API
+            const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
+            if (fileExplorers.length === 0) {
                 return;
             }
             
-            for (let i = 0; i < fileItems.length; i++) {
-                const fileItem = fileItems[i] as HTMLElement;
-                const titleEl = fileItem.querySelector('.nav-file-title-content') as HTMLElement;
-                if (titleEl) {
-                    this.updateFileElement(titleEl, file);
+            for (const explorer of fileExplorers) {
+                // 获取文件资源管理器视图
+                const fileExplorerView = explorer.view as any;
+                if (fileExplorerView && fileExplorerView.fileItems) {
+                    // 使用视图的方法更新特定文件
+                    const fileItem = fileExplorerView.fileItems[file.path];
+                    if (fileItem) {
+                        // 获取文件标题元素
+                        const titleEl = fileItem.titleEl?.querySelector('.nav-file-title-content');
+                        if (titleEl) {
+                            this.updateFileElement(titleEl, file);
+                        }
+                    }
+                }
+            }
+            
+            // 作为后备方案，如果通过 API 无法找到元素，则使用 DOM 查询
+            // 这是为了保持兼容性，确保在不同版本的 Obsidian 中都能正常工作
+            if (document && this.plugin.settings.fallbackToDOMForFileExplorer) {
+                const fileItems = document.querySelectorAll('.nav-file-title[data-path="' + file.path + '"]');
+                if (fileItems.length > 0) {
+                    for (let i = 0; i < fileItems.length; i++) {
+                        const fileItem = fileItems[i] as HTMLElement;
+                        const titleEl = fileItem.querySelector('.nav-file-title-content') as HTMLElement;
+                        if (titleEl) {
+                            this.updateFileElement(titleEl, file);
+                        }
+                    }
                 }
             }
         } catch (error) {

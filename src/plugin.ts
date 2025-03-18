@@ -232,18 +232,15 @@ export default class TitleExtractorPlugin extends Plugin {
                 this.fileDisplayService.restoreAllDisplayNames();
             }
             
-            // 等待一小段时间确保UI已更新
-            setTimeout(() => {
-                // 然后清理服务容器
-                if (this.serviceContainer) {
-                    logger.log('清理服务容器...');
-                    this.serviceContainer.dispose();
-                    // 创建新的空服务容器而不是设为null
-                    this.serviceContainer = ServiceContainer.getInstance();
-                }
-                
-                logger.log('TitleExtrator插件已成功卸载并清理所有资源');
-            }, 100);
+            // 同步清理服务容器，移除setTimeout
+            if (this.serviceContainer) {
+                logger.log('清理服务容器...');
+                this.serviceContainer.dispose();
+                // 创建新的空服务容器而不是设为null
+                this.serviceContainer = ServiceContainer.getInstance();
+            }
+            
+            logger.log('TitleExtrator插件已成功卸载并清理所有资源');
         } catch (error) {
             logger.error('卸载TitleExtrator插件时出错:', error);
             
@@ -251,7 +248,6 @@ export default class TitleExtractorPlugin extends Plugin {
             try {
                 if (this.serviceContainer) {
                     this.serviceContainer.dispose();
-                    // 创建新的空服务容器而不是设为null
                     this.serviceContainer = ServiceContainer.getInstance();
                 }
             } catch (e) {
@@ -266,6 +262,18 @@ export default class TitleExtractorPlugin extends Plugin {
 
     async saveSettings() {
         await this.saveData(this.settings);
+        
+        // 触发设置变更事件，通知扩展缓存服务
+        window.dispatchEvent(new CustomEvent('filename-display:settings-changed'));
+        
+        // 如果服务容器已初始化，刷新编辑器扩展
+        if (this.serviceContainer) {
+            // 更新编辑器扩展
+            this.app.workspace.updateOptions();
+            
+            // 更新所有文件显示
+            this.updateAllFilesDisplay();
+        }
     }
 
     updateAllFilesDisplay(): void {

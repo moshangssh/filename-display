@@ -1,7 +1,7 @@
 ---
 description: ALWAYS check for existing code before creating new services/functions to promote reusability
-globs: 
-alwaysApply: true
+globs: **/*.{js,ts,jsx,tsx,py,go,java,rb,cs}
+alwaysApply: false
 ---
 ---
 description: ALWAYS check for existing code before creating new services/functions to promote reusability

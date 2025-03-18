@@ -244,6 +244,10 @@ export const linkDecorationField = StateField.define<DecorationSet>({
         
         return decorations;
     },
+    // 添加 toJSON 方法以支持序列化(CodeMirror建议)
+    toJSON() {
+        return null; // 或返回适当的序列化格式
+    },
     provide(field) {
         return EditorView.decorations.from(field);
     }
@@ -288,6 +292,66 @@ export function createLinkDecorationExtension(
 }
 
 /**
+ * 小部件清理扩展 - 用于跟踪和清理不再使用的小部件
+ */
+export const widgetCleanupExtension = ViewPlugin.fromClass(class WidgetCleanupPlugin {
+    private activeWidgets: Set<LinkReplaceWidget> = new Set();
+    private logger = new Logger('WidgetCleanupPlugin');
+    
+    constructor(private view: EditorView) {
+        this.logger.debug('小部件清理插件已初始化');
+    }
+    
+    update(update: ViewUpdate) {
+        // 检查文档或视口变化
+        if (update.docChanged || update.viewportChanged) {
+            // 创建当前活动的小部件集合
+            const currentWidgets = new Set<LinkReplaceWidget>();
+            
+            // 从当前文档中扫描所有小部件
+            const decorations = update.state.field(linkDecorationField);
+            decorations.between(0, update.state.doc.length, (from, to, deco) => {
+                if (deco.spec.widget instanceof LinkReplaceWidget) {
+                    const widget = deco.spec.widget as LinkReplaceWidget;
+                    currentWidgets.add(widget);
+                }
+                return false;
+            });
+            
+            // 找出已经不再活动的小部件
+            const toRemove: LinkReplaceWidget[] = [];
+            this.activeWidgets.forEach(widget => {
+                if (!currentWidgets.has(widget)) {
+                    toRemove.push(widget);
+                    widget.destroy(null);
+                }
+            });
+            
+            // 更新活动小部件集合
+            toRemove.forEach(widget => {
+                this.activeWidgets.delete(widget);
+            });
+            
+            // 添加新的活动小部件
+            currentWidgets.forEach(widget => {
+                this.activeWidgets.add(widget);
+            });
+            
+            if (toRemove.length > 0) {
+                this.logger.debug(`已清理 ${toRemove.length} 个不再活动的小部件`);
+            }
+        }
+    }
+    
+    destroy() {
+        // 编辑器销毁时清理所有小部件
+        this.logger.debug(`清理 ${this.activeWidgets.size} 个小部件`);
+        this.activeWidgets.forEach(widget => widget.destroy(null));
+        this.activeWidgets.clear();
+    }
+});
+
+/**
  * 创建所有编辑器扩展的组合
  */
 export function createEditorExtensions(plugin: ITitleExtractorPlugin): Extension {
@@ -310,6 +374,8 @@ export function createEditorExtensions(plugin: ITitleExtractorPlugin): Extension
         }),
         // 添加装饰状态字段
         linkDecorationField,
+        // 添加小部件清理扩展
+        widgetCleanupExtension,
     ];
 }
 

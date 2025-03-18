@@ -31,12 +31,40 @@ export class ExtensionCacheService {
     private extensionCreators: Map<string, (...args: any[]) => Extension> = new Map();
     // 编辑器实例到扩展的映射，用于按需加载
     private editorInstanceExtensions: WeakMap<EditorView, Set<string>> = new WeakMap();
+    // 设置变更监听器
+    private settingsChangeListener: EventListener | null = null;
     
     constructor(private plugin: ITitleExtractorPlugin) {
         // 注册扩展创建函数
         this.registerExtensionCreators();
         
+        // 设置设置变更监听器
+        this.setupSettingsChangeListener();
+        
         logger.log('扩展缓存服务已初始化');
+    }
+    
+    /**
+     * 设置设置变更监听方法
+     * 当设置变更时，清理相关扩展缓存
+     */
+    public setupSettingsChangeListener(): void {
+        // 移除之前的监听器（如果存在）
+        if (this.settingsChangeListener) {
+            window.removeEventListener('filename-display:settings-changed', this.settingsChangeListener);
+        }
+        
+        // 创建新的监听器
+        this.settingsChangeListener = ((event: CustomEvent) => {
+            // 清理相关扩展缓存
+            this.clearCacheByType(ExtensionType.COMBINED);
+            this.clearCacheByType(ExtensionType.LINK_DECORATION);
+            
+            logger.log('由于设置变更，扩展缓存已清理');
+        }) as EventListener;
+        
+        // 添加监听器
+        window.addEventListener('filename-display:settings-changed', this.settingsChangeListener);
     }
     
     /**
@@ -185,8 +213,15 @@ export class ExtensionCacheService {
      * 释放资源
      */
     public dispose(): void {
+        // 清理缓存和创建函数映射
         this.extensionCache.clear();
         this.extensionCreators.clear();
+        
+        // 移除事件监听器
+        if (this.settingsChangeListener) {
+            window.removeEventListener('filename-display:settings-changed', this.settingsChangeListener);
+            this.settingsChangeListener = null;
+        }
         
         // WeakMap会自动清理，不需要手动清理
         logger.log('扩展缓存服务已释放所有资源');

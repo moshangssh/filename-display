@@ -66,6 +66,17 @@ export class TitleExtractorSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                     this.plugin.updateAllFilesDisplay();
                 }));
+
+        // 新增：回退到 DOM 操作的设置
+        new Setting(containerEl)
+            .setName('启用 DOM 回退')
+            .setDesc('当 Obsidian API 无法操作文件资源管理器时，回退到 DOM 操作')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.fallbackToDOMForFileExplorer)
+                .onChange(async (value) => {
+                    this.plugin.settings.fallbackToDOMForFileExplorer = value;
+                    await this.plugin.saveSettings();
+                }));
                 
         // 新增：指定生效目录设置
         containerEl.createEl('h3', {text: '生效范围设置'});
