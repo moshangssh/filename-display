@@ -167,14 +167,16 @@ export class EditorLinkDecorator extends LinkHandler {
     // 更新编辑器视图引用
     private updateEditorView(editor: Editor, view: MarkdownView): void {
         try {
-            // 通过非类型安全的方式访问内部CM实例
-            const editorView = (editor as any).cm;
+            // 优先使用类型安全的方式
+            const editorView = (editor as any).cm instanceof EditorView ? 
+              (editor as any).cm : 
+              (editor as any).cm?.state?.field?.(editorViewField);
+            
             if (editorView instanceof EditorView) {
                 this.activeEditorView = editorView;
                 return;
             }
             
-            // 如果无法获取EditorView，记录错误
             logger.log("无法获取EditorView：当前视图或编辑器的结构与预期不符");
             this.activeEditorView = null;
         } catch (e) {

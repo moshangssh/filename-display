@@ -219,24 +219,20 @@ export default class TitleExtractorPlugin extends Plugin {
         logger.log('卸载TitleExtrator插件...');
         
         try {
-            // 确保编辑器扩展被卸载
-            if (this.editorExtensions.length > 0) {
-                logger.log('清理编辑器扩展...');
-                this.app.workspace.updateOptions();
-                this.editorExtensions = [];
-            }
+            // Obsidian 会自动清理所有通过 registerXXX 注册的资源
+            // 不需要手动调用 this.app.workspace.updateOptions()
             
-            // 先恢复所有文件显示
+            // 恢复所有文件显示（必要的自定义清理）
             if (this.fileDisplayService) {
                 logger.log('恢复所有文件显示...');
                 this.fileDisplayService.restoreAllDisplayNames();
             }
             
-            // 同步清理服务容器，移除setTimeout
+            // 清理服务容器
             if (this.serviceContainer) {
                 logger.log('清理服务容器...');
                 this.serviceContainer.dispose();
-                // 创建新的空服务容器而不是设为null
+                // 创建一个新的空服务容器，使用静态方法获取实例
                 this.serviceContainer = ServiceContainer.getInstance();
             }
             
@@ -248,6 +244,7 @@ export default class TitleExtractorPlugin extends Plugin {
             try {
                 if (this.serviceContainer) {
                     this.serviceContainer.dispose();
+                    // 创建一个新的空服务容器，使用静态方法获取实例
                     this.serviceContainer = ServiceContainer.getInstance();
                 }
             } catch (e) {

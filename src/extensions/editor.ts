@@ -10,13 +10,17 @@ import { editorSyncExtension } from './editor-sync';
 // 创建服务特定的日志记录器
 const logger = new Logger('EditorExtensions');
 
+// 定义状态效果 - 用于更新小部件文本
+export const updateTextEffect = StateEffect.define<{id: string, displayName: string}>();
+
 /**
  * 链接替换小部件
  * 用于在编辑器中替换链接文本
  */
 export class LinkReplaceWidget extends WidgetType {
+    // 添加唯一ID用于识别小部件
+    private readonly id: string;
     private readonly plugin: ITitleExtractorPlugin;
-    private clickListener: ((event: MouseEvent) => void) | null = null;
     // 链接DOM引用
     private spanElement: HTMLElement | null = null;
     // 跟踪小部件是否已被销毁
@@ -29,7 +33,24 @@ export class LinkReplaceWidget extends WidgetType {
     ) {
         super();
         this.plugin = plugin;
+        // 生成唯一ID，使用路径和位置组合
+        this.id = `link-widget-${originalPath}-${Date.now()}`;
         // 构造函数中不创建DOM或添加事件监听器，这些操作推迟到toDOM中
+    }
+
+    // 获取小部件ID
+    getId(): string {
+        return this.id;
+    }
+    
+    // 获取原始路径
+    getOriginalPath(): string {
+        return this.originalPath;
+    }
+    
+    // 获取显示名称
+    getDisplayName(): string {
+        return this.displayName;
     }
 
     toDOM() {
@@ -46,34 +67,13 @@ export class LinkReplaceWidget extends WidgetType {
         
         // 保留链接可点击性
         span.dataset.originalPath = this.originalPath;
+        span.dataset.widgetId = this.id; // 添加小部件ID到数据属性
         span.style.cursor = 'pointer';
         
         // 新增：平滑过渡效果
         span.style.transition = 'opacity 0.15s ease-in';
         
-        // 创建点击事件监听器函数
-        this.clickListener = (event: MouseEvent) => {
-            event.preventDefault();
-            event.stopPropagation(); // 阻止事件冒泡
-            
-            // 防御性检查：如果已被销毁或插件不可用则不执行操作
-            if (this.isDestroyed || !this.plugin || !this.plugin.app) {
-                return;
-            }
-            
-            // 使用Obsidian API打开链接
-            const workspace = this.plugin.app.workspace;
-            const path = this.originalPath;
-            const file = this.plugin.app.vault.getAbstractFileByPath(path) || 
-                        this.plugin.app.metadataCache.getFirstLinkpathDest(path, '');
-            if (file) {
-                workspace.openLinkText(this.originalPath, '', event.ctrlKey || event.metaKey);
-            }
-        };
-        
-        // 添加点击事件监听
-        span.addEventListener('click', this.clickListener);
-        
+        // 不再直接添加事件监听器
         // 保存引用用于更新
         this.spanElement = span;
         
@@ -84,11 +84,7 @@ export class LinkReplaceWidget extends WidgetType {
         // 标记为已销毁
         this.isDestroyed = true;
         
-        // 清理事件监听器
-        if (this.clickListener && this.spanElement) {
-            this.spanElement.removeEventListener('click', this.clickListener);
-            this.clickListener = null;
-        }
+        // 不再需要手动清理事件监听器
         
         // 清除DOM引用
         this.spanElement = null;
@@ -98,7 +94,7 @@ export class LinkReplaceWidget extends WidgetType {
         return false;
     }
     
-    // 更新文本内容方法
+    // 更新文本内容方法 - 现在只是保存新的文本值，但不直接更新DOM
     updateText(newDisplayName: string): void {
         // 防御性检查：如果已被销毁则不执行更新
         if (this.isDestroyed) {
@@ -240,13 +236,74 @@ export const linkDecorationField = StateField.define<DecorationSet>({
                 // 如果没有找到现有装饰，可能是因为它刚刚被创建但还未渲染
                 // 这种情况我们不做任何处理，等待下一次更新
             }
+            // 处理小部件文本更新效果
+            else if (effect.is(updateTextEffect)) {
+                const { id, displayName } = effect.value;
+                
+                // 查找具有指定ID的小部件
+                decorations.between(0, tr.state.doc.length, (from, to, deco) => {
+                    if (deco.spec.widget instanceof LinkReplaceWidget) {
+                        const widget = deco.spec.widget as LinkReplaceWidget;
+                        if (widget.getId() === id) {
+                            widget.updateText(displayName);
+                        }
+                    }
+                    return false; // 继续搜索
+                });
+            }
         }
         
         return decorations;
     },
     // 添加 toJSON 方法以支持序列化(CodeMirror建议)
     toJSON() {
-        return null; // 或返回适当的序列化格式
+        // 将装饰集合序列化为可恢复的格式
+        const result: {from: number; to: number; data: {id: string; originalPath: string; displayName: string}}[] = [];
+        // 遍历所有装饰并收集必要信息
+        this.between(0, Infinity, (from: number, to: number, deco: any) => {
+            if (deco.spec.widget instanceof LinkReplaceWidget) {
+                const widget = deco.spec.widget as LinkReplaceWidget;
+                result.push({
+                    from,
+                    to,
+                    // 只保存必要的数据，如原始路径和显示名称
+                    data: {
+                        id: widget.getId(),
+                        originalPath: widget.getOriginalPath(),
+                        displayName: widget.getDisplayName()
+                    }
+                });
+            }
+            return false; // 继续遍历
+        });
+        return result.length ? { decorations: result } : null;
+    },
+    
+    // 添加相应的 fromJSON 方法
+    fromJSON(json: any, state: any) {
+        if (!json || !json.decorations) return Decoration.none;
+        
+        // 从序列化数据重建装饰集合
+        try {
+            const decorations = json.decorations.map((item: any) => {
+                const {from, to, data} = item;
+                return Decoration.replace({
+                    widget: new LinkReplaceWidget(
+                        data.displayName, 
+                        data.originalPath, 
+                        // 需要插件实例，但在这里可能不可用
+                        // 临时解决方案：从全局状态获取插件实例
+                        (window as any).titleExtractorPlugin
+                    )
+                }).range(from, to);
+            });
+            
+            return Decoration.set(decorations);
+        } catch (e) {
+            // 如果恢复失败，返回空装饰集
+            logger.error("从JSON恢复装饰集失败:", e);
+            return Decoration.none;
+        }
     },
     provide(field) {
         return EditorView.decorations.from(field);
@@ -352,47 +409,90 @@ export const widgetCleanupExtension = ViewPlugin.fromClass(class WidgetCleanupPl
 });
 
 /**
- * 创建所有编辑器扩展的组合
+ * 创建链接点击事件处理扩展
+ */
+export function createLinkClickHandler(plugin: ITitleExtractorPlugin): Extension {
+    return EditorView.domEventHandlers({
+        click: (event, view) => {
+            // 通过数据属性识别我们的链接元素
+            const target = event.target as HTMLElement;
+            if (target.classList.contains('filename-display-replaced')) {
+                event.preventDefault();
+                event.stopPropagation();
+                
+                // 获取原始路径并处理点击
+                const originalPath = target.dataset.originalPath;
+                if (originalPath && plugin.app) {
+                    const file = plugin.app.vault.getAbstractFileByPath(originalPath) || 
+                               plugin.app.metadataCache.getFirstLinkpathDest(originalPath, '');
+                    if (file) {
+                        plugin.app.workspace.openLinkText(
+                            originalPath, 
+                            '', 
+                            event.ctrlKey || event.metaKey
+                        );
+                    }
+                }
+                return true;
+            }
+            return false;
+        }
+    });
+}
+
+/**
+ * 创建编辑器扩展
  */
 export function createEditorExtensions(plugin: ITitleExtractorPlugin): Extension {
     return [
-        // 添加视口检测扩展
-        viewportExtension(),
-        // 添加增量更新扩展
-        incrementalUpdateExtension(),
-        // 添加编辑器状态同步扩展
-        editorSyncExtension(plugin),
-        // 添加链接观察器扩展
-        createLinkObserverExtension(plugin, (view) => {
-            // 处理链接变化
-            logger.log('链接变化检测到');
-        }),
-        // 添加链接装饰扩展
-        createLinkDecorationExtension(plugin, (view) => {
-            // 处理装饰变化
-            logger.log('装饰变化检测到');
-        }),
-        // 添加装饰状态字段
         linkDecorationField,
-        // 添加小部件清理扩展
-        widgetCleanupExtension,
+        viewportExtension(),
+        incrementalUpdateExtension(),
+        editorSyncExtension(plugin),
+        createLinkClickHandler(plugin)
     ];
 }
 
-// 新增：更新链接文本但保持装饰
+/**
+ * 更新链接显示名称
+ */
 export function updateLinkDisplayName(
     view: EditorView,
     from: number,
     to: number,
     displayName: string
 ): void {
-    if (!view) return;
-    
     try {
-        view.dispatch({
-            effects: updateLinkText.of({ from, to, displayName })
+        // 查找给定范围的小部件
+        let foundWidget = false;
+        view.state.field(linkDecorationField).between(from, to, (start, end, deco) => {
+            if (deco.spec.widget instanceof LinkReplaceWidget) {
+                const widget = deco.spec.widget as LinkReplaceWidget;
+                // 使用新的事务系统更新文本
+                updateWidgetText(view, widget.getId(), displayName);
+                foundWidget = true;
+            }
+            return false; // 继续搜索
         });
+
+        // 如果没有找到小部件，则使用传统方式更新
+        if (!foundWidget) {
+            // 回退到旧方法
+            view.dispatch({
+                effects: updateLinkText.of({ from, to, displayName })
+            });
+        }
     } catch (e) {
-        logger.log('更新链接文本失败:', e);
+        // 记录错误但不阻止继续执行
+        logger.error('更新链接文本失败:', e);
     }
+}
+
+/**
+ * 更新链接显示名称 - 使用事务系统
+ */
+export function updateWidgetText(view: EditorView, widgetId: string, newDisplayName: string) {
+    view.dispatch({
+        effects: updateTextEffect.of({ id: widgetId, displayName: newDisplayName })
+    });
 } 
