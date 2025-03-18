@@ -6,6 +6,7 @@ import { Logger } from '../utils/logger';
 import { viewportExtension } from './viewport';
 import { incrementalUpdateExtension } from './incremental-update';
 import { editorSyncExtension } from './editor-sync';
+import { MarkdownView } from 'obsidian';
 
 // 创建服务特定的日志记录器
 const logger = new Logger('EditorExtensions');
@@ -21,8 +22,6 @@ export class LinkReplaceWidget extends WidgetType {
     // 添加唯一ID用于识别小部件
     private readonly id: string;
     private readonly plugin: ITitleExtractorPlugin;
-    // 链接DOM引用
-    private spanElement: HTMLElement | null = null;
     // 跟踪小部件是否已被销毁
     private isDestroyed: boolean = false;
     
@@ -52,6 +51,11 @@ export class LinkReplaceWidget extends WidgetType {
     getDisplayName(): string {
         return this.displayName;
     }
+    
+    // 获取插件实例
+    getPlugin(): ITitleExtractorPlugin {
+        return this.plugin;
+    }
 
     toDOM() {
         // 防御性检查：如果已被销毁则返回空span
@@ -70,12 +74,8 @@ export class LinkReplaceWidget extends WidgetType {
         span.dataset.widgetId = this.id; // 添加小部件ID到数据属性
         span.style.cursor = 'pointer';
         
-        // 新增：平滑过渡效果
+        // 平滑过渡效果
         span.style.transition = 'opacity 0.15s ease-in';
-        
-        // 不再直接添加事件监听器
-        // 保存引用用于更新
-        this.spanElement = span;
         
         return span;
     }
@@ -83,38 +83,33 @@ export class LinkReplaceWidget extends WidgetType {
     destroy(dom: HTMLElement | null): void {
         // 标记为已销毁
         this.isDestroyed = true;
-        
-        // 不再需要手动清理事件监听器
-        
-        // 清除DOM引用
-        this.spanElement = null;
     }
 
     ignoreEvent() {
         return false;
     }
     
-    // 更新文本内容方法 - 现在只是保存新的文本值，但不直接更新DOM
+    // 使用纯函数式方式更新文本 - 通过状态效果
     updateText(newDisplayName: string): void {
         // 防御性检查：如果已被销毁则不执行更新
         if (this.isDestroyed) {
             return;
         }
         
-        if (this.spanElement) {
-            // 应用平滑过渡
-            this.spanElement.style.opacity = '0';
-            
-            // 使用requestAnimationFrame替代setTimeout，更符合浏览器渲染机制
-            requestAnimationFrame(() => {
-                // 再次检查组件是否已被销毁
-                if (this.isDestroyed || !this.spanElement) {
-                    return;
-                }
-                
-                this.spanElement.textContent = newDisplayName;
-                this.spanElement.style.opacity = '1';
-            });
+        // 创建状态效果
+        const effect = updateTextEffect.of({
+            id: this.id,
+            displayName: newDisplayName
+        });
+        
+        // 通过事务分发效果
+        if (this.plugin.app.workspace.activeLeaf?.view instanceof MarkdownView) {
+            const view = this.plugin.app.workspace.activeLeaf.view as MarkdownView;
+            // 使用 any 类型来访问 cm 属性
+            const editorView = (view.editor as any).cm;
+            if (editorView instanceof EditorView) {
+                editorView.dispatch({ effects: [effect] });
+            }
         }
     }
 
@@ -217,50 +212,88 @@ export const linkDecorationField = StateField.define<DecorationSet>({
                 // 添加新装饰
                 decorations = decorations.update({ add: [decoration], sort: true });
             }
-            // 处理更新文本效果
+            // 处理更新文本效果 - 使用新的函数式方法
             else if (effect.is(updateLinkText)) {
                 const { from, to, displayName } = effect.value;
                 
-                // 查找给定范围的装饰
-                let foundDecoration = false;
-                decorations.between(from, to, (start, end, deco) => {
-                    // 如果找到装饰并且是我们期望的LinkReplaceWidget类型
-                    if (deco.spec.widget instanceof LinkReplaceWidget) {
-                        // 更新小部件的文本
-                        deco.spec.widget.updateText(displayName);
-                        foundDecoration = true;
-                    }
-                    return false; // 继续搜索
+                // 使用函数式方法更新装饰，而不是直接修改
+                decorations = decorations.update({
+                    filter: (fromPos, toPos, value) => {
+                        // 保留所有不匹配的装饰
+                        return !(fromPos === from && toPos === to);
+                    },
+                    add: [
+                        Decoration.replace({
+                            widget: new LinkReplaceWidget(
+                                displayName,
+                                // 我们需要先找到原始的链接
+                                findOriginalPath(decorations, from, to),
+                                (window as any).app.plugins.plugins['filename-display']
+                            ),
+                            inclusive: false
+                        }).range(from, to)
+                    ],
+                    sort: true
                 });
-                
-                // 如果没有找到现有装饰，可能是因为它刚刚被创建但还未渲染
-                // 这种情况我们不做任何处理，等待下一次更新
             }
-            // 处理小部件文本更新效果
+            // 处理小部件文本更新效果 - 使用ID进行精确更新
             else if (effect.is(updateTextEffect)) {
                 const { id, displayName } = effect.value;
                 
-                // 查找具有指定ID的小部件
+                // 创建一个数组来存储需要更新的装饰
+                const updatedDecorations: { from: number; to: number; widget: LinkReplaceWidget }[] = [];
+                
+                // 遍历查找匹配ID的小部件
                 decorations.between(0, tr.state.doc.length, (from, to, deco) => {
                     if (deco.spec.widget instanceof LinkReplaceWidget) {
                         const widget = deco.spec.widget as LinkReplaceWidget;
                         if (widget.getId() === id) {
-                            widget.updateText(displayName);
+                            // 添加更新后的装饰到数组
+                            updatedDecorations.push({
+                                from,
+                                to,
+                                widget: new LinkReplaceWidget(
+                                    displayName,
+                                    widget.getOriginalPath(),
+                                    widget.getPlugin()
+                                )
+                            });
                         }
                     }
-                    return false; // 继续搜索
+                    return false;
                 });
+                
+                // 如果找到了需要更新的装饰，应用更新
+                if (updatedDecorations.length > 0) {
+                    // 一次性更新所有装饰
+                    const toAdd = updatedDecorations.map(update => 
+                        Decoration.replace({
+                            widget: update.widget,
+                            inclusive: false
+                        }).range(update.from, update.to)
+                    );
+                    
+                    const toRemove = updatedDecorations.map(update => 
+                        ({ from: update.from, to: update.to })
+                    );
+                    
+                    decorations = decorations.update({
+                        filter: (from, to) => !toRemove.some(range => range.from === from && range.to === to),
+                        add: toAdd,
+                        sort: true
+                    });
+                }
             }
         }
         
         return decorations;
     },
     // 添加 toJSON 方法以支持序列化(CodeMirror建议)
-    toJSON() {
+    toJSON(state) {
         // 将装饰集合序列化为可恢复的格式
         const result: {from: number; to: number; data: {id: string; originalPath: string; displayName: string}}[] = [];
         // 遍历所有装饰并收集必要信息
-        this.between(0, Infinity, (from: number, to: number, deco: any) => {
+        state.between(0, Infinity, (from: number, to: number, deco: any) => {
             if (deco.spec.widget instanceof LinkReplaceWidget) {
                 const widget = deco.spec.widget as LinkReplaceWidget;
                 result.push({
@@ -287,16 +320,24 @@ export const linkDecorationField = StateField.define<DecorationSet>({
         try {
             const decorations = json.decorations.map((item: any) => {
                 const {from, to, data} = item;
+                
+                // 防御性检查
+                if (!data || !data.originalPath || !data.displayName) {
+                    logger.warn('恢复过程中发现无效的装饰数据:', item);
+                    return null;
+                }
+                
                 return Decoration.replace({
                     widget: new LinkReplaceWidget(
                         data.displayName, 
                         data.originalPath, 
-                        // 需要插件实例，但在这里可能不可用
-                        // 临时解决方案：从全局状态获取插件实例
-                        (window as any).titleExtractorPlugin
+                        // 尝试从state中获取plugin实例
+                        state.facet && state.facet.plugin 
+                            ? state.facet.plugin
+                            : (window as any).app.plugins.plugins['filename-display']
                     )
                 }).range(from, to);
-            });
+            }).filter(Boolean); // 过滤掉null值
             
             return Decoration.set(decorations);
         } catch (e) {
@@ -454,7 +495,197 @@ export function createEditorExtensions(plugin: ITitleExtractorPlugin): Extension
 }
 
 /**
- * 更新链接显示名称
+ * 错误处理工具
+ */
+// 错误类型枚举
+export enum EditorErrorType {
+    STATE_RECOVERY = 'STATE_RECOVERY',
+    WIDGET_UPDATE = 'WIDGET_UPDATE',
+    BATCH_PROCESSING = 'BATCH_PROCESSING',
+    DECORATOR_INITIALIZATION = 'DECORATOR_INITIALIZATION'
+}
+
+// 错误处理工具类
+export class EditorErrorHandler {
+    private static readonly logger = new Logger('EditorErrorHandler');
+    
+    // 处理错误的主方法
+    public static handleError(error: Error, type: EditorErrorType, context: any = {}): void {
+        this.logger.error(`编辑器错误 [${type}]:`, error);
+        
+        switch (type) {
+            case EditorErrorType.STATE_RECOVERY:
+                this.handleStateRecoveryError(error, context);
+                break;
+            case EditorErrorType.WIDGET_UPDATE:
+                this.handleWidgetUpdateError(error, context);
+                break;
+            case EditorErrorType.BATCH_PROCESSING:
+                this.handleBatchProcessingError(error, context);
+                break;
+            case EditorErrorType.DECORATOR_INITIALIZATION:
+                this.handleDecoratorInitializationError(error, context);
+                break;
+            default:
+                this.logger.error('未知错误类型:', type);
+                break;
+        }
+    }
+    
+    // 处理状态恢复错误
+    private static handleStateRecoveryError(error: Error, context: any): void {
+        this.logger.error('状态恢复错误:', error);
+        
+        // 尝试回滚到上一个有效状态
+        try {
+            if (context.view && context.previousState) {
+                this.logger.debug('尝试回滚到上一个有效状态');
+                
+                // 重置装饰字段
+                context.view.dispatch({
+                    effects: removeLinkDecoration.of(null)
+                });
+            }
+        } catch (recoveryError) {
+            this.logger.error('状态恢复失败:', recoveryError);
+        }
+    }
+    
+    // 处理小部件更新错误
+    private static handleWidgetUpdateError(error: Error, context: any): void {
+        this.logger.error('小部件更新错误:', error);
+        
+        // 尝试重建损坏的小部件
+        try {
+            if (context.widget && context.view) {
+                this.logger.debug('尝试重建损坏的小部件');
+                
+                // 获取小部件信息
+                const { from, to, originalPath, displayName } = context.widget;
+                
+                // 移除旧的小部件
+                context.view.dispatch({
+                    effects: [
+                        addLinkDecoration.of({
+                            from,
+                            to,
+                            widget: new LinkReplaceWidget(
+                                displayName || originalPath,
+                                originalPath,
+                                (window as any).app.plugins.plugins['filename-display']
+                            )
+                        })
+                    ]
+                });
+            }
+        } catch (rebuildError) {
+            this.logger.error('小部件重建失败:', rebuildError);
+        }
+    }
+    
+    // 处理批处理错误
+    private static handleBatchProcessingError(error: Error, context: any): void {
+        this.logger.error('批处理错误:', error);
+        
+        // 尝试保存处理进度
+        try {
+            if (context.state && context.view) {
+                this.logger.debug('尝试保存批处理进度');
+                
+                // 暂停批处理过程
+                context.view.dispatch({
+                    effects: [
+                        processBatchEffect.of({
+                            batchSize: 0,
+                            startIndex: context.state.processedCount
+                        })
+                    ]
+                });
+                
+                // 设置一个延迟重试
+                setTimeout(() => {
+                    try {
+                        this.logger.debug('尝试重新启动批处理');
+                        
+                        // 重新启动批处理
+                        context.view.dispatch({
+                            effects: [
+                                startBatchProcessEffect.of({
+                                    links: context.state.links
+                                })
+                            ]
+                        });
+                    } catch (retryError) {
+                        this.logger.error('批处理重试失败:', retryError);
+                    }
+                }, 1000);
+            }
+        } catch (saveError) {
+            this.logger.error('保存批处理进度失败:', saveError);
+        }
+    }
+    
+    // 处理装饰器初始化错误
+    private static handleDecoratorInitializationError(error: Error, context: any): void {
+        this.logger.error('装饰器初始化错误:', error);
+        
+        // 尝试重置装饰器
+        try {
+            if (context.plugin) {
+                this.logger.debug('尝试重置装饰器');
+                
+                // 卸载并重新加载装饰器
+                if (context.plugin._linkDecorator) {
+                    context.plugin._linkDecorator = null;
+                }
+                
+                // 延迟重新初始化
+                setTimeout(() => {
+                    try {
+                        // 这里可以放置重新初始化的代码
+                        // 由于我们没有看到完整的初始化代码，这里只是占位符
+                        this.logger.debug('重新初始化装饰器');
+                    } catch (reinitError) {
+                        this.logger.error('装饰器重新初始化失败:', reinitError);
+                    }
+                }, 2000);
+            }
+        } catch (resetError) {
+            this.logger.error('重置装饰器失败:', resetError);
+        }
+    }
+    
+    // 错误边界 - 包装函数调用
+    public static withErrorHandling<T>(
+        fn: () => T, 
+        errorType: EditorErrorType, 
+        context: any = {}
+    ): T | undefined {
+        try {
+            return fn();
+        } catch (error) {
+            this.handleError(error as Error, errorType, context);
+            return undefined;
+        }
+    }
+    
+    // 错误边界 - 包装异步函数调用
+    public static async withAsyncErrorHandling<T>(
+        fn: () => Promise<T>, 
+        errorType: EditorErrorType, 
+        context: any = {}
+    ): Promise<T | undefined> {
+        try {
+            return await fn();
+        } catch (error) {
+            this.handleError(error as Error, errorType, context);
+            return undefined;
+        }
+    }
+}
+
+/**
+ * 使用错误处理包装更新链接显示名称函数
  */
 export function updateLinkDisplayName(
     view: EditorView,
@@ -462,37 +693,284 @@ export function updateLinkDisplayName(
     to: number,
     displayName: string
 ): void {
-    try {
-        // 查找给定范围的小部件
-        let foundWidget = false;
-        view.state.field(linkDecorationField).between(from, to, (start, end, deco) => {
-            if (deco.spec.widget instanceof LinkReplaceWidget) {
-                const widget = deco.spec.widget as LinkReplaceWidget;
-                // 使用新的事务系统更新文本
-                updateWidgetText(view, widget.getId(), displayName);
-                foundWidget = true;
+    EditorErrorHandler.withErrorHandling(
+        () => {
+            try {
+                // 查找给定范围的小部件
+                let foundWidget = false;
+                view.state.field(linkDecorationField).between(from, to, (start, end, deco) => {
+                    if (deco.spec.widget instanceof LinkReplaceWidget) {
+                        const widget = deco.spec.widget as LinkReplaceWidget;
+                        // 使用新的事务系统更新文本
+                        updateWidgetText(view, widget.getId(), displayName);
+                        foundWidget = true;
+                    }
+                    return false; // 继续搜索
+                });
+        
+                // 如果没有找到小部件，则使用传统方式更新
+                if (!foundWidget) {
+                    // 回退到旧方法
+                    view.dispatch({
+                        effects: updateLinkText.of({ from, to, displayName })
+                    });
+                }
+            } catch (e) {
+                // 记录错误但不阻止继续执行
+                logger.error('更新链接文本失败:', e);
+                throw e; // 重新抛出以便错误处理器捕获
             }
-            return false; // 继续搜索
-        });
-
-        // 如果没有找到小部件，则使用传统方式更新
-        if (!foundWidget) {
-            // 回退到旧方法
-            view.dispatch({
-                effects: updateLinkText.of({ from, to, displayName })
-            });
-        }
-    } catch (e) {
-        // 记录错误但不阻止继续执行
-        logger.error('更新链接文本失败:', e);
-    }
+        },
+        EditorErrorType.WIDGET_UPDATE,
+        { view, from, to, displayName }
+    );
 }
 
 /**
  * 更新链接显示名称 - 使用事务系统
  */
 export function updateWidgetText(view: EditorView, widgetId: string, newDisplayName: string) {
-    view.dispatch({
-        effects: updateTextEffect.of({ id: widgetId, displayName: newDisplayName })
+    EditorErrorHandler.withErrorHandling(
+        () => {
+            view.dispatch({
+                effects: updateTextEffect.of({ id: widgetId, displayName: newDisplayName })
+            });
+        },
+        EditorErrorType.WIDGET_UPDATE,
+        { view, widgetId, newDisplayName }
+    );
+}
+
+// 帮助函数：从装饰集合中查找指定位置的原始路径
+function findOriginalPath(decorations: DecorationSet, from: number, to: number): string {
+    let path = '';
+    decorations.between(from, to, (f, t, deco) => {
+        if (deco.spec.widget instanceof LinkReplaceWidget) {
+            path = (deco.spec.widget as LinkReplaceWidget).getOriginalPath();
+            return false; // 继续遍历直到处理完整个范围
+        }
+        return false;
+    });
+    return path || 'unknown-path';
+}
+
+/**
+ * 批处理相关的状态效果和状态字段
+ */
+// 批处理状态接口
+export interface BatchProcessState {
+    links: Array<{from: number; to: number; path: string; displayName: string}>;
+    processedCount: number;
+    isProcessing: boolean;
+    startTime: number;
+}
+
+// 批处理效果
+export const startBatchProcessEffect = StateEffect.define<{
+    links: Array<{from: number; to: number; path: string; displayName: string}>;
+}>();
+
+export const processBatchEffect = StateEffect.define<{
+    batchSize: number;
+    startIndex: number;
+}>();
+
+export const completeBatchProcessEffect = StateEffect.define<null>();
+
+/**
+ * 批处理状态字段
+ */
+export const batchProcessField = StateField.define<BatchProcessState>({
+    create() {
+        return {
+            links: [],
+            processedCount: 0,
+            isProcessing: false,
+            startTime: 0
+        };
+    },
+    update(state, tr) {
+        // 创建新状态的副本
+        let newState = { ...state };
+        
+        // 处理文档变化
+        if (tr.docChanged) {
+            // 如果文档发生变化，重置批处理状态
+            if (state.isProcessing) {
+                newState = {
+                    ...newState,
+                    isProcessing: false,
+                    links: [],
+                    processedCount: 0
+                };
+            }
+        }
+        
+        // 处理状态效果
+        for (const effect of tr.effects) {
+            if (effect.is(startBatchProcessEffect)) {
+                // 开始新的批处理
+                const { links } = effect.value;
+                newState = {
+                    links,
+                    processedCount: 0,
+                    isProcessing: true,
+                    startTime: Date.now()
+                };
+                
+                // 记录开始信息
+                logger.debug(`开始批处理 ${links.length} 个链接`);
+            }
+            else if (effect.is(processBatchEffect)) {
+                // 处理批次
+                const { batchSize, startIndex } = effect.value;
+                const endIndex = Math.min(startIndex + batchSize, state.links.length);
+                
+                newState = {
+                    ...newState,
+                    processedCount: endIndex,
+                    isProcessing: endIndex < state.links.length
+                };
+                
+                // 记录进度
+                const progressPercent = Math.round((endIndex / state.links.length) * 100);
+                logger.debug(`批处理进度: ${progressPercent}% (${endIndex}/${state.links.length})`);
+            }
+            else if (effect.is(completeBatchProcessEffect)) {
+                // 完成批处理
+                const duration = Date.now() - state.startTime;
+                logger.debug(`批处理完成，共处理 ${state.links.length} 个链接，耗时 ${duration}ms`);
+                
+                newState = {
+                    ...newState,
+                    isProcessing: false
+                };
+            }
+        }
+        
+        return newState;
+    },
+    // 添加序列化方法
+    toJSON(state: BatchProcessState) {
+        // 仅保存当前进度和是否正在处理的标志，链接数据不需要保存
+        return {
+            processedCount: state.processedCount,
+            isProcessing: state.isProcessing,
+            linksCount: state.links.length
+        };
+    },
+    // 添加反序列化方法
+    fromJSON(json: any) {
+        return {
+            links: [],
+            processedCount: json?.processedCount || 0,
+            isProcessing: json?.isProcessing || false,
+            startTime: Date.now()
+        };
+    }
+});
+
+/**
+ * 批处理插件
+ */
+export function createBatchProcessorPlugin(): Extension {
+    return ViewPlugin.fromClass(class BatchProcessor {
+        private readonly logger = new Logger('BatchProcessor');
+        private timeoutId: ReturnType<typeof setTimeout> | null = null;
+        
+        constructor(private view: EditorView) {
+            this.logger.debug('批处理器初始化');
+        }
+        
+        update(update: ViewUpdate) {
+            const state = update.state.field(batchProcessField);
+            
+            // 如果有批处理任务正在进行中，并且有未处理的链接
+            if (state.isProcessing && state.processedCount < state.links.length) {
+                this.processBatch(update.view);
+            }
+        }
+        
+        processBatch(view: EditorView) {
+            const state = view.state.field(batchProcessField);
+            const batchSize = 10; // 每批处理的链接数量
+            
+            // 清除之前的超时任务
+            if (this.timeoutId !== null) {
+                clearTimeout(this.timeoutId);
+                this.timeoutId = null;
+            }
+            
+            // 使用setTimeout来避免长时间阻塞UI
+            this.timeoutId = setTimeout(() => {
+                const currentState = view.state.field(batchProcessField);
+                
+                // 安全检查：确保状态自上次检查以来没有变化
+                if (!currentState.isProcessing || currentState.processedCount >= currentState.links.length) {
+                    return;
+                }
+                
+                // 获取当前批次的链接
+                const startIndex = currentState.processedCount;
+                const endIndex = Math.min(startIndex + batchSize, currentState.links.length);
+                const batch = currentState.links.slice(startIndex, endIndex);
+                
+                // 创建装饰
+                const decorations = batch.map(link => {
+                    return {
+                        from: link.from,
+                        to: link.to,
+                        widget: new LinkReplaceWidget(
+                            link.displayName, 
+                            link.path, 
+                            (window as any).app.plugins.plugins['filename-display']
+                        )
+                    };
+                });
+                
+                // 分发添加装饰效果
+                const addEffects = decorations.map(deco => 
+                    addLinkDecoration.of({
+                        from: deco.from,
+                        to: deco.to,
+                        widget: deco.widget
+                    })
+                );
+                
+                // 分发批处理进度效果
+                const progressEffect = processBatchEffect.of({
+                    batchSize,
+                    startIndex
+                });
+                
+                // 判断是否为最后一批
+                const isLastBatch = endIndex >= currentState.links.length;
+                const completeEffect = isLastBatch ? completeBatchProcessEffect.of(null) : null;
+                
+                // 组合所有效果
+                const allEffects = [
+                    ...addEffects,
+                    progressEffect,
+                    ...(completeEffect ? [completeEffect] : [])
+                ];
+                
+                // 分发事务
+                view.dispatch({ effects: allEffects });
+                
+            }, 0); // 使用0延迟让浏览器决定何时执行
+        }
+        
+        destroy() {
+            // 清理超时任务
+            if (this.timeoutId !== null) {
+                clearTimeout(this.timeoutId);
+                this.timeoutId = null;
+            }
+        }
+    }, {
+        // 提供要观察的字段
+        provide: plugin => [
+            batchProcessField
+        ]
     });
 } 

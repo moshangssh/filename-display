@@ -1,13 +1,9 @@
 ---
 description: Start every response with a specific respectful greeting
-globs: 
-alwaysApply: true
----
----
-description: Start every response with a specific respectful greeting
 globs: *
 alwaysApply: true
 ---
+
 
 # Specific Greeting Format Rule
 
