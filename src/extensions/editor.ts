@@ -25,6 +25,10 @@ export class LinkReplaceWidget extends WidgetType {
     private readonly plugin: ITitleExtractorPlugin;
     // 跟踪小部件是否已被销毁
     private isDestroyed: boolean = false;
+    // 跟踪DOM引用,便于清理
+    private domElement: HTMLElement | null = null;
+    // 跟踪小部件创建时间,用于性能分析和调试
+    private readonly createdAt: number = Date.now();
     
     constructor(
         private readonly displayName: string, 
@@ -33,9 +37,19 @@ export class LinkReplaceWidget extends WidgetType {
     ) {
         super();
         this.plugin = plugin;
-        // 生成唯一ID，使用路径和位置组合
-        this.id = `link-widget-${originalPath}-${Date.now()}`;
-        // 构造函数中不创建DOM或添加事件监听器，这些操作推迟到toDOM中
+        // 生成唯一ID，使用路径和时间戳组合
+        this.id = `link-widget-${this.hashString(originalPath)}-${Date.now()}`;
+    }
+
+    // 简单的字符串哈希函数,用于生成更短的ID
+    private hashString(str: string): string {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // 转换为32位整数
+        }
+        return Math.abs(hash).toString(36);
     }
 
     // 获取小部件ID
@@ -58,6 +72,16 @@ export class LinkReplaceWidget extends WidgetType {
         return this.plugin;
     }
 
+    // 获取创建时间
+    getCreatedAt(): number {
+        return this.createdAt;
+    }
+
+    // 检查小部件是否已销毁
+    checkIsDestroyed(): boolean {
+        return this.isDestroyed;
+    }
+
     toDOM() {
         // 防御性检查：如果已被销毁则返回空span
         if (this.isDestroyed) {
@@ -74,25 +98,44 @@ export class LinkReplaceWidget extends WidgetType {
         span.dataset.originalPath = this.originalPath;
         span.dataset.widgetId = this.id; // 添加小部件ID到数据属性
         
+        // 保存DOM引用便于清理
+        this.domElement = span;
+        
         return span;
     }
 
+    // 实现es方法,允许CodeMirror用事务效果更新小部件
+    public eq(other: LinkReplaceWidget): boolean {
+        return this.id === other.id && 
+               this.displayName === other.displayName &&
+               this.originalPath === other.originalPath &&
+               !this.isDestroyed;
+    }
+
     destroy(dom: HTMLElement | null): void {
+        if (this.isDestroyed) {
+            return; // 避免重复销毁
+        }
+        
         // 标记为已销毁
         this.isDestroyed = true;
         
         // 清理DOM元素
-        if (dom) {
+        const elementToClean = dom || this.domElement;
+        if (elementToClean) {
             // 移除事件监听
-            dom.removeAttribute('data-widget-id');
-            dom.removeAttribute('data-original-path');
+            elementToClean.removeAttribute('data-widget-id');
+            elementToClean.removeAttribute('data-original-path');
             
             // 清除任何可能的内联样式
-            dom.removeAttribute('style');
+            elementToClean.removeAttribute('style');
             
             // 确保DOM元素不会保持对widget的引用
-            dom.textContent = dom.textContent; // 触发内容刷新，确保内部引用被清除
+            elementToClean.textContent = elementToClean.textContent; // 触发内容刷新，确保内部引用被清除
         }
+        
+        // 清理自身DOM引用
+        this.domElement = null;
         
         // 释放对插件的引用
         (this as any).plugin = null;
@@ -154,23 +197,6 @@ export class LinkReplaceWidget extends WidgetType {
             );
         }
     }
-
-    // 添加eq方法以优化重新渲染
-    eq(other: LinkReplaceWidget): boolean {
-        // 如果小部件已被销毁，则始终返回false触发完全重新渲染
-        if (this.isDestroyed || other.isDestroyed) {
-            return false;
-        }
-        
-        // 先比较ID，这通常是最快的比较
-        if (this.id === other.getId()) {
-            return true;
-        }
-        
-        // 只有当显示名称和原始路径都相同时才认为两个小部件相等
-        return this.displayName === other.getDisplayName() && 
-               this.originalPath === other.getOriginalPath();
-    }
 }
 
 /**
@@ -180,6 +206,11 @@ export const addLinkDecoration = StateEffect.define<{ from: number; to: number; 
 export const removeLinkDecoration = StateEffect.define<null>();
 // 新增：用于更新已有链接的文本
 export const updateLinkText = StateEffect.define<{ from: number; to: number; displayName: string }>();
+
+// 定义小部件清理效果
+export const cleanupWidgetsEffect = StateEffect.define<{ from: number; to: number }>({
+  map: ({ from, to }, changes) => ({ from: changes.mapPos(from), to: changes.mapPos(to) })
+});
 
 /**
  * 装饰状态字段 - 管理编辑器中的装饰
@@ -194,33 +225,15 @@ export const linkDecorationField = StateField.define<DecorationSet>({
         
         // 如果文档发生大规模变化(例如编辑器完全替换内容)，清理所有小部件以避免内存泄漏
         if (tr.changes.desc?.length && tr.newDoc.length < tr.startState.doc.length / 2) {
-            // 在清理前手动调用所有小部件的destroy方法
-            decorations.between(0, tr.startState.doc.length, (from, to, deco) => {
-                if (deco.spec.widget instanceof LinkReplaceWidget) {
-                    const widget = deco.spec.widget as LinkReplaceWidget;
-                    // 传入null作为dom参数
-                    widget.destroy(null);
-                }
-                return false;
-            });
-            // 清空所有装饰
-            decorations = Decoration.none;
+            // 使用事务效果系统进行清理，而不是手动遍历调用destroy
+            return Decoration.none;
         }
         
         // 处理装饰效果
         for (const effect of tr.effects) {
             // 清除所有装饰
             if (effect.is(removeLinkDecoration)) {
-                // 在清理前手动调用所有小部件的destroy方法
-                decorations.between(0, tr.state.doc.length, (from, to, deco) => {
-                    if (deco.spec.widget instanceof LinkReplaceWidget) {
-                        const widget = deco.spec.widget as LinkReplaceWidget;
-                        // 传入null作为dom参数
-                        widget.destroy(null);
-                    }
-                    return false;
-                });
-                decorations = Decoration.none;
+                return Decoration.none;
             }
             // 添加新装饰
             else if (effect.is(addLinkDecoration)) {
@@ -230,26 +243,23 @@ export const linkDecorationField = StateField.define<DecorationSet>({
                     inclusive: false
                 }).range(from, to);
                 
-                // 检查是否已经存在相同位置的装饰，如果有则先清理它们
-                // 存储需要移除的装饰位置
-                const overlappingPositions: {from: number, to: number}[] = [];
+                // 检查是否已经存在相同位置的装饰，使用cleanupWidgetsEffect来清理
+                const overlappingWidgets: {from: number, to: number}[] = [];
                 
                 decorations.between(from, to, (start, end, deco) => {
                     if (deco.spec.widget instanceof LinkReplaceWidget) {
-                        const widget = deco.spec.widget as LinkReplaceWidget;
-                        widget.destroy(null);
-                        overlappingPositions.push({from: start, to: end});
+                        overlappingWidgets.push({from: start, to: end});
                     }
                     return false;
                 });
                 
                 // 如果有重叠装饰，先移除它们
-                if (overlappingPositions.length > 0) {
+                if (overlappingWidgets.length > 0) {
                     // 使用filter方法移除重叠的装饰
                     decorations = decorations.update({ 
                         filter: (dfrom, dto) => {
                             // 检查该位置是否在我们要移除的范围内
-                            return !overlappingPositions.some(
+                            return !overlappingWidgets.some(
                                 pos => pos.from === dfrom && pos.to === dto
                             );
                         } 
@@ -258,6 +268,31 @@ export const linkDecorationField = StateField.define<DecorationSet>({
                 
                 // 添加新装饰
                 decorations = decorations.update({ add: [decoration], sort: true });
+            }
+            // 处理小部件清理效果
+            else if (effect.is(cleanupWidgetsEffect)) {
+                const { from, to } = effect.value;
+                
+                // 收集需要移除的小部件位置
+                const toRemove: {from: number, to: number}[] = [];
+                
+                decorations.between(from, to, (start, end, deco) => {
+                    if (deco.spec.widget instanceof LinkReplaceWidget) {
+                        toRemove.push({from: start, to: end});
+                    }
+                    return false;
+                });
+                
+                // 如果有需要移除的小部件，更新装饰集合
+                if (toRemove.length > 0) {
+                    decorations = decorations.update({
+                        filter: (dfrom, dto) => {
+                            return !toRemove.some(
+                                pos => pos.from === dfrom && pos.to === dto
+                            );
+                        }
+                    });
+                }
             }
             // 处理更新文本效果 - 使用新的函数式方法
             else if (effect.is(updateLinkText)) {
@@ -442,7 +477,7 @@ export function createLinkDecorationExtension(
  * 小部件清理扩展 - 用于跟踪和清理不再使用的小部件
  */
 export const widgetCleanupExtension = ViewPlugin.fromClass(class WidgetCleanupPlugin {
-    private activeWidgets: Set<LinkReplaceWidget> = new Set();
+    private activeWidgets: Map<string, { widget: LinkReplaceWidget, from: number, to: number }> = new Map();
     private logger = new Logger('WidgetCleanupPlugin');
     
     constructor(private view: EditorView) {
@@ -452,49 +487,69 @@ export const widgetCleanupExtension = ViewPlugin.fromClass(class WidgetCleanupPl
     update(update: ViewUpdate) {
         // 检查文档或视口变化
         if (update.docChanged || update.viewportChanged) {
-            // 创建当前活动的小部件集合
-            const currentWidgets = new Set<LinkReplaceWidget>();
+            // 创建当前活动的小部件Map
+            const currentWidgets = new Map<string, { widget: LinkReplaceWidget, from: number, to: number }>();
             
             // 从当前文档中扫描所有小部件
             const decorations = update.state.field(linkDecorationField);
             decorations.between(0, update.state.doc.length, (from, to, deco) => {
                 if (deco.spec.widget instanceof LinkReplaceWidget) {
                     const widget = deco.spec.widget as LinkReplaceWidget;
-                    currentWidgets.add(widget);
+                    currentWidgets.set(widget.getId(), { widget, from, to });
                 }
                 return false;
             });
             
             // 找出已经不再活动的小部件
-            const toRemove: LinkReplaceWidget[] = [];
-            this.activeWidgets.forEach(widget => {
-                if (!currentWidgets.has(widget)) {
-                    toRemove.push(widget);
-                    widget.destroy(null);
+            const toRemove: { from: number, to: number }[] = [];
+            this.activeWidgets.forEach(({ widget, from, to }, id) => {
+                if (!currentWidgets.has(id)) {
+                    toRemove.push({ from, to });
                 }
             });
             
-            // 更新活动小部件集合
-            toRemove.forEach(widget => {
-                this.activeWidgets.delete(widget);
-            });
+            // 使用事务效果清理不再活动的小部件
+            if (toRemove.length > 0) {
+                // 分批处理，避免过大的事务
+                const batchSize = 50;
+                for (let i = 0; i < toRemove.length; i += batchSize) {
+                    const batch = toRemove.slice(i, i + batchSize);
+                    const effects = batch.map(pos => cleanupWidgetsEffect.of(pos));
+                    
+                    // 使用事务分发效果
+                    this.view.dispatch({ effects });
+                }
+                
+                // 更新活动小部件集合
+                toRemove.forEach(({ from, to }) => {
+                    // 查找对应的小部件ID并从活动集合中移除
+                    this.activeWidgets.forEach((value, key) => {
+                        if (value.from === from && value.to === to) {
+                            this.activeWidgets.delete(key);
+                        }
+                    });
+                });
+            }
             
             // 添加新的活动小部件
-            currentWidgets.forEach(widget => {
-                this.activeWidgets.add(widget);
+            currentWidgets.forEach((value, key) => {
+                this.activeWidgets.set(key, value);
             });
-            
-            if (toRemove.length > 0) {
-                this.logger.debug(`已清理 ${toRemove.length} 个不再活动的小部件`);
-            }
         }
     }
     
     destroy() {
-        // 编辑器销毁时清理所有小部件
-        this.logger.debug(`清理 ${this.activeWidgets.size} 个小部件`);
-        this.activeWidgets.forEach(widget => widget.destroy(null));
-        this.activeWidgets.clear();
+        // 清理所有活动的小部件
+        if (this.activeWidgets.size > 0) {
+            const effects = Array.from(this.activeWidgets.values())
+                .map(({ from, to }) => cleanupWidgetsEffect.of({ from, to }));
+            
+            // 使用事务分发效果
+            this.view.dispatch({ effects });
+            
+            // 清空活动小部件集合
+            this.activeWidgets.clear();
+        }
     }
 });
 
@@ -534,12 +589,21 @@ export function createLinkClickHandler(plugin: ITitleExtractorPlugin): Extension
  * 创建编辑器扩展
  */
 export function createEditorExtensions(plugin: ITitleExtractorPlugin): Extension {
+    // 添加更多日志以跟踪扩展创建过程
+    logger.debug('创建编辑器扩展，包含以下组件:', 
+                ['linkDecorationField', 'viewportExtension', 'incrementalUpdateExtension', 
+                 'editorSyncExtension', 'createLinkClickHandler', 'widgetCleanupExtension',
+                 'batchProcessField', 'createBatchProcessorPlugin']);
+    
     return [
         linkDecorationField,
+        batchProcessField, // 确保batchProcessField直接在顶层注册
         viewportExtension(),
         incrementalUpdateExtension(),
         editorSyncExtension(plugin),
-        createLinkClickHandler(plugin)
+        createLinkClickHandler(plugin),
+        widgetCleanupExtension,
+        createBatchProcessorPlugin()
     ];
 }
 
@@ -877,6 +941,13 @@ export interface BatchProcessState {
     processedCount: number;
     isProcessing: boolean;
     startTime: number;
+    // 添加额外的元数据,用于更好的调试和序列化
+    metadata?: {
+        lastProcessTime?: number;
+        batchCount?: number;
+        errorCount?: number;
+        totalProcessingTime?: number;
+    };
 }
 
 // 批处理效果
@@ -887,6 +958,10 @@ export const startBatchProcessEffect = StateEffect.define<{
 export const processBatchEffect = StateEffect.define<{
     batchSize: number;
     startIndex: number;
+}>();
+
+export const updateBatchMetadataEffect = StateEffect.define<{
+    metadata: Partial<BatchProcessState['metadata']>;
 }>();
 
 export const completeBatchProcessEffect = StateEffect.define<null>();
@@ -900,7 +975,13 @@ export const batchProcessField = StateField.define<BatchProcessState>({
             links: [],
             processedCount: 0,
             isProcessing: false,
-            startTime: 0
+            startTime: 0,
+            metadata: {
+                lastProcessTime: 0,
+                batchCount: 0,
+                errorCount: 0,
+                totalProcessingTime: 0
+            }
         };
     },
     update(state, tr) {
@@ -915,7 +996,11 @@ export const batchProcessField = StateField.define<BatchProcessState>({
                     ...newState,
                     isProcessing: false,
                     links: [],
-                    processedCount: 0
+                    processedCount: 0,
+                    metadata: {
+                        ...(state.metadata || {}),
+                        lastProcessTime: Date.now()
+                    }
                 };
             }
         }
@@ -929,7 +1014,13 @@ export const batchProcessField = StateField.define<BatchProcessState>({
                     links,
                     processedCount: 0,
                     isProcessing: true,
-                    startTime: Date.now()
+                    startTime: Date.now(),
+                    metadata: {
+                        ...(state.metadata || {}),
+                        batchCount: 0,
+                        errorCount: 0,
+                        totalProcessingTime: 0
+                    }
                 };
                 
                 // 记录开始信息
@@ -940,47 +1031,94 @@ export const batchProcessField = StateField.define<BatchProcessState>({
                 const { batchSize, startIndex } = effect.value;
                 const endIndex = Math.min(startIndex + batchSize, state.links.length);
                 
+                // 计算处理时间
+                const processingTime = Date.now() - state.startTime;
+                
                 newState = {
                     ...newState,
                     processedCount: endIndex,
-                    isProcessing: endIndex < state.links.length
+                    isProcessing: endIndex < state.links.length,
+                    metadata: {
+                        ...(state.metadata || {}),
+                        lastProcessTime: Date.now(),
+                        batchCount: (state.metadata?.batchCount || 0) + 1,
+                        totalProcessingTime: processingTime
+                    }
                 };
                 
                 // 记录进度
                 const progressPercent = Math.round((endIndex / state.links.length) * 100);
                 logger.debug(`批处理进度: ${progressPercent}% (${endIndex}/${state.links.length})`);
             }
+            else if (effect.is(updateBatchMetadataEffect)) {
+                // 更新元数据
+                newState = {
+                    ...newState,
+                    metadata: {
+                        ...(state.metadata || {}),
+                        ...effect.value.metadata
+                    }
+                };
+            }
             else if (effect.is(completeBatchProcessEffect)) {
                 // 完成批处理
                 const duration = Date.now() - state.startTime;
-                logger.debug(`批处理完成，共处理 ${state.links.length} 个链接，耗时 ${duration}ms`);
                 
                 newState = {
                     ...newState,
-                    isProcessing: false
+                    isProcessing: false,
+                    metadata: {
+                        ...(state.metadata || {}),
+                        lastProcessTime: Date.now(),
+                        totalProcessingTime: duration
+                    }
                 };
+                
+                logger.debug(`批处理完成，共处理 ${state.links.length} 个链接，耗时 ${duration}ms`);
             }
         }
         
         return newState;
     },
-    // 添加序列化方法
+    // 优化序列化方法
     toJSON(state: BatchProcessState) {
-        // 仅保存当前进度和是否正在处理的标志，链接数据不需要保存
+        // 只序列化必要的信息,忽略链接数据以减少大小和只包含必要的元数据
         return {
             processedCount: state.processedCount,
             isProcessing: state.isProcessing,
-            linksCount: state.links.length
+            linksCount: state.links.length,
+            metadata: {
+                lastProcessTime: state.metadata?.lastProcessTime,
+                batchCount: state.metadata?.batchCount,
+                errorCount: state.metadata?.errorCount
+            }
         };
     },
-    // 添加反序列化方法
+    // 改进反序列化方法
     fromJSON(json: any) {
-        return {
-            links: [],
-            processedCount: json?.processedCount || 0,
-            isProcessing: json?.isProcessing || false,
-            startTime: Date.now()
-        };
+        // 检查JSON数据的有效性
+        if (!json || typeof json !== 'object') {
+            logger.warn('批处理状态字段: 无效的JSON数据格式', json);
+            return this.create(); // 返回初始状态
+        }
+        
+        try {
+            return {
+                links: [], // 恢复时链接内容总是空的
+                processedCount: typeof json.processedCount === 'number' ? json.processedCount : 0,
+                isProcessing: json.isProcessing === true, // 确保布尔值
+                startTime: Date.now(), // 总是使用当前时间
+                metadata: {
+                    lastProcessTime: json.metadata?.lastProcessTime || 0,
+                    batchCount: json.metadata?.batchCount || 0,
+                    errorCount: json.metadata?.errorCount || 0,
+                    totalProcessingTime: 0 // 重置处理时间
+                }
+            };
+        } catch (e) {
+            logger.error('批处理状态字段: 从JSON恢复失败', e);
+            return this.create(); // 返回初始状态
+        }
     }
 });
 
@@ -988,90 +1126,159 @@ export const batchProcessField = StateField.define<BatchProcessState>({
  * 批处理插件
  */
 export function createBatchProcessorPlugin(): Extension {
+    // 由于batchProcessField已在createEditorExtensions中注册，这里只返回ViewPlugin
     return ViewPlugin.fromClass(class BatchProcessor {
         private readonly logger = new Logger('BatchProcessor');
         private timeoutId: ReturnType<typeof setTimeout> | null = null;
+        private errorCount: number = 0;
         
         constructor(private view: EditorView) {
             this.logger.debug('批处理器初始化');
         }
         
         update(update: ViewUpdate) {
-            const state = update.state.field(batchProcessField);
+            // 检查字段是否存在,避免Field is not present错误
+            if (!update.state.facet(EditorView.updateListener)) {
+                this.logger.warn('批处理更新: EditorView.updateListener字段不存在');
+                return;
+            }
             
-            // 如果有批处理任务正在进行中，并且有未处理的链接
-            if (state.isProcessing && state.processedCount < state.links.length) {
-                this.processBatch(update.view);
+            try {
+                const state = update.state.field(batchProcessField);
+                
+                // 如果有批处理任务正在进行中，并且有未处理的链接
+                if (state.isProcessing && state.processedCount < state.links.length) {
+                    this.processBatch(update.view);
+                }
+            } catch (e) {
+                // 如果字段不存在,静默失败并记录日志
+                this.logger.warn('批处理更新: batchProcessField字段不可用', e);
             }
         }
         
         processBatch(view: EditorView) {
-            const state = view.state.field(batchProcessField);
-            const batchSize = 10; // 每批处理的链接数量
-            
-            // 清除之前的超时任务
-            if (this.timeoutId !== null) {
-                clearTimeout(this.timeoutId);
-                this.timeoutId = null;
-            }
-            
-            // 使用setTimeout来避免长时间阻塞UI
-            this.timeoutId = setTimeout(() => {
-                const currentState = view.state.field(batchProcessField);
+            try {
+                const state = view.state.field(batchProcessField);
+                const batchSize = 10; // 每批处理的链接数量
                 
-                // 安全检查：确保状态自上次检查以来没有变化
-                if (!currentState.isProcessing || currentState.processedCount >= currentState.links.length) {
-                    return;
+                // 清除之前的超时任务
+                if (this.timeoutId !== null) {
+                    clearTimeout(this.timeoutId);
+                    this.timeoutId = null;
                 }
                 
-                // 获取当前批次的链接
-                const startIndex = currentState.processedCount;
-                const endIndex = Math.min(startIndex + batchSize, currentState.links.length);
-                const batch = currentState.links.slice(startIndex, endIndex);
-                
-                // 创建装饰
-                const decorations = batch.map(link => {
-                    return {
-                        from: link.from,
-                        to: link.to,
-                        widget: new LinkReplaceWidget(
-                            link.displayName, 
-                            link.path, 
-                            (window as any).app.plugins.plugins['filename-display']
-                        )
-                    };
-                });
-                
-                // 分发添加装饰效果
-                const addEffects = decorations.map(deco => 
-                    addLinkDecoration.of({
-                        from: deco.from,
-                        to: deco.to,
-                        widget: deco.widget
-                    })
-                );
-                
-                // 分发批处理进度效果
-                const progressEffect = processBatchEffect.of({
-                    batchSize,
-                    startIndex
-                });
-                
-                // 判断是否为最后一批
-                const isLastBatch = endIndex >= currentState.links.length;
-                const completeEffect = isLastBatch ? completeBatchProcessEffect.of(null) : null;
-                
-                // 组合所有效果
-                const allEffects = [
-                    ...addEffects,
-                    progressEffect,
-                    ...(completeEffect ? [completeEffect] : [])
-                ];
-                
-                // 分发事务
-                view.dispatch({ effects: allEffects });
-                
-            }, 0); // 使用0延迟让浏览器决定何时执行
+                // 使用setTimeout来避免长时间阻塞UI
+                this.timeoutId = setTimeout(() => {
+                    try {
+                        const currentState = view.state.field(batchProcessField);
+                        
+                        // 安全检查：确保状态自上次检查以来没有变化
+                        if (!currentState.isProcessing || currentState.processedCount >= currentState.links.length) {
+                            return;
+                        }
+                        
+                        // 确定要处理的批次
+                        const startIndex = currentState.processedCount;
+                        const endIndex = Math.min(startIndex + batchSize, currentState.links.length);
+                        const batch = currentState.links.slice(startIndex, endIndex);
+                        
+                        if (batch.length === 0) {
+                            // 没有要处理的项目，提前完成
+                            const completeEffect = completeBatchProcessEffect.of(null);
+                            view.dispatch({ effects: [completeEffect] });
+                            return;
+                        }
+                        
+                        // 处理当前批次
+                        for (const item of batch) {
+                            const { from, to, path, displayName } = item;
+                            
+                            try {
+                                // 创建链接装饰效果
+                                const widget = new LinkReplaceWidget(
+                                    displayName,
+                                    path,
+                                    (window as any).app.plugins.plugins['filename-display']
+                                );
+                                
+                                const effect = addLinkDecoration.of({
+                                    from,
+                                    to,
+                                    widget
+                                });
+                                
+                                // 分发效果
+                                view.dispatch({ effects: [effect] });
+                            } catch (err) {
+                                this.logger.error(`处理链接时出错: ${path}`, err);
+                                this.errorCount++;
+                                
+                                // 更新元数据
+                                const metadataEffect = updateBatchMetadataEffect.of({
+                                    metadata: {
+                                        errorCount: this.errorCount
+                                    }
+                                });
+                                
+                                view.dispatch({ effects: [metadataEffect] });
+                            }
+                        }
+                        
+                        // 更新处理进度
+                        const processBatchEffect = this.getProcessBatchEffect(startIndex, batchSize);
+                        const isLastBatch = endIndex >= currentState.links.length;
+                        const completeEffect = isLastBatch ? completeBatchProcessEffect.of(null) : null;
+                        
+                        // 分发效果
+                        view.dispatch({
+                            effects: [
+                                processBatchEffect,
+                                ...(completeEffect ? [completeEffect] : [])
+                            ]
+                        });
+                        
+                        // 如果没有完成，安排处理下一批
+                        if (!isLastBatch) {
+                            // 使用requestAnimationFrame与setTimeout结合,提高性能与响应性
+                            requestAnimationFrame(() => {
+                                this.processBatch(view);
+                            });
+                        }
+                    } catch (error) {
+                        // 处理错误并记录
+                        this.logger.error('批处理过程中发生错误:', error);
+                        this.errorCount++;
+                        
+                        // 更新元数据
+                        const metadataEffect = updateBatchMetadataEffect.of({
+                            metadata: {
+                                errorCount: this.errorCount
+                            }
+                        });
+                        
+                        try {
+                            view.dispatch({ effects: [metadataEffect] });
+                        } catch (e) {
+                            this.logger.warn('无法更新批处理元数据', e);
+                        }
+                        
+                        // 错误恢复: 短暂延迟后继续处理
+                        setTimeout(() => {
+                            this.processBatch(view);
+                        }, 500);
+                    }
+                }, 0);
+            } catch (e) {
+                // 如果字段不存在,静默失败并记录日志
+                this.logger.warn('处理批次: batchProcessField字段不可用', e);
+            }
+        }
+        
+        getProcessBatchEffect(startIndex: number, batchSize: number) {
+            return processBatchEffect.of({
+                batchSize,
+                startIndex
+            });
         }
         
         destroy() {
@@ -1080,6 +1287,9 @@ export function createBatchProcessorPlugin(): Extension {
                 clearTimeout(this.timeoutId);
                 this.timeoutId = null;
             }
+            
+            // 重置错误计数
+            this.errorCount = 0;
         }
     }, {
         // 提供要观察的字段

@@ -14,6 +14,13 @@ export class LoggerService implements ILoggerService {
     }
 
     /**
+     * 检查是否启用了调试级别的日志
+     */
+    isDebugEnabled(): boolean {
+        return this.isDev;
+    }
+
+    /**
      * 记录一般日志信息
      */
     log(message: string, ...args: any[]): void {

@@ -1,5 +1,4 @@
 import type { ITitleExtractorPlugin } from '../types';
-import { CacheHeatService } from './CacheHeatService';
 import { BaseCacheService } from './base/BaseCacheService';
 
 interface CacheMetadata {
@@ -22,7 +21,6 @@ export class PersistentCacheService extends BaseCacheService<CacheMetadata> {
   
   constructor(
     plugin: ITitleExtractorPlugin,
-    private readonly heatService: CacheHeatService
   ) {
     super(plugin, 'persistent-cache-metadata', 'PersistentCacheService');
     this.CACHE_DIR = `${this.plugin.app.vault.configDir}/persistent-cache`;
@@ -57,30 +55,26 @@ export class PersistentCacheService extends BaseCacheService<CacheMetadata> {
    */
   public async set<T>(key: string, data: T): Promise<void> {
     try {
-      const heat = this.heatService.getHeat(key);
-      
-      // 只持久化高频缓存（热度大于阈值的数据）
-      if (heat > this.plugin.settings.persistentCacheHeatThreshold) {
-        const entry: CacheEntry<T> = {
-          data,
-          version: this.CACHE_VERSION,
-          timestamp: Date.now(),
-          hash: await this.calculateHash(data)
-        };
+      // 只持久化符合条件的数据（无需热度判断）
+      const entry: CacheEntry<T> = {
+        data,
+        version: this.CACHE_VERSION,
+        timestamp: Date.now(),
+        hash: await this.calculateHash(data)
+      };
 
-        const filePath = this.getCacheFilePath(key);
-        await this.plugin.app.vault.adapter.write(filePath, JSON.stringify(entry));
-        
-        // 更新元数据
-        const metadata = await this.getMetadata() || {
-          version: this.CACHE_VERSION,
-          lastUpdate: Date.now(),
-          totalEntries: 0
-        };
-        metadata.totalEntries++;
-        metadata.lastUpdate = Date.now();
-        await this.saveMetadata(metadata);
-      }
+      const filePath = this.getCacheFilePath(key);
+      await this.plugin.app.vault.adapter.write(filePath, JSON.stringify(entry));
+      
+      // 更新元数据
+      const metadata = await this.getMetadata() || {
+        version: this.CACHE_VERSION,
+        lastUpdate: Date.now(),
+        totalEntries: 0
+      };
+      metadata.totalEntries++;
+      metadata.lastUpdate = Date.now();
+      await this.saveMetadata(metadata);
     } catch (error) {
       this.logger.error('保存缓存失败:', error);
       throw error;
@@ -105,8 +99,7 @@ export class PersistentCacheService extends BaseCacheService<CacheMetadata> {
           return null;
         }
 
-        // 更新访问热度
-        this.heatService.recordAccess(key);
+        // 移除热度记录
         return entry.data;
       }
 

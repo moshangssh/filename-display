@@ -108,23 +108,16 @@ export class ExtensionCacheService {
     }
     
     /**
-     * 获取编辑器扩展
+     * 获取编辑器扩展集合
      */
     public getEditorExtensions(): Extension {
-        const cacheKey = `${ExtensionType.EDITOR}:default`;
-        
-        // 检查缓存
-        if (this.extensionCache.has(cacheKey)) {
-            logger.debug(`从缓存返回编辑器扩展`);
-            return this.extensionCache.get(cacheKey)!;
-        }
-        
-        // 创建新的扩展
+        // 直接创建新的扩展，跳过缓存以确保最新更改生效
         logger.debug(`创建新的编辑器扩展`);
         const extension = this.linkDecorationProvider.createEditorExtensions(this.plugin);
         
-        // 缓存扩展
-        this.extensionCache.set(cacheKey, extension);
+        // 记录所创建的扩展包含哪些组件
+        logger.debug('创建的编辑器扩展包含以下组件:', 
+                    Array.isArray(extension) ? `数组(长度:${extension.length})` : '单一扩展');
         
         return extension;
     }
@@ -133,16 +126,10 @@ export class ExtensionCacheService {
      * 获取合并的扩展集合
      */
     public getCombinedExtensions(): Extension {
-        const cacheKey = `${ExtensionType.COMBINED}:default`;
-        
-        // 检查缓存
-        if (this.extensionCache.has(cacheKey)) {
-            logger.debug(`从缓存返回合并扩展`);
-            return this.extensionCache.get(cacheKey)!;
-        }
-        
-        // 创建合并扩展
+        // 直接创建合并扩展，跳过缓存以确保最新更改生效
         logger.debug(`创建新的合并扩展`);
+        
+        // 确保包含batchProcessField
         const extension = [
             // 基础扩展
             viewportExtension(),
@@ -153,8 +140,7 @@ export class ExtensionCacheService {
             this.getEditorExtensions()
         ];
         
-        // 缓存扩展
-        this.extensionCache.set(cacheKey, extension);
+        logger.debug(`合并扩展已创建，包含 ${Array.isArray(extension) ? extension.length : 1} 个组件`);
         
         return extension;
     }

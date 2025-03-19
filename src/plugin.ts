@@ -14,7 +14,7 @@ import { TimerService } from './services/TimerService';
 import { ServiceContainer, SERVICE_TYPES } from './services/di/ServiceContainer';
 import { LoggerService } from './services/LoggerService';
 import { errorHandler } from './utils/ErrorHandler';
-import { Extension } from '@codemirror/state';
+import { Extension, Compartment } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { IEditorLinkDecorator, IFileExplorerDisplayService, CacheCleanStrategy } from './services/interfaces/IServices';
 import { ExtensionCacheService, ExtensionType } from './services/ExtensionCacheService';
@@ -31,11 +31,24 @@ import { LinkDecorationExtensionProvider } from './services/LinkDecorationExtens
 
 const logger = new Logger('Plugin');
 
+// 定义扩展分组类型
+const EXTENSION_GROUPS = {
+    CORE: 'core',       // 核心扩展（视口、增量更新等）
+    LINK: 'link',       // 链接相关扩展
+    CUSTOM: 'custom'    // 自定义扩展
+};
+
 export default class TitleExtractorPlugin extends Plugin {
     settings: TitleExtractorSettings;
     serviceContainer: ServiceContainer;
     private fileDisplayService: FileDisplayService;
+    
+    // 编辑器扩展相关
     private editorExtensions: Extension[] = [];
+    
+    // 使用Compartment管理扩展分组
+    private extensionCompartments: Map<string, Compartment> = new Map();
+    
     // 核心服务组件，直接作为插件属性
     filenameParser: FilenameParser;
     fileDisplayCache: FileDisplayCache;
@@ -56,6 +69,9 @@ export default class TitleExtractorPlugin extends Plugin {
         this.addSettingTab(new TitleExtractorSettingTab(this.app, this));
 
         try {
+            // 初始化扩展管理
+            this.initExtensionCompartments();
+            
             // 创建服务容器
             this.serviceContainer = ServiceContainer.getInstance(this);
             
@@ -82,6 +98,18 @@ export default class TitleExtractorPlugin extends Plugin {
             logger.error('插件加载时发生错误:', error);
             new Notice('TitleExtractor插件加载失败');
         }
+    }
+    
+    /**
+     * 初始化扩展分组的Compartment
+     */
+    private initExtensionCompartments(): void {
+        // 为每个扩展分组创建一个Compartment
+        Object.values(EXTENSION_GROUPS).forEach(group => {
+            this.extensionCompartments.set(group, new Compartment());
+        });
+        
+        logger.debug('已初始化扩展分组Compartments');
     }
     
     /**
@@ -281,9 +309,29 @@ export default class TitleExtractorPlugin extends Plugin {
             // 清理所有活跃编辑器中的 CodeMirror 装饰
             this.cleanupAllCodeMirrorDecorations();
             
-            // 显式卸载编辑器扩展
-            if (this.editorExtensions.length) {
+            // 显式卸载编辑器扩展 - 使用Compartment进行清理
+            try {
+                logger.log('清理编辑器扩展Compartments...');
+                
+                // 清理每个Compartment
+                this.extensionCompartments.forEach((compartment, groupName) => {
+                    try {
+                        // 使用空数组替换compartment内容，有效清除其中的扩展
+                        super.registerEditorExtension(compartment.of([]));
+                        logger.debug(`清理扩展分组: ${groupName}`);
+                    } catch (e) {
+                        logger.error(`清理扩展分组${groupName}时出错:`, e);
+                    }
+                });
+                
+                // 清空本地扩展集合
+                this.editorExtensions = [];
+                
+                // 更新编辑器选项，强制应用变更
                 this.app.workspace.updateOptions();
+                logger.log('已清理所有编辑器扩展');
+            } catch (e) {
+                logger.error('清理编辑器扩展时出错:', e);
             }
             
             // 恢复所有文件显示（必要的自定义清理）
@@ -365,15 +413,45 @@ export default class TitleExtractorPlugin extends Plugin {
         }
     }
 
-    registerEditorExtension(extension: Extension[]): void {
-        // 首先添加到内部扩展数组
+    /**
+     * 注册编辑器扩展
+     * 根据扩展类型自动分组到对应的Compartment
+     */
+    registerEditorExtension(extension: Extension[], groupName: string = EXTENSION_GROUPS.CUSTOM): void {
+        logger.debug(`注册编辑器扩展到 ${groupName} 分组`);
+        
+        // 检查分组是否存在
+        if (!this.extensionCompartments.has(groupName)) {
+            logger.warn(`未找到扩展分组 ${groupName}，创建新分组`);
+            this.extensionCompartments.set(groupName, new Compartment());
+        }
+        
+        // 获取分组的Compartment
+        const compartment = this.extensionCompartments.get(groupName);
+        
+        // 更新本地扩展集合以跟踪所有扩展
         this.editorExtensions = [...this.editorExtensions, ...extension];
         
-        // 添加日志记录
-        logger.debug('注册编辑器扩展');
-        
-        // 然后调用父类方法注册到 Obsidian
-        super.registerEditorExtension(extension);
+        // 使用Compartment更新扩展
+        this.updateCompartment(compartment!, extension);
+    }
+    
+    /**
+     * 使用Compartment更新扩展
+     * 这会触发CodeMirror的重新配置，但只影响特定分组
+     */
+    private updateCompartment(compartment: Compartment, extension: Extension): void {
+        try {
+            // 注册到Obsidian，使用Compartment.reconfigure
+            super.registerEditorExtension(compartment.of(extension));
+            logger.debug('成功通过Compartment注册扩展');
+        } catch (error) {
+            logger.error('更新扩展Compartment时出错：', error);
+            
+            // 回退到标准注册方法
+            super.registerEditorExtension(extension);
+            logger.debug('已回退到标准注册方法');
+        }
     }
 
     // 新增：预热缓存方法
@@ -538,27 +616,57 @@ export default class TitleExtractorPlugin extends Plugin {
     }
 
     /**
-     * 按照标准方式注册编辑器扩展
+     * 注册标准编辑器扩展，按功能分组
      */
     private registerStandardEditorExtensions() {
-        // 创建所有需要的编辑器扩展
-        this.editorExtensions = [
-            // 从编辑器链接装饰器获取扩展
-            ...this.serviceContainer.get<IEditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator).getExtension(),
+        try {
+            // 获取核心扩展组件
+            const coreCompartment = this.extensionCompartments.get(EXTENSION_GROUPS.CORE)!;
+            const linkCompartment = this.extensionCompartments.get(EXTENSION_GROUPS.LINK)!;
             
-            // 添加其他必要的扩展（如视口扩展）
-            viewportExtension(),
-            incrementalUpdateExtension(),
-            editorSyncExtension(this), // 传入插件实例
+            // 1. 注册核心扩展
+            const coreExtensions = [
+                // 添加视口、增量更新和编辑器同步扩展
+                viewportExtension(),
+                incrementalUpdateExtension(),
+                editorSyncExtension(this) // 传入插件实例
+            ];
             
-            // 添加组合扩展
-            this.createCombinedExtensions()
-        ];
-        
-        // 注册编辑器扩展
-        this.registerEditorExtension(this.editorExtensions);
-        
-        logger.log('已注册标准编辑器扩展');
+            this.registerEditorExtension(coreExtensions, EXTENSION_GROUPS.CORE);
+            
+            // 2. 注册链接相关扩展
+            const linkExtensions = [
+                // 从编辑器链接装饰器获取扩展
+                ...this.serviceContainer.get<IEditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator).getExtension()
+            ];
+            
+            this.registerEditorExtension(linkExtensions, EXTENSION_GROUPS.LINK);
+            
+            // 3. 注册组合扩展
+            this.registerEditorExtension([this.createCombinedExtensions()], EXTENSION_GROUPS.CUSTOM);
+            
+            logger.log('已注册所有编辑器扩展');
+        } catch (error) {
+            logger.error('注册编辑器扩展时出错：', error);
+            
+            // 兜底方案：使用传统方式注册所有扩展
+            this.editorExtensions = [
+                // 从编辑器链接装饰器获取扩展
+                ...this.serviceContainer.get<IEditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator).getExtension(),
+                
+                // 添加其他必要的扩展
+                viewportExtension(),
+                incrementalUpdateExtension(),
+                editorSyncExtension(this),
+                
+                // 添加组合扩展
+                this.createCombinedExtensions()
+            ];
+            
+            // 使用父类方法直接注册所有扩展
+            super.registerEditorExtension(this.editorExtensions);
+            logger.log('已使用兜底方式注册编辑器扩展');
+        }
     }
 
     /**

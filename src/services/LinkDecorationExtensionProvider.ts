@@ -56,10 +56,11 @@ export class LinkDecorationExtensionProvider implements ILinkDecorationExtension
 
     /**
      * 创建编辑器扩展集合
+     * @param plugin 插件实例
      * @returns 编辑器扩展集合
      */
-    public createEditorExtensions(): Extension {
-        return createEditorExtensions(this.plugin);
+    public createEditorExtensions(plugin: ITitleExtractorPlugin): Extension {
+        return createEditorExtensions(plugin || this.plugin);
     }
 
     /**
