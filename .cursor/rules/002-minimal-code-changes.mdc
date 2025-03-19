@@ -1,5 +1,10 @@
 ---
 description: Implement requirements with minimal code and solve issues with minimal modifications
+globs: 
+alwaysApply: false
+---
+---
+description: Implement requirements with minimal code and solve issues with minimal modifications
 globs: **/*.{js,ts,jsx,tsx,md,css,html}
 alwaysApply: true
 ---

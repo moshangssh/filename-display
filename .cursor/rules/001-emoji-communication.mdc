@@ -1,4 +1,9 @@
 ---
+description: 
+globs: 
+alwaysApply: true
+---
+---
 description: Use emojis strategically in AI responses to enhance communication and user experience
 globs: *
 alwaysApply: true

@@ -1,4 +1,9 @@
 ---
+description: 
+globs: 
+alwaysApply: true
+---
+---
 description: Start every response with a specific respectful greeting
 globs: *
 alwaysApply: true

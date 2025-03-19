@@ -1,5 +1,10 @@
 ---
 description: ALWAYS use when writing or updating Markdown files to ensure consistent formatting and readability. This rule enforces standardized Markdown practices across all documentation.
+globs: 
+alwaysApply: false
+---
+---
+description: ALWAYS use when writing or updating Markdown files to ensure consistent formatting and readability. This rule enforces standardized Markdown practices across all documentation.
 globs: **/*.{md,mdx}
 alwaysApply: false
 ---
