@@ -4,16 +4,10 @@ globs:
 alwaysApply: false
 ---
 ---
-description: 
-globs: **/*.{ts,js,tsx,jsx}
-alwaysApply: false
----
----
 description: 遵守 Obsidian 和 CodeMirror 的开发规范当进行相关功能开发时以确保兼容性和一致性
 globs: **/*.{ts,js,tsx,jsx}
 alwaysApply: false
 ---
-
 
 # Obsidian 和 CodeMirror 开发规范
 

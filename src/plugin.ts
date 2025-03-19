@@ -16,75 +16,120 @@ import { LoggerService } from './services/LoggerService';
 import { errorHandler } from './utils/ErrorHandler';
 import { Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { createEditorExtensions } from './extensions/editor';
-import { removeLinkDecoration } from './extensions/editor';
-import { Logger } from './utils/logger';
 import { IEditorLinkDecorator, IFileExplorerDisplayService, CacheCleanStrategy } from './services/interfaces/IServices';
 import { ExtensionCacheService, ExtensionType } from './services/ExtensionCacheService';
+import { getEditorView } from './utils/editor-utils';
+import { 
+    viewportExtension, 
+    incrementalUpdateExtension, 
+    editorSyncExtension,
+    removeLinkDecoration
+} from './extensions';
+import { Logger } from './utils/logger';
+import { LinkStateManager } from './services/LinkStateManager';
+import { LinkDecorationExtensionProvider } from './services/LinkDecorationExtensionProvider';
 
 const logger = new Logger('Plugin');
-
-// 创建 CodeMirror 扩展集合 - 使用扩展缓存服务
-function createCombinedExtensions(plugin: TitleExtractorPlugin): Extension {
-    // 从服务容器获取扩展缓存服务
-    const extensionCacheService = plugin.serviceContainer.get<ExtensionCacheService>(SERVICE_TYPES.ExtensionCacheService);
-    return extensionCacheService.getCombinedExtensions();
-}
 
 export default class TitleExtractorPlugin extends Plugin {
     settings: TitleExtractorSettings;
     serviceContainer: ServiceContainer;
     private fileDisplayService: FileDisplayService;
     private editorExtensions: Extension[] = [];
-    // 添加扩展缓存服务字段
+    // 核心服务组件，直接作为插件属性
+    filenameParser: FilenameParser;
+    fileDisplayCache: FileDisplayCache;
+    fileProcessorService: FileProcessorService;
+    markdownLinkService: MarkdownLinkService;
+    eventManager: EventManagerService;
+    loggerService: LoggerService;
+    timerService: TimerService;
+    linkStateManager: LinkStateManager;
+    
     private extensionCacheService: ExtensionCacheService;
 
     async onload() {
         await this.loadSettings();
         logger.log('加载插件设置...');
-        
-        // 初始化服务容器
-        this.serviceContainer = ServiceContainer.getInstance(this);
-        
-        // 注册各个服务
-        this.registerServices();
-        
-        // 从服务容器获取主服务（懒加载）
-        this.fileDisplayService = this.serviceContainer.get<FileDisplayService>(SERVICE_TYPES.FileDisplayService);
-        
-        // 获取扩展缓存服务
-        this.extensionCacheService = this.serviceContainer.get<ExtensionCacheService>(SERVICE_TYPES.ExtensionCacheService);
 
-        // 添加设置标签页
+        // 添加设置选项卡
         this.addSettingTab(new TitleExtractorSettingTab(this.app, this));
 
-        // 监听布局变更事件
-        this.registerEvent(
-            this.app.workspace.on('layout-change', () => {
-                // 重置文件资源管理器观察器
-                const fileExplorerDisplayService = this.serviceContainer.get<FileExplorerDisplayService>(SERVICE_TYPES.FileExplorerDisplayService);
-                fileExplorerDisplayService.resetObservers();
-                
-                // 延迟更新所有文件的显示，避免布局更改后立即处理
-                setTimeout(() => {
-                    this.fileDisplayService.updateAllFilesDisplay(false);
-                }, 300);
-            })
-        );
-        
-        // 监听相关事件
-        this.registerEvents();
-        
-        // 设置文件资源管理器
-        this.setupFileExplorer();
-        
-        // 预热缓存
-        await this.warmUpCache();
-        
-        // 日志输出
-        logger.log('插件初始化完成');
+        try {
+            // 创建服务容器
+            this.serviceContainer = ServiceContainer.getInstance(this);
+            
+            // 直接初始化核心服务
+            this.initCoreServices();
+            
+            // 注册其他服务到容器
+            this.registerServices();
+            
+            // 设置文件浏览器
+            this.setupFileExplorer();
+            
+            // 注册编辑器扩展
+            this.registerStandardEditorExtensions();
+            
+            // 预热缓存
+            await this.warmUpCache();
+            
+            // 注册事件监听
+            this.registerEvents();
+            
+            logger.log('插件加载完成');
+        } catch (error) {
+            logger.error('插件加载时发生错误:', error);
+            new Notice('TitleExtractor插件加载失败');
+        }
     }
     
+    /**
+     * 初始化核心服务组件
+     */
+    private initCoreServices(): void {
+        // 初始化核心服务，减少对容器的依赖
+        this.loggerService = new LoggerService();
+        this.timerService = new TimerService(this);
+        this.filenameParser = new FilenameParser(this, this.loggerService);
+        
+        // 正确初始化FileDisplayCache，传入正确的类型参数
+        this.fileDisplayCache = new FileDisplayCache(
+            (cleanupCallback: () => void) => this.timerService.setInterval(cleanupCallback, 60000),
+            this,
+            this.loggerService
+        );
+        
+        // 使用插件作为参数（而不是app）
+        this.eventManager = new EventManagerService(this, this.loggerService);
+        this.linkStateManager = new LinkStateManager(this);
+        
+        // 初始化扩展缓存服务
+        this.extensionCacheService = new ExtensionCacheService(this);
+        
+        // 创建临时更新文件显示的函数，稍后会更新
+        const tempUpdateFileFn = async (file: TFile) => {
+            // 临时实现，稍后会被fileDisplayService的方法替代
+            console.log('Temporary file display update function');
+        };
+        
+        // 初始化依赖其他服务的组件
+        this.fileProcessorService = new FileProcessorService(
+            this,
+            this.filenameParser,
+            this.fileDisplayCache,
+            this.timerService,
+            this.loggerService,
+            tempUpdateFileFn
+        );
+        
+        this.markdownLinkService = new MarkdownLinkService(
+            this,
+            this.filenameParser,
+            this.fileDisplayCache
+        );
+    }
+
     /**
      * 注册所有服务
      */
@@ -92,7 +137,7 @@ export default class TitleExtractorPlugin extends Plugin {
         // 注册日志服务（首先注册，因为其他服务可能依赖它）
         this.serviceContainer.register(
             SERVICE_TYPES.LoggerService, 
-            new LoggerService()
+            this.loggerService
         );
         
         // 注册错误处理服务
@@ -104,44 +149,43 @@ export default class TitleExtractorPlugin extends Plugin {
         // 注册定时器服务
         this.serviceContainer.register(
             SERVICE_TYPES.TimerService, 
-            new TimerService(this)
+            this.timerService
         );
         
         // 注册扩展缓存服务
         this.serviceContainer.register(
             SERVICE_TYPES.ExtensionCacheService,
-            new ExtensionCacheService(this)
+            this.extensionCacheService
+        );
+        
+        // 注册链接状态管理器服务
+        this.serviceContainer.register(
+            SERVICE_TYPES.LinkStateManager,
+            this.linkStateManager
+        );
+        
+        // 注册链接装饰扩展提供者服务
+        this.serviceContainer.register(
+            SERVICE_TYPES.LinkDecorationExtensionProvider,
+            new LinkDecorationExtensionProvider(this)
         );
         
         // 注册文件名解析服务（通过工厂函数）
         this.serviceContainer.registerFactory(
             SERVICE_TYPES.FilenameParser, 
-            (container) => new FilenameParser(
-                this,
-                container.get(SERVICE_TYPES.LoggerService)
-            )
+            () => this.filenameParser
         );
         
         // 注册文件显示缓存服务（通过工厂函数）
         this.serviceContainer.registerFactory(
             SERVICE_TYPES.FileDisplayCache, 
-            (container) => new FileDisplayCache(
-                (cleanupFn: () => void) => {
-                    const timerService = container.get<TimerService>(SERVICE_TYPES.TimerService);
-                    return timerService.setInterval(cleanupFn, 60000); // 每分钟执行一次
-                },
-                this, // 传入插件实例，使得缓存服务可以访问 app.loadData 和 app.saveData
-                container.get(SERVICE_TYPES.LoggerService) // 传入日志服务
-            )
+            () => this.fileDisplayCache
         );
         
         // 注册事件管理服务（通过工厂函数）
         this.serviceContainer.registerFactory(
             SERVICE_TYPES.EventManagerService,
-            (container) => new EventManagerService(
-                this,
-                container.get(SERVICE_TYPES.LoggerService)
-            )
+            () => this.eventManager
         );
         
         // 注册文件资源管理器显示服务（通过工厂函数）
@@ -176,11 +220,7 @@ export default class TitleExtractorPlugin extends Plugin {
         // 注册Markdown链接服务（通过工厂函数）
         this.serviceContainer.registerFactory(
             SERVICE_TYPES.MarkdownLinkService, 
-            (container) => new MarkdownLinkService(
-                this,
-                container.get(SERVICE_TYPES.FilenameParser),
-                container.get(SERVICE_TYPES.FileDisplayCache)
-            )
+            () => this.markdownLinkService
         );
         
         // 注册编辑器链接装饰器服务（通过工厂函数）
@@ -214,6 +254,9 @@ export default class TitleExtractorPlugin extends Plugin {
         const eventManagerService = this.serviceContainer.get<EventManagerService>(SERVICE_TYPES.EventManagerService);
         eventManagerService.setupVaultEventListeners();
         eventManagerService.setupMetadataEventListeners();
+        
+        // 获取主文件显示服务
+        this.fileDisplayService = this.serviceContainer.get<FileDisplayService>(SERVICE_TYPES.FileDisplayService);
     }
 
     onunload() {
@@ -221,11 +264,27 @@ export default class TitleExtractorPlugin extends Plugin {
         logger.log('卸载TitleExtractor插件...');
         
         try {
-            // Obsidian 会自动清理所有通过 registerXXX 注册的资源
-            // 不需要手动调用 this.app.workspace.updateOptions()
+            // 取消任何正在进行的缓存预热
+            try {
+                const fileDisplayCache = this.serviceContainer?.get<FileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
+                if (fileDisplayCache) {
+                    logger.log('取消正在进行的缓存预热...');
+                    if (fileDisplayCache.isWarmingUp()) {
+                        fileDisplayCache.cancelWarmupCache();
+                        logger.log('已取消缓存预热');
+                    }
+                }
+            } catch (e) {
+                logger.error('取消缓存预热时出错:', e);
+            }
             
             // 清理所有活跃编辑器中的 CodeMirror 装饰
             this.cleanupAllCodeMirrorDecorations();
+            
+            // 显式卸载编辑器扩展
+            if (this.editorExtensions.length) {
+                this.app.workspace.updateOptions();
+            }
             
             // 恢复所有文件显示（必要的自定义清理）
             if (this.fileDisplayService) {
@@ -323,12 +382,30 @@ export default class TitleExtractorPlugin extends Plugin {
             // 获取缓存服务
             const fileDisplayCache = this.serviceContainer.get<FileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
             
-            // 执行渐进式缓存预热
-            await fileDisplayCache.warmUpCache();
+            // 在应用完全加载后延迟一点时间再执行缓存预热
+            // 这有助于确保Obsidian的vault已完全加载所有文件
+            logger.log('计划在3秒后开始缓存预热，等待应用完全加载...');
             
-            logger.log('缓存预热启动完成');
+            // 使用setTimeout而不是立即执行，给Obsidian时间完成文件加载
+            setTimeout(async () => {
+                try {
+                    // 验证插件仍然活跃（防止在预热开始前插件已被禁用）
+                    if (!this.app || !(this as any).enabled) {
+                        logger.debug('插件已被禁用，取消缓存预热');
+                        return;
+                    }
+                    
+                    // 执行渐进式缓存预热
+                    await fileDisplayCache.warmUpCache();
+                    logger.log('缓存预热完成');
+                } catch (error) {
+                    logger.error('延迟执行缓存预热失败:', error);
+                }
+            }, 3000); // 延迟3秒
+            
+            logger.log('缓存预热已计划');
         } catch (error) {
-            logger.error('缓存预热启动失败:', error);
+            logger.error('安排缓存预热失败:', error);
         }
     }
 
@@ -368,6 +445,20 @@ export default class TitleExtractorPlugin extends Plugin {
                 if (file instanceof TFile && file.extension === 'md') {
                     this.fileDisplayService.handleFileOperation(file as TFile, 'rename', oldPath);
                 }
+            })
+        );
+        
+        // 监听布局变更事件
+        this.registerEvent(
+            this.app.workspace.on('layout-change', () => {
+                // 重置文件资源管理器观察器
+                const fileExplorerDisplayService = this.serviceContainer.get<FileExplorerDisplayService>(SERVICE_TYPES.FileExplorerDisplayService);
+                fileExplorerDisplayService.resetObservers();
+                
+                // 延迟更新所有文件的显示，避免布局更改后立即处理
+                setTimeout(() => {
+                    this.fileDisplayService.updateAllFilesDisplay(false);
+                }, 300);
             })
         );
         
@@ -424,12 +515,9 @@ export default class TitleExtractorPlugin extends Plugin {
             this.app.workspace.iterateAllLeaves(leaf => {
                 if (leaf.view instanceof MarkdownView) {
                     const view = leaf.view;
-                    const editor = view.editor;
                     
-                    // 获取CodeMirror实例
-                    const editorView = (editor as any).cm instanceof EditorView ? 
-                      (editor as any).cm : 
-                      (editor as any).cm?.state?.field?.(editorViewField);
+                    // 使用规范化的方法获取EditorView
+                    const editorView = getEditorView(view);
                     
                     if (editorView instanceof EditorView) {
                         // 发送清除所有装饰的效果
@@ -447,5 +535,37 @@ export default class TitleExtractorPlugin extends Plugin {
         } catch (e) {
             logger.error('清理所有CodeMirror装饰时出错:', e);
         }
+    }
+
+    /**
+     * 按照标准方式注册编辑器扩展
+     */
+    private registerStandardEditorExtensions() {
+        // 创建所有需要的编辑器扩展
+        this.editorExtensions = [
+            // 从编辑器链接装饰器获取扩展
+            ...this.serviceContainer.get<IEditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator).getExtension(),
+            
+            // 添加其他必要的扩展（如视口扩展）
+            viewportExtension(),
+            incrementalUpdateExtension(),
+            editorSyncExtension(this), // 传入插件实例
+            
+            // 添加组合扩展
+            this.createCombinedExtensions()
+        ];
+        
+        // 注册编辑器扩展
+        this.registerEditorExtension(this.editorExtensions);
+        
+        logger.log('已注册标准编辑器扩展');
+    }
+
+    /**
+     * 创建 CodeMirror 扩展集合
+     * 使用扩展缓存服务来优化性能
+     */
+    private createCombinedExtensions(): Extension {
+        return this.extensionCacheService.getCombinedExtensions();
     }
 } 

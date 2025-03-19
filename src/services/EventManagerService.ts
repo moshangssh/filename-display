@@ -20,7 +20,7 @@ export interface FileEvent {
     type: FileEventType;
     file: TFile | null;
     oldPath?: string;
-    data?: any;
+    data?: Record<string, unknown>;
     source?: string;
 }
 

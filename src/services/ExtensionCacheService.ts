@@ -3,9 +3,14 @@ import { EditorView } from '@codemirror/view';
 import { Logger } from '../utils/logger';
 import type { ITitleExtractorPlugin } from '../types';
 import { 
-    createLinkDecorationExtension, 
-    createEditorExtensions
-} from '../extensions/editor';
+    viewportExtension,
+    incrementalUpdateExtension,
+    editorSyncExtension
+} from '../extensions';
+import { 
+    LinkDecorationExtensionProvider,
+    ILinkDecorationExtensionProvider
+} from './LinkDecorationExtensionProvider';
 
 // 创建服务特定的日志记录器
 const logger = new Logger('ExtensionCacheService');
@@ -17,96 +22,62 @@ const logger = new Logger('ExtensionCacheService');
 export enum ExtensionType {
     LINK_DECORATION = 'link_decoration',
     EDITOR = 'editor',
-    COMBINED = 'combined'
+    COMBINED = 'combined',
+    LINK_OBSERVER = 'link_observer'
 }
 
 /**
- * CodeMirror扩展缓存服务
- * 负责缓存和管理CodeMirror扩展，避免重复创建
+ * 扩展缓存服务
+ * 负责创建、缓存和提供编辑器扩展
  */
 export class ExtensionCacheService {
     // 扩展缓存
     private extensionCache: Map<string, Extension> = new Map();
-    // 扩展创建函数映射
-    private extensionCreators: Map<string, (...args: any[]) => Extension> = new Map();
-    // 编辑器实例到扩展的映射，用于按需加载
-    private editorInstanceExtensions: WeakMap<EditorView, Set<string>> = new WeakMap();
-    // 设置变更监听器
-    private settingsChangeListener: EventListener | null = null;
     
+    // 扩展实例缓存
+    private instanceExtensions: Map<string, Extension> = new Map();
+    
+    // 编辑器实例的扩展
+    private editorInstanceExtensions: Map<EditorView, Set<string>> = new Map();
+    
+    // 扩展提供者
+    private linkDecorationProvider: ILinkDecorationExtensionProvider;
+    
+    /**
+     * 创建扩展缓存服务
+     */
     constructor(private plugin: ITitleExtractorPlugin) {
-        // 注册扩展创建函数
-        this.registerExtensionCreators();
+        logger.info('初始化扩展缓存服务');
         
-        // 设置设置变更监听器
-        this.setupSettingsChangeListener();
+        // 创建扩展提供者
+        this.linkDecorationProvider = new LinkDecorationExtensionProvider(plugin);
         
-        logger.log('扩展缓存服务已初始化');
+        // 注册基础扩展类型
+        this.registerExtensionTypes();
     }
     
     /**
-     * 设置设置变更监听方法
-     * 当设置变更时，清理相关扩展缓存
+     * 注册扩展类型与创建函数
      */
-    public setupSettingsChangeListener(): void {
-        // 移除之前的监听器（如果存在）
-        if (this.settingsChangeListener) {
-            window.removeEventListener('filename-display:settings-changed', this.settingsChangeListener);
-        }
-        
-        // 创建新的监听器
-        this.settingsChangeListener = ((event: CustomEvent) => {
-            // 清理相关扩展缓存
-            this.clearCacheByType(ExtensionType.COMBINED);
-            this.clearCacheByType(ExtensionType.LINK_DECORATION);
-            
-            logger.log('由于设置变更，扩展缓存已清理');
-        }) as EventListener;
-        
-        // 添加监听器
-        window.addEventListener('filename-display:settings-changed', this.settingsChangeListener);
+    private registerExtensionTypes(): void {
+        logger.debug('注册基础扩展类型');
     }
     
     /**
-     * 注册各种扩展的创建函数
+     * 获取链接装饰扩展
      */
-    private registerExtensionCreators(): void {
-        // 注册链接装饰扩展创建函数
-        this.extensionCreators.set(
-            ExtensionType.LINK_DECORATION,
-            (onChange: (view: EditorView) => void) => createLinkDecorationExtension(this.plugin, onChange)
-        );
-        
-        // 注册编辑器扩展创建函数
-        this.extensionCreators.set(
-            ExtensionType.EDITOR,
-            () => createEditorExtensions(this.plugin)
-        );
-    }
-    
-    /**
-     * 获取指定类型的扩展
-     * 如果缓存中存在，则返回缓存的扩展
-     * 否则创建新的扩展并缓存
-     */
-    public getExtension(type: string, key: string = 'default', ...args: any[]): Extension {
-        const cacheKey = `${type}:${key}`;
+    public getLinkDecorationExtension(onChange: (view: EditorView) => void): Extension {
+        const cacheKey = `${ExtensionType.LINK_DECORATION}:default`;
         
         // 检查缓存
         if (this.extensionCache.has(cacheKey)) {
-            logger.debug(`从缓存返回扩展: ${cacheKey}`);
+            logger.debug(`从缓存返回链接装饰扩展`);
             return this.extensionCache.get(cacheKey)!;
         }
         
-        // 检查是否有对应类型的创建函数
-        if (!this.extensionCreators.has(type)) {
-            logger.error(`未知的扩展类型: ${type}`);
-            throw new Error(`未知的扩展类型: ${type}`);
-        }
-        
         // 创建新的扩展
-        logger.debug(`创建新扩展: ${cacheKey}`);
-        const extension = this.extensionCreators.get(type)!(...args);
+        logger.debug(`创建新的链接装饰扩展`);
+        const extension = this.linkDecorationProvider.createLinkDecorationExtension(onChange);
         
         // 缓存扩展
         this.extensionCache.set(cacheKey, extension);
@@ -115,57 +86,81 @@ export class ExtensionCacheService {
     }
     
     /**
-     * 获取链接装饰扩展
+     * 获取链接观察者扩展
      */
-    public getLinkDecorationExtension(onChange: (view: EditorView) => void): Extension {
-        return this.getExtension(ExtensionType.LINK_DECORATION, 'default', onChange);
+    public getLinkObserverExtension(onChange: (view: EditorView) => void): Extension {
+        const cacheKey = `${ExtensionType.LINK_OBSERVER}:default`;
+        
+        // 检查缓存
+        if (this.extensionCache.has(cacheKey)) {
+            logger.debug(`从缓存返回链接观察者扩展`);
+            return this.extensionCache.get(cacheKey)!;
+        }
+        
+        // 创建新的扩展
+        logger.debug(`创建新的链接观察者扩展`);
+        const extension = this.linkDecorationProvider.createLinkObserverExtension(onChange);
+        
+        // 缓存扩展
+        this.extensionCache.set(cacheKey, extension);
+        
+        return extension;
     }
     
     /**
      * 获取编辑器扩展
      */
-    public getEditorExtension(): Extension {
-        return this.getExtension(ExtensionType.EDITOR);
+    public getEditorExtensions(): Extension {
+        const cacheKey = `${ExtensionType.EDITOR}:default`;
+        
+        // 检查缓存
+        if (this.extensionCache.has(cacheKey)) {
+            logger.debug(`从缓存返回编辑器扩展`);
+            return this.extensionCache.get(cacheKey)!;
+        }
+        
+        // 创建新的扩展
+        logger.debug(`创建新的编辑器扩展`);
+        const extension = this.linkDecorationProvider.createEditorExtensions(this.plugin);
+        
+        // 缓存扩展
+        this.extensionCache.set(cacheKey, extension);
+        
+        return extension;
     }
     
     /**
-     * 获取组合扩展
-     * 将多个扩展组合为一个
+     * 获取合并的扩展集合
      */
     public getCombinedExtensions(): Extension {
         const cacheKey = `${ExtensionType.COMBINED}:default`;
         
         // 检查缓存
         if (this.extensionCache.has(cacheKey)) {
-            logger.debug(`从缓存返回组合扩展`);
+            logger.debug(`从缓存返回合并扩展`);
             return this.extensionCache.get(cacheKey)!;
         }
         
-        // 创建新的组合扩展
-        logger.debug(`创建新的组合扩展`);
+        // 创建合并扩展
+        logger.debug(`创建新的合并扩展`);
+        const extension = [
+            // 基础扩展
+            viewportExtension(),
+            incrementalUpdateExtension(),
+            editorSyncExtension(this.plugin),
+            
+            // 功能扩展
+            this.getEditorExtensions()
+        ];
         
-        // 收集扩展
-        const extensions: Extension[] = [];
+        // 缓存扩展
+        this.extensionCache.set(cacheKey, extension);
         
-        // 仅当启用了链接装饰时添加链接装饰扩展
-        if (this.plugin.settings.enableEditorLinkDecorations) {
-            extensions.push(this.getLinkDecorationExtension((view) => {
-                if (this.plugin._linkDecorator) {
-                    this.plugin._linkDecorator.onEditorChange?.(view);
-                }
-            }));
-        }
-        
-        // 缓存并返回组合扩展
-        const combinedExtension = extensions;
-        this.extensionCache.set(cacheKey, combinedExtension);
-        
-        return combinedExtension;
+        return extension;
     }
     
     /**
      * 为编辑器实例注册扩展
-     * 这支持按需加载机制，只在编辑器实例创建时添加扩展
      */
     public registerEditorExtensions(view: EditorView, extensionTypes: string[]): void {
         // 确保编辑器实例有对应的扩展集合
@@ -193,37 +188,17 @@ export class ExtensionCacheService {
      * 清除所有缓存
      */
     public clearCache(): void {
+        logger.debug('清除扩展缓存');
         this.extensionCache.clear();
-        logger.log('扩展缓存已清除');
-    }
-    
-    /**
-     * 清除指定类型的缓存
-     */
-    public clearCacheByType(type: string): void {
-        for (const key of this.extensionCache.keys()) {
-            if (key.startsWith(`${type}:`)) {
-                this.extensionCache.delete(key);
-            }
-        }
-        logger.log(`类型为 ${type} 的扩展缓存已清除`);
+        this.instanceExtensions.clear();
     }
     
     /**
      * 释放资源
      */
     public dispose(): void {
-        // 清理缓存和创建函数映射
-        this.extensionCache.clear();
-        this.extensionCreators.clear();
-        
-        // 移除事件监听器
-        if (this.settingsChangeListener) {
-            window.removeEventListener('filename-display:settings-changed', this.settingsChangeListener);
-            this.settingsChangeListener = null;
-        }
-        
-        // WeakMap会自动清理，不需要手动清理
-        logger.log('扩展缓存服务已释放所有资源');
+        logger.debug('释放扩展缓存服务资源');
+        this.clearCache();
+        this.editorInstanceExtensions.clear();
     }
 } 

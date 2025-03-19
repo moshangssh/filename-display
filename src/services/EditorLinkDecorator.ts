@@ -1,4 +1,4 @@
-import { Editor, MarkdownView, TFile, editorViewField } from 'obsidian';
+import { Editor, MarkdownView, TFile } from 'obsidian';
 import { EditorView } from '@codemirror/view';
 import { Extension } from '@codemirror/state';
 import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
@@ -7,14 +7,16 @@ import { FileDisplayCache } from './FileDisplayCache';
 import { LinkHandler, LinkInfo, LinkProcessResult } from './LinkHandler';
 import { Logger } from '../utils/logger';
 import { 
-    createLinkDecorationExtension, 
-    LinkReplaceWidget, 
-    addLinkDecoration, 
+    LinkReplaceWidget,
+    addLinkDecoration,
     removeLinkDecoration,
     updateLinkDisplayName
-} from '../extensions/editor';
+} from '../extensions';
 import { ExtensionCacheService, ExtensionType } from './ExtensionCacheService';
 import { ServiceContainer, SERVICE_TYPES } from './di/ServiceContainer';
+import { getEditorView } from '../utils/editor-utils';
+import { ILinkStateManager } from './interfaces/IServices';
+import { ILinkDecorationExtensionProvider } from './LinkDecorationExtensionProvider';
 
 // 创建服务特定的日志记录器
 const logger = new Logger('EditorLinkDecorator');
@@ -26,16 +28,22 @@ export class EditorLinkDecorator extends LinkHandler {
     private currentFile: TFile | null = null;
     // 添加一个Map来跟踪已处理的链接，包含path属性
     private processedLinks: Map<string, {from: number, to: number, displayName: string, path: string}> = new Map();
-    // 新增：用于跟踪当前编辑器中的所有链接
+    // 用于跟踪当前编辑器中的所有链接
     private allCurrentLinks: LinkInfo[] = [];
-    // 新增：预处理时间戳
+    // 预处理时间戳
     private lastPreprocessTime: number = 0;
-    // 新增：预处理间隔 (毫秒)
+    // 预处理间隔 (毫秒)
     private readonly PREPROCESS_INTERVAL: number = 5000; // 5秒
-    // 不强制指定批处理大小的具体数值类型
+    // 批处理大小
     private readonly batchSize = 10;
     // 扩展缓存服务
     private extensionCacheService: ExtensionCacheService;
+    // 扩展提供者
+    private extensionProvider: ILinkDecorationExtensionProvider;
+    // 链接状态管理器
+    private linkStateManager: ILinkStateManager;
+    // 扩展集合
+    private extensions: Extension[] = [];
     
     constructor(plugin: ITitleExtractorPlugin, filenameParser: FilenameParser, fileDisplayCache: FileDisplayCache) {
         super(plugin, filenameParser, fileDisplayCache, {
@@ -44,14 +52,25 @@ export class EditorLinkDecorator extends LinkHandler {
             respectCustomLinkText: true
         });
         
-        // 获取扩展缓存服务
+        // 获取服务容器
         const serviceContainer = ServiceContainer.getInstance(plugin);
+        
+        // 获取扩展缓存服务
         this.extensionCacheService = serviceContainer.get<ExtensionCacheService>(SERVICE_TYPES.ExtensionCacheService);
         
-        // 注册编辑器扩展 - 使用扩展缓存服务
-        this.plugin.registerEditorExtension([
-            this.extensionCacheService.getLinkDecorationExtension((view) => this.onEditorChange(view))
-        ]);
+        // 获取链接状态管理器
+        this.linkStateManager = serviceContainer.get<ILinkStateManager>(SERVICE_TYPES.LinkStateManager);
+        
+        // 获取扩展提供者
+        this.extensionProvider = serviceContainer.get<ILinkDecorationExtensionProvider>(
+            SERVICE_TYPES.LinkDecorationExtensionProvider
+        );
+        
+        // 创建扩展（但不直接注册，由Plugin主类调用getExtension获取）
+        this.extensions = [
+            this.extensionCacheService.getLinkDecorationExtension((view) => this.onEditorChange(view)),
+            this.extensionCacheService.getLinkObserverExtension((view) => this.onEditorChange(view))
+        ];
         
         // 保存装饰器引用，供扩展使用
         plugin._linkDecorator = this;
@@ -71,16 +90,16 @@ export class EditorLinkDecorator extends LinkHandler {
             this.plugin.app.metadataCache.on('changed', (file) => {
                 if (file instanceof TFile && this.currentFile && file.path === this.currentFile.path) {
                     // 使用防抖避免频繁更新
-                    this.scheduleUpdate();
+                    this.queueUpdate();
                 }
             })
         );
         
-        // 新增：在插件加载时预热缓存
+        // 在插件加载时预热缓存
         this.warmUpCache();
     }
 
-    // 新增：在插件初始化时预热缓存
+    // 在插件初始化时预热缓存
     private async warmUpCache(): Promise<void> {
         await this.fileDisplayCache.warmUpCache();
     }
@@ -88,12 +107,12 @@ export class EditorLinkDecorator extends LinkHandler {
     // 编辑器变更处理，由扩展触发
     public onEditorChange(view: EditorView): void {
         if (view === this.activeEditorView) {
-            this.scheduleUpdate();
+            this.queueUpdate();
         }
     }
 
-    // 新增：调度更新处理，避免频繁处理
-    private scheduleUpdate(): void {
+    // 调度更新处理，避免频繁处理
+    private queueUpdate(): void {
         if (this.isProcessing) {
             this.pendingUpdate = true;
             return;
@@ -109,7 +128,7 @@ export class EditorLinkDecorator extends LinkHandler {
             // 如果在处理过程中有新的更新请求，继续处理
             if (this.pendingUpdate) {
                 this.pendingUpdate = false;
-                this.scheduleUpdate();
+                this.queueUpdate();
             }
         });
     }
@@ -141,7 +160,7 @@ export class EditorLinkDecorator extends LinkHandler {
                 this.preprocessLinks();
                 
                 // 处理链接的可见部分
-                this.scheduleUpdate();
+                this.queueUpdate();
             } else if (!this.plugin.settings.enableEditorLinkDecorations && this.activeEditorView) {
                 // 如果已禁用但之前有装饰，清除它们
                 this.clearDecorations();
@@ -160,17 +179,15 @@ export class EditorLinkDecorator extends LinkHandler {
         if (this.currentFile && file.path === this.currentFile.path && this.activeEditorView) {
             // 重新收集所有链接
             this.preprocessLinks();
-            this.scheduleUpdate();
+            this.queueUpdate();
         }
     }
 
     // 更新编辑器视图引用
     private updateEditorView(editor: Editor, view: MarkdownView): void {
         try {
-            // 优先使用类型安全的方式
-            const editorView = (editor as any).cm instanceof EditorView ? 
-              (editor as any).cm : 
-              (editor as any).cm?.state?.field?.(editorViewField);
+            // 使用规范化的工具函数获取编辑器视图
+            const editorView = getEditorView(view);
             
             if (editorView instanceof EditorView) {
                 this.activeEditorView = editorView;
@@ -180,7 +197,7 @@ export class EditorLinkDecorator extends LinkHandler {
             logger.log("无法获取EditorView：当前视图或编辑器的结构与预期不符");
             this.activeEditorView = null;
         } catch (e) {
-            logger.log("获取EditorView时出现错误，可能当前不是编辑模式：", e);
+            logger.log("获取EditorView时出错，可能当前不是编辑模式：", e);
             this.activeEditorView = null;
         }
     }
@@ -350,10 +367,15 @@ export class EditorLinkDecorator extends LinkHandler {
                 return; // 如果已经应用了相同的显示名称，则跳过
             }
             
-            // 如果链接已存在但显示名称变了，尝试直接更新文本而不重新创建装饰
+            // 如果链接已存在但显示名称变了，使用 LinkStateManager 更新
             try {
-                // 应用更新
-                updateLinkDisplayName(this.activeEditorView, from, to, displayName);
+                // 使用 LinkStateManager 应用更新
+                this.linkStateManager.updateLinkDisplayName(
+                    this.activeEditorView,
+                    from,
+                    to,
+                    displayName
+                );
                 
                 // 更新处理记录
                 this.processedLinks.set(key, {
@@ -365,7 +387,7 @@ export class EditorLinkDecorator extends LinkHandler {
                 
                 return;
             } catch (e) {
-                // 如果更新失败，回退到重新创建装饰
+                // 如果更新失败，记录错误
                 logger.log("更新链接文本失败，将重新创建装饰:", e);
             }
         }
@@ -406,10 +428,8 @@ export class EditorLinkDecorator extends LinkHandler {
         }
         
         try {
-            // 通过状态效果清除所有装饰
-            this.activeEditorView.dispatch({
-                effects: removeLinkDecoration.of(null)
-            });
+            // 通过链接状态管理器清除所有装饰
+            this.linkStateManager.clearDecorations(this.activeEditorView);
             
             // 清除处理过的链接记录
             this.processedLinks.clear();
@@ -491,6 +511,9 @@ export class EditorLinkDecorator extends LinkHandler {
         this.processedLinks.clear();
         this.allCurrentLinks = [];
         
+        // 释放链接状态管理器资源
+        this.linkStateManager.dispose();
+        
         // 重置状态
         this.activeEditorView = null;
         this.currentFile = null;
@@ -503,9 +526,6 @@ export class EditorLinkDecorator extends LinkHandler {
      * 实现IEditorLinkDecorator接口
      */
     public getExtension(): Extension[] {
-        // 返回从扩展缓存服务获取的扩展
-        return [
-            this.extensionCacheService.getLinkDecorationExtension((view) => this.onEditorChange(view))
-        ];
+        return this.extensions;
     }
 } 

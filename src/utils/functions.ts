@@ -11,7 +11,7 @@ import { ITimerService } from '../services/interfaces/IServices';
  * @param timerService 可选的TimerService实例，如不提供则直接使用window的计时器
  * @returns 节流后的函数
  */
-export function throttle<T extends (...args: any[]) => any>(
+export function throttle<T extends (...args: unknown[]) => unknown>(
     func: T,
     wait: number,
     timerService?: ITimerService
@@ -19,7 +19,7 @@ export function throttle<T extends (...args: any[]) => any>(
     let timeout: number | null = null;
     let lastExec = 0;
 
-    return function(this: any, ...args: Parameters<T>) {
+    return function(this: unknown, ...args: Parameters<T>) {
         const context = this;
         const now = Date.now();
         const remaining = wait - (now - lastExec);

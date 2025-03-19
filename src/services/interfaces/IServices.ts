@@ -3,6 +3,8 @@ import { FileDisplayResult } from '../../types';
 import { Extension } from '@codemirror/state';
 import { IErrorHandler } from './IErrorHandler';
 import { FileEventType, EventCallback, FileEvent } from '../EventManagerService';
+import { EditorView } from '@codemirror/view';
+import { LinkBatchCallback, LinkInfo, LinkUpdateResult } from '../LinkStateManager';
 
 // 导出错误处理服务接口
 export type { IErrorHandler };
@@ -58,6 +60,15 @@ export interface IFileDisplayCache {
     getCacheCleanStrategy(): CacheCleanStrategy;
     triggerCleanup(): void;
     
+    dispose(): void;
+}
+
+// 链接状态管理接口
+export interface ILinkStateManager {
+    updateLinkText(view: EditorView, id: string, newText: string): LinkUpdateResult;
+    updateLinkDisplayName(view: EditorView, from: number, to: number, displayName: string): LinkUpdateResult;
+    processBatch(view: EditorView, links: LinkInfo[], callback: LinkBatchCallback): void;
+    clearDecorations(view: EditorView): void;
     dispose(): void;
 }
 

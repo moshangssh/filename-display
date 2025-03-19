@@ -61,7 +61,15 @@ export interface IErrorHandler {
     /**
      * 获取错误日志
      */
-    getErrorLogs(): any[];
+    getErrorLogs(): Array<{
+        message: string;
+        error?: Error;
+        level: ErrorLevel;
+        timestamp: number;
+        source: string;
+        operation: string;
+        data?: Record<string, unknown>;
+    }>;
     
     /**
      * 清除错误日志

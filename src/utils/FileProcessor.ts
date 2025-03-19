@@ -1,5 +1,5 @@
 import { TFile } from 'obsidian';
-import { IFilenameDisplayPlugin, FileDisplayResult } from '../types';
+import { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from '../services/FilenameParser';
 import { FileDisplayCache } from '../services/FileDisplayCache';
 import { Logger } from './logger';
@@ -10,12 +10,12 @@ const logger = new Logger('FileProcessor');
  * 共享的文件处理工具类，用于处理文件名称显示逻辑
  */
 export class FileProcessor {
-    private plugin: IFilenameDisplayPlugin;
+    private plugin: ITitleExtractorPlugin;
     private filenameParser: FilenameParser;
     private fileDisplayCache: FileDisplayCache;
 
     constructor(
-        plugin: IFilenameDisplayPlugin,
+        plugin: ITitleExtractorPlugin,
         filenameParser: FilenameParser,
         fileDisplayCache: FileDisplayCache
     ) {

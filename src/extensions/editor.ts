@@ -7,6 +7,7 @@ import { viewportExtension } from './viewport';
 import { incrementalUpdateExtension } from './incremental-update';
 import { editorSyncExtension } from './editor-sync';
 import { MarkdownView, editorViewField } from 'obsidian';
+import { getEditorView } from '../utils/editor-utils';
 
 // 创建服务特定的日志记录器
 const logger = new Logger('EditorExtensions');
@@ -66,16 +67,12 @@ export class LinkReplaceWidget extends WidgetType {
         }
         
         const span = document.createElement('span');
-        span.className = 'cm-link cm-underline cm-hmd-internal-link filename-display-replaced';
+        span.className = 'cm-link cm-hmd-internal-link filename-display-replaced';
         span.textContent = this.displayName;
         
         // 保留链接可点击性
         span.dataset.originalPath = this.originalPath;
         span.dataset.widgetId = this.id; // 添加小部件ID到数据属性
-        span.style.cursor = 'pointer';
-        
-        // 平滑过渡效果
-        span.style.transition = 'opacity 0.15s ease-in';
         
         return span;
     }
@@ -83,6 +80,22 @@ export class LinkReplaceWidget extends WidgetType {
     destroy(dom: HTMLElement | null): void {
         // 标记为已销毁
         this.isDestroyed = true;
+        
+        // 清理DOM元素
+        if (dom) {
+            // 移除事件监听
+            dom.removeAttribute('data-widget-id');
+            dom.removeAttribute('data-original-path');
+            
+            // 清除任何可能的内联样式
+            dom.removeAttribute('style');
+            
+            // 确保DOM元素不会保持对widget的引用
+            dom.textContent = dom.textContent; // 触发内容刷新，确保内部引用被清除
+        }
+        
+        // 释放对插件的引用
+        (this as any).plugin = null;
     }
 
     ignoreEvent() {
@@ -106,10 +119,9 @@ export class LinkReplaceWidget extends WidgetType {
             // 通过事务分发效果
             if (this.plugin.app.workspace.activeLeaf?.view instanceof MarkdownView) {
                 const view = this.plugin.app.workspace.activeLeaf.view as MarkdownView;
-                // 使用更规范的方式获取EditorView实例
-                const editorView = (view.editor as any).cm instanceof EditorView ? 
-                  (view.editor as any).cm : 
-                  (view.editor as any).cm?.state?.field?.(editorViewField);
+                
+                // 使用规范化的工具函数获取编辑器视图
+                const editorView = getEditorView(view);
                 
                 if (editorView instanceof EditorView) {
                     // 使用错误处理工具类封装操作
@@ -542,26 +554,68 @@ export enum EditorErrorType {
     DECORATOR_INITIALIZATION = 'DECORATOR_INITIALIZATION'
 }
 
-// 错误处理工具类
+// 错误上下文基本接口
+export interface ErrorContextBase {
+    [key: string]: unknown;
+}
+
+// 状态恢复错误上下文
+export interface StateRecoveryContext extends ErrorContextBase {
+    view?: EditorView;
+    previousState?: DecorationSet;
+}
+
+// 小部件更新错误上下文
+export interface WidgetUpdateContext extends ErrorContextBase {
+    view?: EditorView;
+    widget?: {
+        from: number;
+        to: number;
+        originalPath: string;
+        displayName?: string;
+    };
+}
+
+// 批处理错误上下文
+export interface BatchProcessingContext extends ErrorContextBase {
+    view?: EditorView;
+    state?: {
+        processedCount: number;
+        links: Array<{from: number; to: number; path: string; displayName: string}>;
+    };
+}
+
+// 装饰器初始化错误上下文
+export interface DecoratorInitializationContext extends ErrorContextBase {
+    plugin?: ITitleExtractorPlugin;
+}
+
+// 组合所有错误上下文类型
+export type EditorErrorContext = 
+    | StateRecoveryContext 
+    | WidgetUpdateContext 
+    | BatchProcessingContext 
+    | DecoratorInitializationContext;
+
 export class EditorErrorHandler {
     private static readonly logger = new Logger('EditorErrorHandler');
     
     // 处理错误的主方法
-    public static handleError(error: Error, type: EditorErrorType, context: any = {}): void {
+    public static handleError(error: Error, type: EditorErrorType, context: EditorErrorContext = {}): void {
         this.logger.error(`编辑器错误 [${type}]:`, error);
         
         switch (type) {
             case EditorErrorType.STATE_RECOVERY:
-                this.handleStateRecoveryError(error, context);
+                this.handleStateRecoveryError(error, context as StateRecoveryContext);
                 break;
             case EditorErrorType.WIDGET_UPDATE:
-                this.handleWidgetUpdateError(error, context);
+                this.handleWidgetUpdateError(error, context as WidgetUpdateContext);
                 break;
             case EditorErrorType.BATCH_PROCESSING:
-                this.handleBatchProcessingError(error, context);
+                this.handleBatchProcessingError(error, context as BatchProcessingContext);
                 break;
             case EditorErrorType.DECORATOR_INITIALIZATION:
-                this.handleDecoratorInitializationError(error, context);
+                this.handleDecoratorInitializationError(error, context as DecoratorInitializationContext);
                 break;
             default:
                 this.logger.error('未知错误类型:', type);
@@ -570,7 +624,7 @@ export class EditorErrorHandler {
     }
     
     // 处理状态恢复错误
-    private static handleStateRecoveryError(error: Error, context: any): void {
+    private static handleStateRecoveryError(error: Error, context: StateRecoveryContext): void {
         this.logger.error('状态恢复错误:', error);
         
         // 尝试回滚到上一个有效状态
@@ -589,7 +643,7 @@ export class EditorErrorHandler {
     }
     
     // 处理小部件更新错误
-    private static handleWidgetUpdateError(error: Error, context: any): void {
+    private static handleWidgetUpdateError(error: Error, context: WidgetUpdateContext): void {
         this.logger.error('小部件更新错误:', error);
         
         // 尝试重建损坏的小部件
@@ -621,20 +675,21 @@ export class EditorErrorHandler {
     }
     
     // 处理批处理错误
-    private static handleBatchProcessingError(error: Error, context: any): void {
+    private static handleBatchProcessingError(error: Error, context: BatchProcessingContext): void {
         this.logger.error('批处理错误:', error);
         
         // 尝试保存处理进度
         try {
-            if (context.state && context.view) {
+            const { view, state } = context;
+            if (state && view) {
                 this.logger.debug('尝试保存批处理进度');
                 
                 // 暂停批处理过程
-                context.view.dispatch({
+                view.dispatch({
                     effects: [
                         processBatchEffect.of({
                             batchSize: 0,
-                            startIndex: context.state.processedCount
+                            startIndex: state.processedCount
                         })
                     ]
                 });
@@ -645,10 +700,10 @@ export class EditorErrorHandler {
                         this.logger.debug('尝试重新启动批处理');
                         
                         // 重新启动批处理
-                        context.view.dispatch({
+                        view.dispatch({
                             effects: [
                                 startBatchProcessEffect.of({
-                                    links: context.state.links
+                                    links: state.links
                                 })
                             ]
                         });
@@ -663,7 +718,7 @@ export class EditorErrorHandler {
     }
     
     // 处理装饰器初始化错误
-    private static handleDecoratorInitializationError(error: Error, context: any): void {
+    private static handleDecoratorInitializationError(error: Error, context: DecoratorInitializationContext): void {
         this.logger.error('装饰器初始化错误:', error);
         
         // 尝试重置装饰器
@@ -696,7 +751,7 @@ export class EditorErrorHandler {
     public static withErrorHandling<T>(
         fn: () => T, 
         errorType: EditorErrorType, 
-        context: any = {}
+        context: EditorErrorContext = {}
     ): T | undefined {
         try {
             return fn();
@@ -710,7 +765,7 @@ export class EditorErrorHandler {
     public static async withAsyncErrorHandling<T>(
         fn: () => Promise<T>, 
         errorType: EditorErrorType, 
-        context: any = {}
+        context: EditorErrorContext = {}
     ): Promise<T | undefined> {
         try {
             return await fn();

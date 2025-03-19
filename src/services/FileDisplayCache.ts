@@ -41,6 +41,15 @@ export class FileDisplayCache {
     private lastCleanupTime: number = 0; // 上次清理时间
     private pendingCleanup: boolean = false; // 是否有待处理的清理
     
+    // 是否已中断缓存预热
+    private isWarmupCancelled: boolean = false;
+    // 缓存预热进度（0-100）
+    private warmupProgress: number = 0;
+    // 缓存预热的Promise，用于跟踪和取消预热过程
+    private warmupPromise: Promise<void> | null = null;
+    // 预热任务的唯一标识符，用于防止多个预热任务冲突
+    private warmupTaskId: string = '';
+    
     constructor(
         private timerCallback?: (cleanupCallback: () => void) => number, 
         plugin?: any,
@@ -620,97 +629,323 @@ export class FileDisplayCache {
         return this.cacheWarmedUp;
     }
     
+    /**
+     * 获取缓存预热进度
+     * @returns 预热进度（0-100）
+     */
+    public getWarmupProgress(): number {
+        return this.warmupProgress;
+    }
+    
+    /**
+     * 取消当前的缓存预热过程
+     */
+    public cancelWarmupCache(): void {
+        if (!this.warmupPromise) {
+            this.logger?.debug('没有正在进行的缓存预热过程可取消');
+            return;
+        }
+        
+        this.logger?.log('取消缓存预热过程');
+        this.isWarmupCancelled = true;
+        this.warmupTaskId = ''; // 清空任务ID，允许新任务开始
+    }
+    
+    /**
+     * 检查缓存预热是否已被取消
+     * @private
+     */
+    private checkWarmupCancelled(): boolean {
+        if (this.isWarmupCancelled) {
+            this.logger?.log('缓存预热已被取消');
+            this.warmupProgress = 0;
+            this.isWarmupCancelled = false; // 重置取消标志
+            this.warmupPromise = null;
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * 是否正在预热缓存
+     */
+    public isWarmingUp(): boolean {
+        return this.warmupPromise !== null;
+    }
+    
     // 执行缓存预热
     public async warmUpCache(): Promise<void> {
-        if (this.cacheWarmedUp) return;
+        // 防止重复预热
+        if (this.cacheWarmedUp) {
+            this.logger?.debug('缓存已预热，跳过');
+            return;
+        }
         
-        try {
-            // 首先尝试从持久化存储加载缓存
-            await this.loadCacheFromData();
-            
-            // 如果缓存已经加载成功，则不需要重新预热
-            if (this.cacheWarmedUp) {
-                this.logger?.log('从持久化存储成功加载缓存数据');
-                return;
-            }
-            
-            // 如果没有缓存或缓存加载失败，则执行预热
-            this.logger?.log('开始执行渐进式缓存预热...');
-            
-            // 1. 加载所有markdown文件
-            const files = this.plugin?.app?.vault?.getMarkdownFiles() || [];
-            
-            // 2. 分离可见文件和其他文件
-            const fileProcessorService = this.serviceContainer.get<FileProcessorService>(SERVICE_TYPES.FileProcessorService);
-            const { visibleFiles, otherFiles } = fileProcessorService.separateFilesByVisibility(files);
-            
-            // 3. 先处理可见文件
-            for (const file of visibleFiles) {
-                // 获取文件的缓存
-                const fileCache = this.plugin?.app?.metadataCache?.getFileCache(file);
-                if (!fileCache || !fileCache.links) continue;
+        // 防止同时多次预热
+        if (this.warmupPromise) {
+            this.logger?.log('缓存预热已在进行中，返回现有Promise');
+            return this.warmupPromise;
+        }
+        
+        // 创建新的任务ID
+        this.warmupTaskId = `warmup-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+        const currentTaskId = this.warmupTaskId;
+        
+        // 重置状态
+        this.warmupProgress = 0;
+        this.isWarmupCancelled = false;
+        
+        // 创建并存储预热Promise
+        this.warmupPromise = (async () => {
+            try {
+                this.logger?.log('开始执行缓存预热...');
                 
-                // 记录链接关系
-                for (const link of fileCache.links) {
-                    if (!link.link) continue;
-                    
-                    // 获取链接目标文件
-                    const targetFile = this.plugin?.app?.metadataCache?.getFirstLinkpathDest(link.link, file.path);
-                    if (!targetFile) continue;
-                    
-                    // 添加链接关系
-                    this.addFileLink(file.path, targetFile.path);
+                // 首先尝试从持久化存储加载缓存
+                await this.loadCacheFromData();
+                
+                // 检查是否已取消
+                if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
+                    return;
                 }
-            }
-            
-            // 4. 在后台处理其他文件
-            if (otherFiles.length > 0) {
-                // 创建一个处理函数
-                const processFile = async (file: TFile) => {
-                    const fileCache = this.plugin?.app?.metadataCache?.getFileCache(file);
-                    if (!fileCache || !fileCache.links) return;
-                    
-                    for (const link of fileCache.links) {
-                        if (!link.link) continue;
-                        
-                        const targetFile = this.plugin?.app?.metadataCache?.getFirstLinkpathDest(link.link, file.path);
-                        if (!targetFile) continue;
-                        
-                        this.addFileLink(file.path, targetFile.path);
+                
+                // 如果缓存已经加载成功，则不需要重新预热
+                if (this.cacheWarmedUp) {
+                    this.logger?.log('从持久化存储成功加载缓存数据');
+                    this.warmupProgress = 100;
+                    return;
+                }
+                
+                // 更新进度
+                this.warmupProgress = 10;
+                
+                // 如果没有缓存或缓存加载失败，则执行预热
+                this.logger?.log('开始执行渐进式缓存预热...');
+                
+                // 1. 加载所有markdown文件
+                let files: any[] = [];
+                try {
+                    if (!this.plugin?.app?.vault) {
+                        this.logger?.error('无法访问Vault，可能是插件初始化时序问题');
+                        // 设置为已预热，避免反复尝试
+                        this.cacheWarmedUp = true;
+                        this.warmupProgress = 100;
+                        return;
                     }
-                };
-                
-                // 使用TimerService在空闲时间处理其余文件
-                const timerService = this.serviceContainer.get<ITimerService>(SERVICE_TYPES.TimerService);
-                
-                // 分批处理文件
-                const batchSize = 20;
-                for (let i = 0; i < otherFiles.length; i += batchSize) {
-                    const batch = otherFiles.slice(i, i + batchSize);
                     
-                    // 使用requestIdleCallback在浏览器空闲时处理
-                    timerService.requestIdleCallback(async () => {
-                        for (const file of batch) {
-                            await processFile(file);
+                    // 添加更多日志帮助调试
+                    this.logger?.log('尝试获取Markdown文件...');
+                    const vault = this.plugin.app.vault;
+                    
+                    // 确保vault.getMarkdownFiles方法存在
+                    if (typeof vault.getMarkdownFiles !== 'function') {
+                        this.logger?.error('Vault.getMarkdownFiles方法不存在，使用备用方法');
+                        
+                        // 备用方法：获取所有文件然后过滤
+                        const allFiles = vault.getFiles() || [];
+                        files = allFiles.filter((file: TFile) => file.extension === 'md');
+                        this.logger?.log(`使用备用方法找到 ${files.length} 个Markdown文件`);
+                    } else {
+                        // 使用标准方法
+                        files = vault.getMarkdownFiles() || [];
+                        this.logger?.log(`使用标准方法找到 ${files.length} 个Markdown文件`);
+                    }
+                } catch (error) {
+                    this.logger?.error('获取Markdown文件时出错:', error);
+                    files = [];
+                }
+                
+                if (!files || !files.length) {
+                    this.logger?.debug('未找到Markdown文件，等待2秒后重试...');
+                    
+                    // 延迟重试，可能是Obsidian还在加载文件
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    
+                    try {
+                        const vault = this.plugin?.app?.vault;
+                        if (vault) {
+                            if (typeof vault.getMarkdownFiles === 'function') {
+                                files = vault.getMarkdownFiles() || [];
+                            } else if (typeof vault.getFiles === 'function') {
+                                const allFiles = vault.getFiles() || [];
+                                files = allFiles.filter((file: TFile) => file.extension === 'md');
+                            }
+                            
+                            this.logger?.log(`重试后找到 ${files.length} 个Markdown文件`);
+                        }
+                    } catch (retryError) {
+                        this.logger?.error('重试获取Markdown文件时出错:', retryError);
+                    }
+                    
+                    // 如果仍然没有找到文件，设置为已预热并返回
+                    if (!files.length) {
+                        this.logger?.debug('即使在重试后仍未找到Markdown文件，缓存预热结束');
+                        this.warmupProgress = 100;
+                        this.cacheWarmedUp = true;
+                        return;
+                    }
+                }
+                
+                // 更新进度
+                this.warmupProgress = 20;
+                
+                // 检查是否已取消
+                if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
+                    return;
+                }
+                
+                // 2. 分离可见文件和其他文件
+                const fileProcessorService = this.serviceContainer.get<FileProcessorService>(SERVICE_TYPES.FileProcessorService);
+                const { visibleFiles, otherFiles } = fileProcessorService.separateFilesByVisibility(files);
+                
+                // 更新进度
+                this.warmupProgress = 30;
+                
+                // 检查是否已取消
+                if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
+                    return;
+                }
+                
+                // 3. 先处理可见文件
+                let processedCount = 0;
+                for (const file of visibleFiles) {
+                    try {
+                        // 获取文件的缓存
+                        const fileCache = this.plugin?.app?.metadataCache?.getFileCache(file);
+                        if (!fileCache || !fileCache.links) continue;
+                        
+                        // 记录链接关系
+                        for (const link of fileCache.links) {
+                            if (!link.link) continue;
+                            
+                            // 获取链接目标文件
+                            const targetFile = this.plugin?.app?.metadataCache?.getFirstLinkpathDest(link.link, file.path);
+                            if (!targetFile) continue;
+                            
+                            // 添加链接关系
+                            this.addFileLink(file.path, targetFile.path);
                         }
                         
-                        // 如果这是最后一批，标记缓存预热完成并保存
-                        if (i + batchSize >= otherFiles.length) {
-                            this.cacheWarmedUp = true;
-                            await this.saveCacheToData();
-                            this.logger?.log('缓存预热完成，已保存到持久化存储');
+                        // 定期更新进度并检查取消
+                        if (++processedCount % 20 === 0) {
+                            // 计算可见文件的进度（30%-60%）
+                            const visibleProgress = 30 + Math.min(30, Math.floor(30 * processedCount / visibleFiles.length));
+                            this.warmupProgress = visibleProgress;
+                            
+                            // 检查是否已取消
+                            if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
+                                return;
+                            }
+                            
+                            // 让UI有机会更新（避免长时间阻塞主线程）
+                            await new Promise(resolve => setTimeout(resolve, 0));
                         }
-                    });
+                    } catch (error) {
+                        this.logger?.error(`处理可见文件 ${file.path} 时出错:`, error);
+                        // 继续处理其他文件
+                    }
                 }
-            } else {
-                // 如果没有其他文件需要处理，直接标记完成并保存
+                
+                // 更新进度
+                this.warmupProgress = 60;
+                
+                // 检查是否已取消
+                if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
+                    return;
+                }
+                
+                // 4. 在后台处理其他文件
+                if (otherFiles.length > 0) {
+                    // 创建一个处理函数
+                    const processFile = async (file: TFile): Promise<boolean> => {
+                        try {
+                            const fileCache = this.plugin?.app?.metadataCache?.getFileCache(file);
+                            if (!fileCache || !fileCache.links) return true;
+                            
+                            for (const link of fileCache.links) {
+                                if (!link.link) continue;
+                                
+                                const targetFile = this.plugin?.app?.metadataCache?.getFirstLinkpathDest(link.link, file.path);
+                                if (!targetFile) continue;
+                                
+                                this.addFileLink(file.path, targetFile.path);
+                            }
+                            return true;
+                        } catch (error) {
+                            this.logger?.error(`处理文件 ${file.path} 时出错:`, error);
+                            return false;
+                        }
+                    };
+                    
+                    // 使用TimerService在空闲时间处理其余文件
+                    const timerService = this.serviceContainer.get<ITimerService>(SERVICE_TYPES.TimerService);
+                    
+                    // 分批处理文件
+                    const batchSize = 20;
+                    let successCount = 0;
+                    let errorCount = 0;
+                    
+                    for (let i = 0; i < otherFiles.length; i += batchSize) {
+                        // 检查是否已取消
+                        if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
+                            return;
+                        }
+                        
+                        const batch = otherFiles.slice(i, i + batchSize);
+                        
+                        // 使用Promise.all处理一批文件，但使用requestIdleCallback调度
+                        await new Promise<void>((resolve) => {
+                            timerService.requestIdleCallback(async () => {
+                                // 处理这一批文件
+                                const results = await Promise.allSettled(
+                                    batch.map(file => processFile(file))
+                                );
+                                
+                                // 统计成功和失败的数量
+                                for (const result of results) {
+                                    if (result.status === 'fulfilled' && result.value) {
+                                        successCount++;
+                                    } else {
+                                        errorCount++;
+                                    }
+                                }
+                                
+                                // 计算其他文件的进度（60%-90%）
+                                const totalProcessed = i + batch.length;
+                                const otherProgress = 60 + Math.min(30, Math.floor(30 * totalProcessed / otherFiles.length));
+                                this.warmupProgress = otherProgress;
+                                
+                                resolve();
+                            });
+                        });
+                    }
+                    
+                    // 记录处理结果
+                    this.logger?.log(`后台文件处理完成: 成功=${successCount}, 失败=${errorCount}`);
+                }
+                
+                // 检查是否已取消
+                if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
+                    return;
+                }
+                
+                // 标记缓存预热完成并保存
                 this.cacheWarmedUp = true;
                 await this.saveCacheToData();
+                this.warmupProgress = 100;
                 this.logger?.log('缓存预热完成，已保存到持久化存储');
+            } catch (error) {
+                this.logger?.error('缓存预热失败:', error);
+                // 确保在出错时也能重置状态
+                this.isWarmupCancelled = false;
+            } finally {
+                // 只有当当前任务ID仍然是活动的，才清除warmupPromise
+                if (currentTaskId === this.warmupTaskId) {
+                    this.warmupPromise = null;
+                }
             }
-        } catch (error) {
-            console.error('Failed to warm up cache:', error);
-        }
+        })();
+        
+        return this.warmupPromise;
     }
     
     // 异步获取显示名称，确保缓存有效
@@ -776,12 +1011,34 @@ export class FileDisplayCache {
      * 释放资源
      */
     public dispose(): void {
+        this.logger.log('正在释放FileDisplayCache资源...');
+        
+        // 取消任何正在进行的缓存预热
+        if (this.warmupPromise !== null) {
+            this.logger.debug('取消缓存预热过程');
+            this.cancelWarmupCache();
+        }
+        
         // 停止周期性清理任务
         this.stopPeriodicCleanup();
+        
+        // 确保任何待保存的缓存数据已保存
+        try {
+            this.saveCacheToData().catch(error => {
+                this.logger.error('释放资源时保存缓存数据失败:', error);
+            });
+        } catch (error) {
+            this.logger.error('释放资源时处理缓存保存失败:', error);
+        }
         
         // 清空缓存数据
         this.clearAll();
         
-        this.logger.log('FileDisplayCache资源已释放');
+        // 解除对外部服务的引用
+        (this as any).plugin = null;
+        (this as any).serviceContainer = null;
+        (this as any).timerCallback = null;
+        
+        this.logger.log('FileDisplayCache资源已完全释放');
     }
 } 

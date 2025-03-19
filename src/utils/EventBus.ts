@@ -3,7 +3,7 @@ import { ILoggerService } from '../services/interfaces/IServices';
 /**
  * 队列中的事件项
  */
-interface QueuedEvent<T, D = any> {
+interface QueuedEvent<T, D = unknown> {
     eventType: T;
     data: D;
     timestamp: number;
@@ -13,7 +13,7 @@ interface QueuedEvent<T, D = any> {
 /**
  * 事件处理器函数类型
  */
-export type EventHandler<D = any> = (data: D) => Promise<void> | void;
+export type EventHandler<D = unknown> = (data: D) => Promise<void> | void;
 
 /**
  * 事件总线选项
@@ -87,7 +87,7 @@ export class EventBus<T extends string = string> {
      * @param handler 事件处理函数
      * @returns 取消订阅函数
      */
-    public on<D = any>(eventType: T, handler: EventHandler<D>): () => void {
+    public on<D = unknown>(eventType: T, handler: EventHandler<D>): () => void {
         this.log('debug', `订阅事件：${eventType}`);
         
         if (!this.eventHandlers.has(eventType)) {
@@ -108,7 +108,7 @@ export class EventBus<T extends string = string> {
      * @param eventType 事件类型
      * @param handler 要取消的事件处理函数
      */
-    public off<D = any>(eventType: T, handler: EventHandler<D>): void {
+    public off<D = unknown>(eventType: T, handler: EventHandler<D>): void {
         if (this.eventHandlers.has(eventType)) {
             this.eventHandlers.get(eventType)!.delete(handler as EventHandler);
             this.log('debug', `取消订阅事件：${eventType}`);
@@ -122,7 +122,7 @@ export class EventBus<T extends string = string> {
      * @param data 事件数据
      * @param priority 事件优先级（数字越大优先级越高）
      */
-    public emit<D = any>(eventType: T, data?: D, priority: number = 1): void {
+    public emit<D = unknown>(eventType: T, data?: D, priority: number = 1): void {
         const eventKey = this.getEventKey(eventType, data);
         
         // 检查是否是重复事件
@@ -133,7 +133,7 @@ export class EventBus<T extends string = string> {
         
         const queuedEvent: QueuedEvent<T, D> = {
             eventType,
-            data: data as any,
+            data: data as D,
             timestamp: Date.now(),
             priority
         };
@@ -249,17 +249,22 @@ export class EventBus<T extends string = string> {
     /**
      * 获取事件的唯一键
      */
-    private getEventKey(eventType: T, data: any): string {
+    private getEventKey(eventType: T, data: unknown): string {
         let dataKey = '';
         
         if (data) {
-            // 如果数据有path属性，将其纳入key
-            if (data.path) {
-                dataKey = `-${data.path}`;
-            }
-            // 如果数据有id属性，将其纳入key
-            else if (data.id) {
-                dataKey = `-${data.id}`;
+            // 使用类型检查和类型断言
+            if (typeof data === 'object' && data !== null) {
+                const objData = data as Record<string, unknown>;
+                
+                // 如果数据有path属性，将其纳入key
+                if ('path' in objData && (typeof objData.path === 'string' || typeof objData.path === 'number')) {
+                    dataKey = `-${objData.path}`;
+                }
+                // 如果数据有id属性，将其纳入key
+                else if ('id' in objData && (typeof objData.id === 'string' || typeof objData.id === 'number')) {
+                    dataKey = `-${objData.id}`;
+                }
             }
             // 如果数据是字符串或数字，直接使用
             else if (typeof data === 'string' || typeof data === 'number') {
@@ -292,7 +297,7 @@ export class EventBus<T extends string = string> {
     /**
      * 记录日志
      */
-    private log(level: 'debug' | 'log' | 'info' | 'warn' | 'error', message: string, ...args: any[]): void {
+    private log(level: 'debug' | 'log' | 'info' | 'warn' | 'error', message: string, ...args: unknown[]): void {
         if (!this.logger) return;
         
         switch (level) {

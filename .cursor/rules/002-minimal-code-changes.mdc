@@ -1,7 +1,7 @@
 ---
-description: Implement requirements with minimal code and solve issues with minimal modifications
+description: 
 globs: 
-alwaysApply: false
+alwaysApply: true
 ---
 ---
 description: Implement requirements with minimal code and solve issues with minimal modifications

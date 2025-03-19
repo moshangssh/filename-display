@@ -9,7 +9,6 @@ globs: *
 alwaysApply: true
 ---
 
-
 # Specific Greeting Format Rule
 
 ## Context

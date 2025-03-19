@@ -135,7 +135,8 @@ export class ServiceContainer {
             SERVICE_TYPES.FileDisplayService,
             SERVICE_TYPES.TimerService,
             SERVICE_TYPES.LoggerService,
-            SERVICE_TYPES.ExtensionCacheService
+            SERVICE_TYPES.ExtensionCacheService,
+            SERVICE_TYPES.LinkStateManager
         ];
 
         // 先获取关键服务
@@ -211,5 +212,7 @@ export const SERVICE_TYPES = {
     TimerService: 'TimerService',
     ErrorHandler: 'ErrorHandler',
     LoggerService: 'LoggerService',
-    ExtensionCacheService: 'ExtensionCacheService'
+    ExtensionCacheService: 'ExtensionCacheService',
+    LinkStateManager: 'LinkStateManager',
+    LinkDecorationExtensionProvider: 'LinkDecorationExtensionProvider'
 }; 
