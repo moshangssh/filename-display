@@ -1,8 +1,8 @@
 import { ITimerService } from './interfaces/IServices';
 import { Plugin } from 'obsidian';
-import { Logger } from '../utils/logger';
+import { LoggerService } from "../services/LoggerService";
 
-const logger = new Logger('TimerService');
+const logger = new LoggerService('TimerService');
 
 /**
  * 定时器服务，简化实现，利用Obsidian Plugin类的registerInterval方法

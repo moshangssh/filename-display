@@ -2,29 +2,36 @@ import { MarkdownView, TFile } from 'obsidian';
 import type { ITitleExtractorPlugin } from '../types';
 import { FilenameParser } from './FilenameParser';
 import { FileDisplayCache } from './FileDisplayCache';
-import { Logger } from '../utils/logger';
-import { LinkHandler, LinkInfo, LinkProcessResult } from './LinkHandler';
+import { LoggerService } from "../services/LoggerService";
+import { IMarkdownLinkService } from './interfaces/IServices';
+import { LinkUtils, LinkInfo, LinkProcessResult, LinkHandlerConfig } from './LinkUtils';
 
 // 创建服务特定的日志记录器
-const logger = new Logger('MarkdownLinkService');
+const logger = new LoggerService('MarkdownLinkService');
 
-export class MarkdownLinkService extends LinkHandler {
+export class MarkdownLinkService implements IMarkdownLinkService {
     // 文件名索引缓存，用于快速查找文件
     private fileNameIndex: Map<string, TFile> = new Map();
     // 添加性能优化相关变量
     private isProcessing: boolean = false;
     private pendingUpdate: boolean = false;
+    // 链接工具类
+    private linkUtils: LinkUtils;
+    // 插件实例
+    private plugin: ITitleExtractorPlugin;
     
     constructor(
         plugin: ITitleExtractorPlugin,
         filenameParser: FilenameParser,
         fileDisplayCache: FileDisplayCache
     ) {
-        super(plugin, filenameParser, fileDisplayCache, {
+        this.plugin = plugin;
+        this.linkUtils = new LinkUtils(plugin, filenameParser, fileDisplayCache, {
             enabled: true,
             processingScope: 'preview',
             respectCustomLinkText: true
         });
+        
         this.setupMarkdownPostProcessor();
         
         // 初始化文件名索引
@@ -93,7 +100,7 @@ export class MarkdownLinkService extends LinkHandler {
         });
     }
     
-    // 新增：调度更新处理，避免频繁处理
+    // 调度更新处理，避免频繁处理
     private scheduleUpdate(): void {
         if (this.isProcessing) {
             this.pendingUpdate = true;
@@ -115,8 +122,8 @@ export class MarkdownLinkService extends LinkHandler {
         });
     }
     
-    // 实现抽象方法：收集需要处理的链接
-    protected collectLinks(): LinkInfo[] {
+    // 收集需要处理的链接
+    private collectLinks(): LinkInfo[] {
         const links: LinkInfo[] = [];
         
         // 获取所有打开的Markdown视图
@@ -134,24 +141,22 @@ export class MarkdownLinkService extends LinkHandler {
         // 处理所有视图中的链接
         for (const leaf of markdownViews) {
             const view = leaf.view;
-            if (!view || !view.containerEl) continue;
+            if (!view?.containerEl) continue;
             
             // 获取视图的内容元素
             const contentEl = view.containerEl.querySelector('.markdown-reading-view');
             if (!contentEl) continue;
             
             // 查找所有内部链接元素
-            const linkElements = contentEl.querySelectorAll('a.internal-link');
+            const linkElements = Array.from(contentEl.querySelectorAll('a.internal-link')) as HTMLElement[];
             logger.log(`在视图中找到 ${linkElements.length} 个内部链接`);
             
-            for (let i = 0; i < linkElements.length; i++) {
-                const linkEl = linkElements[i] as HTMLElement;
-                
+            for (const linkEl of linkElements) {
                 // 跳过已处理过的元素
                 if (processedElements.has(linkEl)) continue;
                 
                 // 如果链接已经标记为处理完成，检查其显示是否正确
-                if (linkEl.dataset.handlerAdded === 'true') {
+                if (linkEl.dataset?.handlerAdded === 'true') {
                     // 检查链接是否需要重新处理
                     const href = linkEl.getAttribute('href');
                     const originalPath = linkEl.dataset.originalPath;
@@ -172,8 +177,8 @@ export class MarkdownLinkService extends LinkHandler {
                 const originalLinkText = linkEl.textContent;
                 if (!originalLinkText) continue;
                 
-                // 从 href 中提取文件路径
-                const filePath = this.getFilePathFromHref(href);
+                // 使用LinkUtils解析文件路径
+                const filePath = this.linkUtils.getFilePathFromHref(href);
                 if (!filePath) {
                     logger.log(`无法从 ${href} 提取有效文件路径`);
                     continue;
@@ -189,11 +194,11 @@ export class MarkdownLinkService extends LinkHandler {
                     text: originalLinkText,
                     path: filePath,
                     file: file,
-                    element: linkEl
+                    element: linkEl as HTMLElement
                 });
                 
                 // 将此元素标记为已处理
-                processedElements.add(linkEl);
+                processedElements.add(linkEl as HTMLElement);
             }
         }
         
@@ -201,8 +206,30 @@ export class MarkdownLinkService extends LinkHandler {
     }
     
     // 检查文本是否看起来是重复的（如AAAABBBBAAAABBBB）
-    // 实现抽象方法：应用显示名称到链接
-    protected applyDisplayName(linkProcessResult: LinkProcessResult): void {
+    private isRepeatedText(text: string | null): boolean {
+        if (!text) return false;
+        
+        // 如果文本长度大于100，可能是重复文本
+        if (text.length > 100) return true;
+        
+        // 寻找重复模式
+        if (text.length >= 4) {
+            const firstHalf = text.substring(0, text.length / 2);
+            const secondHalf = text.substring(text.length / 2);
+            
+            // 检查前后部分是否相同或相似
+            if (firstHalf === secondHalf) return true;
+            
+            // 检查是否有多次重复的字符（如AAAAAA）
+            const uniqueChars = new Set(text.split('')).size;
+            if (uniqueChars <= 3 && text.length >= 6) return true;
+        }
+        
+        return false;
+    }
+    
+    // 应用显示名称到链接
+    private applyDisplayName(linkProcessResult: LinkProcessResult): void {
         const { originalInfo, displayName } = linkProcessResult;
         
         if (!originalInfo.element || !displayName) {
@@ -242,81 +269,16 @@ export class MarkdownLinkService extends LinkHandler {
         }
     }
 
-    // 辅助方法：从 href 属性中提取文件路径
-    private getFilePathFromHref(href: string): string | undefined {
-        try {
-            // 移除 # 后的部分（文档内部锚点）
-            const parts = href.split('#');
-            const pathPart = parts[0];
-            
-            // 解码 URI 组件
-            let path = decodeURIComponent(pathPart);
-            
-            // 如果路径为空，返回undefined
-            if (!path) return undefined;
-            
-            // 处理相对路径
-            if (path.startsWith('./')) {
-                path = path.substring(2);
-            }
-            
-            // 尝试不同的路径形式来找到文件
-            
-            // 1. 原始路径
-            let file = this.plugin.app.vault.getAbstractFileByPath(path);
-            if (file) return path;
-            
-            // 2. 如果路径不以 .md 结尾，添加它
-            if (!path.endsWith('.md')) {
-                const pathWithExt = path + '.md';
-                file = this.plugin.app.vault.getAbstractFileByPath(pathWithExt);
-                if (file) return pathWithExt;
-            }
-            
-            // 3. 如果路径以 .md 结尾，尝试去掉它
-            if (path.endsWith('.md')) {
-                const pathWithoutExt = path.substring(0, path.length - 3);
-                file = this.plugin.app.vault.getAbstractFileByPath(pathWithoutExt);
-                if (file) return pathWithoutExt;
-            }
-            
-            // 4. 尝试在各个目录下查找该文件（针对不含路径的纯文件名）
-            const fileName = path.split('/').pop() || path;
-            
-            // 使用索引快速查找文件
-            const foundFile = this.fileNameIndex.get(fileName);
-            if (foundFile) {
-                return foundFile.path;
-            }
-            
-            // 如果在索引中找不到完全匹配的，则检查文件名部分匹配的情况
-            const allFiles = this.plugin.app.vault.getMarkdownFiles();
-            
-            // 检查文件名部分匹配的情况
-            for (const aFile of allFiles) {
-                if (aFile.basename.includes(fileName) || fileName.includes(aFile.basename)) {
-                    return aFile.path;
-                }
-            }
-            
-            // 如果以上都没找到，则返回原始路径，让调用方自行判断
-            logger.log(`无法在库中找到匹配文件: ${path}，可能是别名或不存在的链接`);
-            return path;
-        } catch (error) {
-            logger.error("解析href路径时出错:", error);
-            return undefined;
-        }
-    }
-
     // 更新指定文件在所有打开的Markdown视图中的内部链接
     public updateMarkdownLinksForFile(targetFile: TFile): void {
         // 使用优化后的调度函数更新链接
         this.scheduleUpdate();
     }
     
-    // 重写链接处理方法，添加快速返回的逻辑
-    public override processLinks(): void {
-        if (!this.config.enabled) {
+    // 处理链接
+    public processLinks(): void {
+        const config = this.linkUtils.getConfig();
+        if (!config.enabled) {
             return;
         }
         
@@ -324,15 +286,25 @@ export class MarkdownLinkService extends LinkHandler {
             // 先检查并修复可能存在的重复文本问题
             this.checkAndFixRepeatedNames();
             
-            // 使用父类方法处理链接
-            super.processLinks();
+            // 收集所有链接
+            const links = this.collectLinks();
+            if (links.length === 0) {
+                return;
+            }
+            
+            logger.log(`收集到 ${links.length} 个链接，开始分批处理`);
+            
+            // 使用批处理来避免长时间阻塞UI
+            this.linkUtils.processBatch(links, 0, (result) => {
+                this.applyDisplayName(result);
+            });
         } catch (e) {
             logger.error("处理阅读视图链接时发生错误:", e);
         }
     }
     
     // 检查并修复可能存在的重复文本问题
-    protected checkAndFixRepeatedNames(): void {
+    private checkAndFixRepeatedNames(): void {
         // 获取所有打开的Markdown视图
         const markdownViews = this.plugin.app.workspace.getLeavesOfType('markdown');
         if (markdownViews.length === 0) return;
@@ -346,10 +318,38 @@ export class MarkdownLinkService extends LinkHandler {
             if (!contentEl) continue;
             
             // 查找所有内部链接元素
-            const linkElements = contentEl.querySelectorAll('a.internal-link');
+            const linkElements = Array.from(contentEl.querySelectorAll('a.internal-link')) as HTMLElement[];
             
-            // 使用基类的共享方法处理重复名称
-            super.checkAndFixRepeatedNames(linkElements);
+            // 检查每个链接元素
+            for (let i = 0; i < linkElements.length; i++) {
+                const linkEl = linkElements[i] as HTMLElement;
+                const text = linkEl.textContent;
+                
+                // 如果文本看起来是重复的，重置为原始路径
+                if (this.isRepeatedText(text)) {
+                    const originalPath = linkEl.dataset.originalPath;
+                    if (originalPath) {
+                        // 重置为原始文件名
+                        const baseName = originalPath.split('/').pop()?.replace('.md', '') || originalPath;
+                        linkEl.textContent = baseName;
+                    }
+                }
+            }
         }
+    }
+
+    /**
+     * 释放资源
+     */
+    public dispose(): void {
+        // 清空缓存
+        this.fileNameIndex.clear();
+        
+        // 重置处理状态
+        this.isProcessing = false;
+        this.pendingUpdate = false;
+        
+        // 记录日志
+        logger.debug('MarkdownLinkService资源已释放');
     }
 } 

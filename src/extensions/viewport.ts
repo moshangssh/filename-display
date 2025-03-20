@@ -1,8 +1,8 @@
 import { Extension } from '@codemirror/state';
 import { ViewPlugin, ViewUpdate, EditorView, PluginValue } from '@codemirror/view';
-import { Logger } from '../utils/logger';
+import { LoggerService } from '../services/LoggerService';
 
-const logger = new Logger('Viewport');
+const logger = new LoggerService('Viewport');
 
 interface ViewportState {
   visible: boolean;

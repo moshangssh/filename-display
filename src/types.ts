@@ -1,6 +1,7 @@
 import { Plugin } from 'obsidian';
 import { Extension } from '@codemirror/state';
-import { CacheCleanStrategy } from './services/interfaces/IServices';
+import { CacheCleanStrategy, ILinkStateManager } from './services/interfaces/IServices';
+import { ExtensionCacheService } from './services/ExtensionCacheService';
 
 export interface TitleExtractorSettings {
     pattern: string;
@@ -18,6 +19,10 @@ export interface ITitleExtractorPlugin extends Plugin {
     saveSettings(): Promise<void>;
     updateAllFilesDisplay(): void;
     registerEditorExtension(extension: Extension[]): void;
+    
+    // 添加服务组件引用
+    linkStateManager: ILinkStateManager;
+    extensionCacheService: ExtensionCacheService;
     
     // 内部使用的属性，用于存储链接装饰器引用
     _linkDecorator?: any;

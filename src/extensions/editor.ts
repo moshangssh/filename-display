@@ -2,7 +2,7 @@ import { Extension } from '@codemirror/state';
 import { EditorView, Decoration, WidgetType, ViewPlugin, ViewUpdate, DecorationSet } from '@codemirror/view';
 import { StateField, StateEffect, RangeSet } from '@codemirror/state';
 import type { ITitleExtractorPlugin } from '../types';
-import { Logger } from '../utils/logger';
+import { LoggerService } from '../services/LoggerService';
 import { viewportExtension } from './viewport';
 import { incrementalUpdateExtension } from './incremental-update';
 import { editorSyncExtension } from './editor-sync';
@@ -10,7 +10,7 @@ import { MarkdownView, editorViewField } from 'obsidian';
 import { getEditorView } from '../utils/editor-utils';
 
 // 创建服务特定的日志记录器
-const logger = new Logger('EditorExtensions');
+const logger = new LoggerService('EditorExtensions');
 
 // 定义状态效果 - 用于更新小部件文本
 export const updateTextEffect = StateEffect.define<{id: string, displayName: string}>();
@@ -478,7 +478,7 @@ export function createLinkDecorationExtension(
  */
 export const widgetCleanupExtension = ViewPlugin.fromClass(class WidgetCleanupPlugin {
     private activeWidgets: Map<string, { widget: LinkReplaceWidget, from: number, to: number }> = new Map();
-    private logger = new Logger('WidgetCleanupPlugin');
+    private logger = new LoggerService('WidgetCleanupPlugin');
     
     constructor(private view: EditorView) {
         this.logger.debug('小部件清理插件已初始化');
@@ -512,12 +512,25 @@ export const widgetCleanupExtension = ViewPlugin.fromClass(class WidgetCleanupPl
             if (toRemove.length > 0) {
                 // 分批处理，避免过大的事务
                 const batchSize = 50;
+                
+                // 收集所有效果，一次性分发而不是循环中分发
+                const allEffects: StateEffect<any>[] = [];
+                
                 for (let i = 0; i < toRemove.length; i += batchSize) {
                     const batch = toRemove.slice(i, i + batchSize);
-                    const effects = batch.map(pos => cleanupWidgetsEffect.of(pos));
-                    
-                    // 使用事务分发效果
-                    this.view.dispatch({ effects });
+                    allEffects.push(...batch.map(pos => cleanupWidgetsEffect.of(pos)));
+                }
+                
+                // 使用事务一次性分发所有效果，避免嵌套更新
+                if (allEffects.length > 0) {
+                    // 使用安全的方式分发效果，使用setTimeout确保在当前更新周期完成后执行
+                    setTimeout(() => {
+                        try {
+                            this.view.dispatch({ effects: allEffects });
+                        } catch (e) {
+                            console.error('清理小部件时出错:', e);
+                        }
+                    }, 0);
                 }
                 
                 // 更新活动小部件集合
@@ -544,8 +557,14 @@ export const widgetCleanupExtension = ViewPlugin.fromClass(class WidgetCleanupPl
             const effects = Array.from(this.activeWidgets.values())
                 .map(({ from, to }) => cleanupWidgetsEffect.of({ from, to }));
             
-            // 使用事务分发效果
-            this.view.dispatch({ effects });
+            // 使用安全的方式分发效果，使用setTimeout确保在当前更新周期完成后执行
+            setTimeout(() => {
+                try {
+                    this.view.dispatch({ effects });
+                } catch (e) {
+                    console.error('销毁插件时清理小部件出错:', e);
+                }
+            }, 0);
             
             // 清空活动小部件集合
             this.activeWidgets.clear();
@@ -662,7 +681,7 @@ export type EditorErrorContext =
     | DecoratorInitializationContext;
 
 export class EditorErrorHandler {
-    private static readonly logger = new Logger('EditorErrorHandler');
+    private static readonly logger = new LoggerService('EditorErrorHandler');
     
     // 处理错误的主方法
     public static handleError(error: Error, type: EditorErrorType, context: EditorErrorContext = {}): void {
@@ -717,21 +736,30 @@ export class EditorErrorHandler {
                 
                 // 获取小部件信息
                 const { from, to, originalPath, displayName } = context.widget;
+                // 保存视图引用避免闭包中的可能未定义错误
+                const view = context.view;
                 
-                // 移除旧的小部件
-                context.view.dispatch({
-                    effects: [
-                        addLinkDecoration.of({
-                            from,
-                            to,
-                            widget: new LinkReplaceWidget(
-                                displayName || originalPath,
-                                originalPath,
-                                (window as any).app.plugins.plugins['filename-display']
-                            )
-                        })
-                    ]
-                });
+                // 使用setTimeout确保在当前更新周期之外执行，避免嵌套更新
+                setTimeout(() => {
+                    try {
+                        // 移除旧的小部件
+                        view.dispatch({
+                            effects: [
+                                addLinkDecoration.of({
+                                    from,
+                                    to,
+                                    widget: new LinkReplaceWidget(
+                                        displayName || originalPath,
+                                        originalPath,
+                                        (window as any).app.plugins.plugins['filename-display']
+                                    )
+                                })
+                            ]
+                        });
+                    } catch (e) {
+                        this.logger.error('延迟小部件重建失败:', e);
+                    }
+                }, 0);
             }
         } catch (rebuildError) {
             this.logger.error('小部件重建失败:', rebuildError);
@@ -1128,7 +1156,7 @@ export const batchProcessField = StateField.define<BatchProcessState>({
 export function createBatchProcessorPlugin(): Extension {
     // 由于batchProcessField已在createEditorExtensions中注册，这里只返回ViewPlugin
     return ViewPlugin.fromClass(class BatchProcessor {
-        private readonly logger = new Logger('BatchProcessor');
+        private readonly logger = new LoggerService('BatchProcessor');
         private timeoutId: ReturnType<typeof setTimeout> | null = null;
         private errorCount: number = 0;
         
@@ -1189,6 +1217,9 @@ export function createBatchProcessorPlugin(): Extension {
                             return;
                         }
                         
+                        // 收集所有效果，一次性分发
+                        const allEffects: StateEffect<any>[] = [];
+                        
                         // 处理当前批次
                         for (const item of batch) {
                             const { from, to, path, displayName } = item;
@@ -1207,35 +1238,33 @@ export function createBatchProcessorPlugin(): Extension {
                                     widget
                                 });
                                 
-                                // 分发效果
-                                view.dispatch({ effects: [effect] });
+                                // 收集效果而不是立即分发
+                                allEffects.push(effect);
                             } catch (err) {
                                 this.logger.error(`处理链接时出错: ${path}`, err);
                                 this.errorCount++;
                                 
-                                // 更新元数据
-                                const metadataEffect = updateBatchMetadataEffect.of({
+                                // 收集更新元数据效果
+                                allEffects.push(updateBatchMetadataEffect.of({
                                     metadata: {
                                         errorCount: this.errorCount
                                     }
-                                });
-                                
-                                view.dispatch({ effects: [metadataEffect] });
+                                }));
                             }
                         }
                         
-                        // 更新处理进度
+                        // 添加进度更新效果
                         const processBatchEffect = this.getProcessBatchEffect(startIndex, batchSize);
-                        const isLastBatch = endIndex >= currentState.links.length;
-                        const completeEffect = isLastBatch ? completeBatchProcessEffect.of(null) : null;
+                        allEffects.push(processBatchEffect);
                         
-                        // 分发效果
-                        view.dispatch({
-                            effects: [
-                                processBatchEffect,
-                                ...(completeEffect ? [completeEffect] : [])
-                            ]
-                        });
+                        // 检查是否是最后一批
+                        const isLastBatch = endIndex >= currentState.links.length;
+                        if (isLastBatch) {
+                            allEffects.push(completeBatchProcessEffect.of(null));
+                        }
+                        
+                        // 一次性分发所有效果
+                        view.dispatch({ effects: allEffects });
                         
                         // 如果没有完成，安排处理下一批
                         if (!isLastBatch) {
@@ -1250,27 +1279,38 @@ export function createBatchProcessorPlugin(): Extension {
                         this.errorCount++;
                         
                         // 更新元数据
-                        const metadataEffect = updateBatchMetadataEffect.of({
-                            metadata: {
-                                errorCount: this.errorCount
-                            }
-                        });
-                        
                         try {
-                            view.dispatch({ effects: [metadataEffect] });
-                        } catch (e) {
-                            this.logger.warn('无法更新批处理元数据', e);
+                            view.dispatch({
+                                effects: [updateBatchMetadataEffect.of({
+                                    metadata: {
+                                        errorCount: this.errorCount
+                                    }
+                                })]
+                            });
+                        } catch (dispatchError) {
+                            this.logger.error('更新错误元数据时出错:', dispatchError);
                         }
                         
-                        // 错误恢复: 短暂延迟后继续处理
-                        setTimeout(() => {
-                            this.processBatch(view);
-                        }, 500);
+                        // 延迟后重试，或者放弃当前批处理
+                        if (this.errorCount < 5) {
+                            // 延迟后重试
+                            setTimeout(() => {
+                                this.processBatch(view);
+                            }, 500);
+                        } else {
+                            // 放弃当前批处理
+                            try {
+                                view.dispatch({
+                                    effects: [completeBatchProcessEffect.of(null)]
+                                });
+                            } catch (abortError) {
+                                this.logger.error('中止批处理时出错:', abortError);
+                            }
+                        }
                     }
                 }, 0);
             } catch (e) {
-                // 如果字段不存在,静默失败并记录日志
-                this.logger.warn('处理批次: batchProcessField字段不可用', e);
+                this.logger.error('启动批处理过程中出错:', e);
             }
         }
         

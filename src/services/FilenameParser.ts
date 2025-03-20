@@ -1,9 +1,9 @@
 import { TFile, normalizePath } from 'obsidian';
 import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
-import { ILoggerService } from './interfaces/IServices';
+import { IFilenameParser, ILoggerService } from './interfaces/IServices';
 
 // 文件名解析器类，负责文件显示名称的提取逻辑
-export class FilenameParser {
+export class FilenameParser implements IFilenameParser {
     private plugin: ITitleExtractorPlugin;
     private logger: ILoggerService;
     
@@ -158,6 +158,45 @@ export class FilenameParser {
             return filePath === normalizedFolder || 
                    filePath.startsWith(normalizedFolder + '/');
         });
+    }
+
+    /**
+     * 解析文件名，提取显示名称
+     */
+    public async parseFilename(file: TFile): Promise<FileDisplayResult> {
+        try {
+            // 首先检查是否应该处理该文件
+            if (!this.shouldProcess(file)) {
+                return {
+                    success: false,
+                    error: '文件不符合处理条件',
+                    displayName: file.basename
+                };
+            }
+            
+            // 尝试从元数据获取显示名称
+            return this.getDisplayNameFromMetadata(file);
+        } catch (error) {
+            this.logger.error(`解析文件名时出错: ${file.path}`, error);
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error),
+                displayName: file.basename
+            };
+        }
+    }
+    
+    /**
+     * 检查文件是否应该被处理
+     */
+    public shouldProcess(file: TFile): boolean {
+        // 只处理Markdown文件
+        if (file.extension !== 'md') {
+            return false;
+        }
+        
+        // 检查是否在启用的文件夹中
+        return this.isFileInEnabledFolder(file);
     }
 
     /**

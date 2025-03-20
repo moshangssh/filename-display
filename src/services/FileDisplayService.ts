@@ -12,10 +12,8 @@ import {
     ITimerService,
     ILoggerService
 } from './interfaces/IServices';
-import { ServiceContainer, SERVICE_TYPES } from './di/ServiceContainer';
 import { throttle } from '../utils';
 import { FileEventType, FileEvent } from './EventManagerService';
-import { DisplayUpdateHelper } from './helpers/DisplayUpdateHelper';
 
 // 主服务类，协调其他组件
 export class FileDisplayService implements IFileDisplayService {
@@ -29,7 +27,6 @@ export class FileDisplayService implements IFileDisplayService {
     private eventManager: IEventManagerService;
     private timerService: ITimerService;
     private logger: ILoggerService;
-    private displayHelper: DisplayUpdateHelper;
     private throttledUpdateAllFilesDisplay: (clearCache?: boolean) => void;
     private lastUpdatedFiles: Set<string> = new Set(); // 用于记录上次更新的文件
     private unsubscribers: (() => void)[] = []; // 存储取消订阅函数
@@ -56,14 +53,6 @@ export class FileDisplayService implements IFileDisplayService {
         this.eventManager = eventManager;
         this.timerService = timerService;
         this.logger = loggerService.getLogger('FileDisplayService');
-        
-        // 初始化显示更新辅助类
-        this.displayHelper = new DisplayUpdateHelper(
-            plugin,
-            filenameParser,
-            fileDisplayCache,
-            loggerService
-        );
         
         // 使用节流函数包装更新函数，避免短时间内多次更新
         this.throttledUpdateAllFilesDisplay = throttle(

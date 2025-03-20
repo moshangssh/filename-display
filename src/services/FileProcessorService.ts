@@ -2,16 +2,17 @@ import { TFile, MarkdownView, WorkspaceLeaf } from 'obsidian';
 import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from './FilenameParser';
 import { FileDisplayCache } from './FileDisplayCache';
-import { BatchProcessor } from './BatchProcessor';
-import { ITimerService, ILoggerService } from './interfaces/IServices';
+import { IFileProcessorService, ITimerService, ILoggerService } from './interfaces/IServices';
 
-export class FileProcessorService {
+export class FileProcessorService implements IFileProcessorService {
     private plugin: ITitleExtractorPlugin;
     private filenameParser: FilenameParser;
     private fileDisplayCache: FileDisplayCache;
-    private batchProcessor: BatchProcessor;
     private timerService: ITimerService;
     private logger: ILoggerService;
+    private processQueue: Array<{file: TFile; priority: boolean}> = [];
+    private processingBatch = false;
+    private batchSize = 50;
     
     constructor(
         plugin: ITitleExtractorPlugin,
@@ -19,22 +20,14 @@ export class FileProcessorService {
         fileDisplayCache: FileDisplayCache,
         timerService: ITimerService,
         loggerService: ILoggerService,
-        updateFileDisplayFn: (file: TFile) => Promise<void>
+        private updateFileDisplayFn: (file: TFile) => Promise<void>
     ) {
         this.plugin = plugin;
         this.filenameParser = filenameParser;
         this.fileDisplayCache = fileDisplayCache;
         this.timerService = timerService;
         this.logger = loggerService.getLogger('FileProcessorService');
-        
-        // 初始化批处理器，传入timerService
-        this.batchProcessor = new BatchProcessor(
-            updateFileDisplayFn,
-            this.timerService,
-            50
-        );
-        
-        this.logger.info('FileProcessorService 初始化完成');
+        this.logger.debug('FileProcessorService已初始化');
     }
     
     // 处理单个文件并返回处理结果
@@ -88,12 +81,12 @@ export class FileProcessorService {
         
         // 先处理可见文件
         if (visibleFiles.length > 0) {
-            this.batchProcessor.addToProcessQueue(visibleFiles, true); // 高优先级
+            this.addToProcessQueue(visibleFiles, true); // 高优先级
         }
         
         // 然后处理其他文件
         if (otherFiles.length > 0) {
-            this.batchProcessor.addToProcessQueue(otherFiles, false); // 低优先级
+            this.addToProcessQueue(otherFiles, false); // 低优先级
         }
     }
     
@@ -150,8 +143,77 @@ export class FileProcessorService {
         return uniqueFiles;
     }
     
-    // 获取批处理器实例
-    public getBatchProcessor(): BatchProcessor {
-        return this.batchProcessor;
+    // 添加文件到处理队列
+    public addToProcessQueue(files: TFile[], highPriority: boolean = false): void {
+        const queueItems = files.map(file => ({ file, priority: highPriority }));
+        this.processQueue.push(...queueItems);
+        
+        if (!this.processingBatch) {
+            this.processBatch();
+        }
+    }
+    
+    // 处理批次
+    private async processBatch(): Promise<void> {
+        if (this.processQueue.length === 0) {
+            this.processingBatch = false;
+            return;
+        }
+
+        this.processingBatch = true;
+        
+        // 对队列进行排序，高优先级的项目排在前面
+        this.processQueue.sort((a, b) => {
+            if (a.priority === b.priority) return 0;
+            return a.priority ? -1 : 1;
+        });
+        
+        // 取出前 batchSize 个项目处理
+        const batchItems = this.processQueue.splice(0, this.batchSize);
+        const batch = batchItems.map(item => item.file);
+
+        // 使用TimerService的requestIdleCallback
+        this.timerService.requestIdleCallback(() => {
+            this.processBatchItems(batch);
+        });
+    }
+    
+    // 处理批次中的项目
+    private async processBatchItems(files: TFile[]): Promise<void> {
+        for (const file of files) {
+            await this.updateFileDisplayFn(file);
+        }
+        
+        if (this.processQueue.length > 0) {
+            this.processBatch();
+        } else {
+            this.processingBatch = false;
+        }
+    }
+
+    // 获取当前处理队列的状态
+    public getQueueStatus(): { queueLength: number; isProcessing: boolean } {
+        return {
+            queueLength: this.processQueue.length,
+            isProcessing: this.processingBatch
+        };
+    }
+    
+    /**
+     * 释放资源
+     */
+    public dispose(): void {
+        // 清空处理队列
+        this.processQueue = [];
+        this.processingBatch = false;
+        
+        // 解除引用
+        (this as any).plugin = null;
+        (this as any).filenameParser = null;
+        (this as any).fileDisplayCache = null;
+        (this as any).timerService = null;
+        (this as any).updateFileDisplayFn = null;
+        
+        this.logger.debug('FileProcessorService资源已释放');
     }
 } 

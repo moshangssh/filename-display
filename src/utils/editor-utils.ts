@@ -1,8 +1,8 @@
 import { MarkdownView, editorViewField, Editor } from 'obsidian';
 import { EditorView } from '@codemirror/view';
-import { Logger } from './logger';
+import { LoggerService } from '../services/LoggerService';
 
-const logger = new Logger('EditorUtils');
+const logger = new LoggerService('EditorUtils');
 
 /**
  * 从 MarkdownView 获取 EditorView 实例的标准方法

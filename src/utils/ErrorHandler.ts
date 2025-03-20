@@ -1,8 +1,8 @@
 import { Notice } from 'obsidian';
-import { Logger } from './logger';
+import { LoggerService } from '../services/LoggerService';
 
 // 创建错误处理专用日志记录器
-const errorLogger = new Logger('ErrorHandler');
+const errorLogger = new LoggerService('ErrorHandler');
 
 // 错误级别枚举
 export enum ErrorLevel {

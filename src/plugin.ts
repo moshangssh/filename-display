@@ -11,13 +11,12 @@ import { MarkdownLinkService } from './services/MarkdownLinkService';
 import { EventManagerService } from './services/EventManagerService';
 import { EditorLinkDecorator } from './services/EditorLinkDecorator';
 import { TimerService } from './services/TimerService';
-import { ServiceContainer, SERVICE_TYPES } from './services/di/ServiceContainer';
 import { LoggerService } from './services/LoggerService';
 import { errorHandler } from './utils/ErrorHandler';
 import { Extension, Compartment } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { IEditorLinkDecorator, IFileExplorerDisplayService, CacheCleanStrategy } from './services/interfaces/IServices';
-import { ExtensionCacheService, ExtensionType } from './services/ExtensionCacheService';
+import { ExtensionCacheService } from './services/ExtensionCacheService';
 import { getEditorView } from './utils/editor-utils';
 import { 
     viewportExtension, 
@@ -25,11 +24,9 @@ import {
     editorSyncExtension,
     removeLinkDecoration
 } from './extensions';
-import { Logger } from './utils/logger';
 import { LinkStateManager } from './services/LinkStateManager';
-import { LinkDecorationExtensionProvider } from './services/LinkDecorationExtensionProvider';
 
-const logger = new Logger('Plugin');
+const logger = new LoggerService('Plugin');
 
 // 定义扩展分组类型
 const EXTENSION_GROUPS = {
@@ -40,7 +37,8 @@ const EXTENSION_GROUPS = {
 
 export default class TitleExtractorPlugin extends Plugin {
     settings: TitleExtractorSettings;
-    serviceContainer: ServiceContainer;
+    
+    // 服务实例
     private fileDisplayService: FileDisplayService;
     
     // 编辑器扩展相关
@@ -49,7 +47,7 @@ export default class TitleExtractorPlugin extends Plugin {
     // 使用Compartment管理扩展分组
     private extensionCompartments: Map<string, Compartment> = new Map();
     
-    // 核心服务组件，直接作为插件属性
+    // 核心服务组件
     filenameParser: FilenameParser;
     fileDisplayCache: FileDisplayCache;
     fileProcessorService: FileProcessorService;
@@ -58,8 +56,9 @@ export default class TitleExtractorPlugin extends Plugin {
     loggerService: LoggerService;
     timerService: TimerService;
     linkStateManager: LinkStateManager;
-    
-    private extensionCacheService: ExtensionCacheService;
+    fileExplorerDisplayService: FileExplorerDisplayService;
+    editorLinkDecorator: EditorLinkDecorator;
+    extensionCacheService: ExtensionCacheService;
 
     async onload() {
         await this.loadSettings();
@@ -72,14 +71,8 @@ export default class TitleExtractorPlugin extends Plugin {
             // 初始化扩展管理
             this.initExtensionCompartments();
             
-            // 创建服务容器
-            this.serviceContainer = ServiceContainer.getInstance(this);
-            
-            // 直接初始化核心服务
-            this.initCoreServices();
-            
-            // 注册其他服务到容器
-            this.registerServices();
+            // 直接初始化所有服务
+            this.initServices();
             
             // 设置文件浏览器
             this.setupFileExplorer();
@@ -113,178 +106,91 @@ export default class TitleExtractorPlugin extends Plugin {
     }
     
     /**
-     * 初始化核心服务组件
+     * 初始化所有服务
      */
-    private initCoreServices(): void {
-        // 初始化核心服务，减少对容器的依赖
+    private initServices(): void {
+        // 初始化基础服务
         this.loggerService = new LoggerService();
         this.timerService = new TimerService(this);
+        
+        // 初始化文件名解析器
         this.filenameParser = new FilenameParser(this, this.loggerService);
         
-        // 正确初始化FileDisplayCache，传入正确的类型参数
+        // 初始化文件显示缓存
         this.fileDisplayCache = new FileDisplayCache(
-            (cleanupCallback: () => void) => this.timerService.setInterval(cleanupCallback, 60000),
+            (callback: () => void) => this.timerService.setInterval(callback, 60000),
             this,
             this.loggerService
         );
         
-        // 使用插件作为参数（而不是app）
+        // 设置FileDisplayCache的依赖项
+        this.fileDisplayCache.setTimerService(this.timerService);
+        
+        // 初始化事件管理服务
         this.eventManager = new EventManagerService(this, this.loggerService);
+        this.eventManager.setupVaultEventListeners();
+        this.eventManager.setupMetadataEventListeners();
+        
+        // 初始化链接状态管理器
         this.linkStateManager = new LinkStateManager(this);
         
         // 初始化扩展缓存服务
         this.extensionCacheService = new ExtensionCacheService(this);
         
-        // 创建临时更新文件显示的函数，稍后会更新
-        const tempUpdateFileFn = async (file: TFile) => {
-            // 临时实现，稍后会被fileDisplayService的方法替代
-            console.log('Temporary file display update function');
+        // 初始化文件浏览器显示服务
+        this.fileExplorerDisplayService = new FileExplorerDisplayService(
+            this,
+            this.filenameParser,
+            this.fileDisplayCache,
+            this.eventManager,
+            this.loggerService
+        );
+        
+        // 创建文件更新函数
+        const updateFileFn = async (file: TFile) => {
+            return this.fileExplorerDisplayService.updateFileExplorerDisplay(file);
         };
         
-        // 初始化依赖其他服务的组件
+        // 初始化文件处理服务
         this.fileProcessorService = new FileProcessorService(
             this,
             this.filenameParser,
             this.fileDisplayCache,
             this.timerService,
             this.loggerService,
-            tempUpdateFileFn
+            updateFileFn
         );
         
+        // 设置FileDisplayCache的FileProcessorService依赖
+        this.fileDisplayCache.setFileProcessorService(this.fileProcessorService);
+        
+        // 初始化Markdown链接服务
         this.markdownLinkService = new MarkdownLinkService(
             this,
             this.filenameParser,
             this.fileDisplayCache
         );
-    }
-
-    /**
-     * 注册所有服务
-     */
-    private registerServices() {
-        // 注册日志服务（首先注册，因为其他服务可能依赖它）
-        this.serviceContainer.register(
-            SERVICE_TYPES.LoggerService, 
+        
+        // 初始化编辑器链接装饰器 - 由于已修改构造函数，直接使用新的参数列表
+        this.editorLinkDecorator = new EditorLinkDecorator(
+            this,
+            this.filenameParser,
+            this.fileDisplayCache
+        );
+        
+        // 初始化文件显示服务
+        this.fileDisplayService = new FileDisplayService(
+            this,
+            this.filenameParser,
+            this.fileDisplayCache,
+            this.fileExplorerDisplayService,
+            this.fileProcessorService,
+            this.markdownLinkService,
+            this.editorLinkDecorator,
+            this.eventManager,
+            this.timerService,
             this.loggerService
         );
-        
-        // 注册错误处理服务
-        this.serviceContainer.register(
-            SERVICE_TYPES.ErrorHandler, 
-            errorHandler
-        );
-        
-        // 注册定时器服务
-        this.serviceContainer.register(
-            SERVICE_TYPES.TimerService, 
-            this.timerService
-        );
-        
-        // 注册扩展缓存服务
-        this.serviceContainer.register(
-            SERVICE_TYPES.ExtensionCacheService,
-            this.extensionCacheService
-        );
-        
-        // 注册链接状态管理器服务
-        this.serviceContainer.register(
-            SERVICE_TYPES.LinkStateManager,
-            this.linkStateManager
-        );
-        
-        // 注册链接装饰扩展提供者服务
-        this.serviceContainer.register(
-            SERVICE_TYPES.LinkDecorationExtensionProvider,
-            new LinkDecorationExtensionProvider(this)
-        );
-        
-        // 注册文件名解析服务（通过工厂函数）
-        this.serviceContainer.registerFactory(
-            SERVICE_TYPES.FilenameParser, 
-            () => this.filenameParser
-        );
-        
-        // 注册文件显示缓存服务（通过工厂函数）
-        this.serviceContainer.registerFactory(
-            SERVICE_TYPES.FileDisplayCache, 
-            () => this.fileDisplayCache
-        );
-        
-        // 注册事件管理服务（通过工厂函数）
-        this.serviceContainer.registerFactory(
-            SERVICE_TYPES.EventManagerService,
-            () => this.eventManager
-        );
-        
-        // 注册文件资源管理器显示服务（通过工厂函数）
-        this.serviceContainer.registerFactory(
-            SERVICE_TYPES.FileExplorerDisplayService, 
-            (container) => new FileExplorerDisplayService(
-                this,
-                container.get(SERVICE_TYPES.FilenameParser),
-                container.get(SERVICE_TYPES.FileDisplayCache),
-                container.get(SERVICE_TYPES.EventManagerService),
-                container.get(SERVICE_TYPES.LoggerService)
-            )
-        );
-        
-        // 注册文件处理服务（通过工厂函数）
-        this.serviceContainer.registerFactory(
-            SERVICE_TYPES.FileProcessorService, 
-            (container) => new FileProcessorService(
-                this,
-                container.get(SERVICE_TYPES.FilenameParser),
-                container.get(SERVICE_TYPES.FileDisplayCache),
-                container.get(SERVICE_TYPES.TimerService),
-                container.get(SERVICE_TYPES.LoggerService),
-                async (file: TFile) => {
-                    // 直接使用FileExplorerDisplayService更新文件
-                    const fileExplorerDisplayService = container.get<IFileExplorerDisplayService>(SERVICE_TYPES.FileExplorerDisplayService);
-                    return fileExplorerDisplayService.updateFileExplorerDisplay(file);
-                }
-            )
-        );
-        
-        // 注册Markdown链接服务（通过工厂函数）
-        this.serviceContainer.registerFactory(
-            SERVICE_TYPES.MarkdownLinkService, 
-            () => this.markdownLinkService
-        );
-        
-        // 注册编辑器链接装饰器服务（通过工厂函数）
-        this.serviceContainer.registerFactory(
-            SERVICE_TYPES.EditorLinkDecorator, 
-            (container) => new EditorLinkDecorator(
-                this,
-                container.get(SERVICE_TYPES.FilenameParser),
-                container.get(SERVICE_TYPES.FileDisplayCache)
-            )
-        );
-        
-        // 注册主文件显示服务（通过工厂函数）
-        this.serviceContainer.registerFactory(
-            SERVICE_TYPES.FileDisplayService, 
-            (container) => new FileDisplayService(
-                this,
-                container.get(SERVICE_TYPES.FilenameParser),
-                container.get(SERVICE_TYPES.FileDisplayCache),
-                container.get(SERVICE_TYPES.FileExplorerDisplayService),
-                container.get(SERVICE_TYPES.FileProcessorService),
-                container.get(SERVICE_TYPES.MarkdownLinkService),
-                container.get(SERVICE_TYPES.EditorLinkDecorator),
-                container.get(SERVICE_TYPES.EventManagerService),
-                container.get(SERVICE_TYPES.TimerService),
-                container.get(SERVICE_TYPES.LoggerService)
-            )
-        );
-        
-        // 设置事件监听器
-        const eventManagerService = this.serviceContainer.get<EventManagerService>(SERVICE_TYPES.EventManagerService);
-        eventManagerService.setupVaultEventListeners();
-        eventManagerService.setupMetadataEventListeners();
-        
-        // 获取主文件显示服务
-        this.fileDisplayService = this.serviceContainer.get<FileDisplayService>(SERVICE_TYPES.FileDisplayService);
     }
 
     onunload() {
@@ -294,7 +200,7 @@ export default class TitleExtractorPlugin extends Plugin {
         try {
             // 取消任何正在进行的缓存预热
             try {
-                const fileDisplayCache = this.serviceContainer?.get<FileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
+                const fileDisplayCache = this.fileDisplayCache;
                 if (fileDisplayCache) {
                     logger.log('取消正在进行的缓存预热...');
                     if (fileDisplayCache.isWarmingUp()) {
@@ -342,10 +248,9 @@ export default class TitleExtractorPlugin extends Plugin {
             
             // 获取并清理编辑器链接装饰器
             try {
-                const editorLinkDecorator = this.serviceContainer?.get<IEditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator);
-                if (editorLinkDecorator) {
+                if (this.editorLinkDecorator) {
                     logger.log('清理编辑器链接装饰器...');
-                    editorLinkDecorator.dispose();
+                    this.editorLinkDecorator.dispose();
                 }
             } catch (e) {
                 logger.error('清理编辑器链接装饰器时出错:', e);
@@ -353,37 +258,23 @@ export default class TitleExtractorPlugin extends Plugin {
             
             // 清理扩展缓存
             try {
-                const extensionCacheService = this.serviceContainer?.get<ExtensionCacheService>(SERVICE_TYPES.ExtensionCacheService);
-                if (extensionCacheService) {
+                if (this.extensionCacheService) {
                     logger.log('清理扩展缓存服务...');
-                    extensionCacheService.clearCache();
+                    this.extensionCacheService.clearCache();
                 }
             } catch (e) {
                 logger.error('清理扩展缓存服务时出错:', e);
             }
             
-            // 清理服务容器
-            if (this.serviceContainer) {
-                logger.log('清理服务容器...');
-                this.serviceContainer.dispose();
-                // 创建一个新的空服务容器，使用静态方法获取实例
-                this.serviceContainer = ServiceContainer.getInstance();
-            }
+            // 清理所有服务资源
+            this.cleanupServices();
             
             logger.log('TitleExtractor插件已成功卸载并清理所有资源');
         } catch (error) {
             logger.error('卸载TitleExtractor插件时出错:', error);
             
-            // 即使有错误，也尝试清理服务容器
-            try {
-                if (this.serviceContainer) {
-                    this.serviceContainer.dispose();
-                    // 创建一个新的空服务容器，使用静态方法获取实例
-                    this.serviceContainer = ServiceContainer.getInstance();
-                }
-            } catch (e) {
-                logger.error('清理服务容器时出现二次错误:', e);
-            }
+            // 即使有错误，也尝试清理服务资源
+            this.cleanupServices();
         }
     }
 
@@ -397,13 +288,13 @@ export default class TitleExtractorPlugin extends Plugin {
         // 触发设置变更事件，通知扩展缓存服务
         window.dispatchEvent(new CustomEvent('filename-display:settings-changed'));
         
-        // 如果服务容器已初始化，刷新编辑器扩展
-        if (this.serviceContainer) {
+        // 如果服务已初始化，刷新编辑器扩展
+        if (this.fileDisplayService) {
             // 更新编辑器扩展
             this.app.workspace.updateOptions();
             
             // 更新所有文件显示
-            this.updateAllFilesDisplay();
+            this.fileDisplayService.updateAllFilesDisplay();
         }
     }
 
@@ -458,7 +349,7 @@ export default class TitleExtractorPlugin extends Plugin {
     private async warmUpCache(): Promise<void> {
         try {
             // 获取缓存服务
-            const fileDisplayCache = this.serviceContainer.get<FileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
+            const fileDisplayCache = this.fileDisplayCache;
             
             // 在应用完全加载后延迟一点时间再执行缓存预热
             // 这有助于确保Obsidian的vault已完全加载所有文件
@@ -530,7 +421,7 @@ export default class TitleExtractorPlugin extends Plugin {
         this.registerEvent(
             this.app.workspace.on('layout-change', () => {
                 // 重置文件资源管理器观察器
-                const fileExplorerDisplayService = this.serviceContainer.get<FileExplorerDisplayService>(SERVICE_TYPES.FileExplorerDisplayService);
+                const fileExplorerDisplayService = this.fileExplorerDisplayService;
                 fileExplorerDisplayService.resetObservers();
                 
                 // 延迟更新所有文件的显示，避免布局更改后立即处理
@@ -544,7 +435,7 @@ export default class TitleExtractorPlugin extends Plugin {
         window.addEventListener('filename-display:update-cache-strategy', ((event: CustomEvent) => {
             try {
                 const strategy = event.detail.strategy as CacheCleanStrategy;
-                const fileDisplayCache = this.serviceContainer.get<FileDisplayCache>(SERVICE_TYPES.FileDisplayCache);
+                const fileDisplayCache = this.fileDisplayCache;
                 if (fileDisplayCache) {
                     fileDisplayCache.setCacheCleanStrategy(strategy);
                     logger.log(`已更新缓存清理策略为: ${CacheCleanStrategy[strategy]}`);
@@ -563,7 +454,7 @@ export default class TitleExtractorPlugin extends Plugin {
      */
     private setupFileExplorer(): void {
         // 获取文件资源管理器显示服务
-        const fileExplorerDisplayService = this.serviceContainer.get<FileExplorerDisplayService>(SERVICE_TYPES.FileExplorerDisplayService);
+        const fileExplorerDisplayService = this.fileExplorerDisplayService;
         
         // 检查文件资源管理器是否已加载
         const checkExplorer = () => {
@@ -637,7 +528,7 @@ export default class TitleExtractorPlugin extends Plugin {
             // 2. 注册链接相关扩展
             const linkExtensions = [
                 // 从编辑器链接装饰器获取扩展
-                ...this.serviceContainer.get<IEditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator).getExtension()
+                ...this.editorLinkDecorator.getExtension()
             ];
             
             this.registerEditorExtension(linkExtensions, EXTENSION_GROUPS.LINK);
@@ -652,7 +543,7 @@ export default class TitleExtractorPlugin extends Plugin {
             // 兜底方案：使用传统方式注册所有扩展
             this.editorExtensions = [
                 // 从编辑器链接装饰器获取扩展
-                ...this.serviceContainer.get<IEditorLinkDecorator>(SERVICE_TYPES.EditorLinkDecorator).getExtension(),
+                ...this.editorLinkDecorator.getExtension(),
                 
                 // 添加其他必要的扩展
                 viewportExtension(),
@@ -675,5 +566,57 @@ export default class TitleExtractorPlugin extends Plugin {
      */
     private createCombinedExtensions(): Extension {
         return this.extensionCacheService.getCombinedExtensions();
+    }
+
+    /**
+     * 清理所有服务资源
+     */
+    private cleanupServices(): void {
+        try {
+            // 按照依赖顺序逐个清理
+            if (this.fileDisplayService && typeof this.fileDisplayService.dispose === 'function') {
+                this.fileDisplayService.dispose();
+            }
+            
+            if (this.editorLinkDecorator && typeof this.editorLinkDecorator.dispose === 'function') {
+                this.editorLinkDecorator.dispose();
+            }
+            
+            // 移除不支持dispose方法的服务检查
+            
+            if (this.fileExplorerDisplayService && typeof this.fileExplorerDisplayService.dispose === 'function') {
+                this.fileExplorerDisplayService.dispose();
+            }
+            
+            if (this.fileDisplayCache && typeof this.fileDisplayCache.dispose === 'function') {
+                this.fileDisplayCache.dispose();
+            }
+            
+            if (this.filenameParser && typeof this.filenameParser.dispose === 'function') {
+                this.filenameParser.dispose();
+            }
+            
+            if (this.eventManager && typeof this.eventManager.dispose === 'function') {
+                this.eventManager.dispose();
+            }
+            
+            if (this.timerService && typeof this.timerService.dispose === 'function') {
+                this.timerService.dispose();
+            }
+            
+            if (this.loggerService && typeof this.loggerService.dispose === 'function') {
+                this.loggerService.dispose();
+            }
+            
+            if (this.extensionCacheService && typeof this.extensionCacheService.dispose === 'function') {
+                this.extensionCacheService.dispose();
+            }
+            
+            if (this.linkStateManager && typeof this.linkStateManager.dispose === 'function') {
+                this.linkStateManager.dispose();
+            }
+        } catch (error) {
+            console.error('清理服务时出错:', error);
+        }
     }
 } 

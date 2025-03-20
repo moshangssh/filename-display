@@ -88,7 +88,8 @@ export interface IFileProcessorService {
     processFile(file: TFile): Promise<FileDisplayResult | undefined> | FileDisplayResult;
     updateAllFilesDisplay(clearCache?: boolean): void;
     separateFilesByVisibility(files: TFile[]): { visibleFiles: TFile[], otherFiles: TFile[] };
-    getBatchProcessor(): any;
+    addToProcessQueue(files: TFile[], highPriority?: boolean): void;
+    getQueueStatus(): { queueLength: number; isProcessing: boolean };
     dispose(): void;
 }
 

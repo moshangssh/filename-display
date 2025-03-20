@@ -1,8 +1,8 @@
 import { Extension } from '@codemirror/state';
 import { ViewPlugin, ViewUpdate, EditorView, PluginValue } from '@codemirror/view';
-import { Logger } from '../utils/logger';
+import { LoggerService } from "../services/LoggerService";
 
-const logger = new Logger('IncrementalUpdate');
+const logger = new LoggerService('IncrementalUpdate');
 
 interface ChangeRange {
   from: number;

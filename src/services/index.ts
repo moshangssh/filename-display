@@ -8,8 +8,8 @@ export { MarkdownLinkService } from './MarkdownLinkService';
 export { EventManagerService } from './EventManagerService';
 export { EditorLinkDecorator } from './EditorLinkDecorator';
 export { TimerService } from './TimerService';
-export { BatchProcessor } from './BatchProcessor';
-export { LinkHandler } from './LinkHandler';
 
-// 导出服务容器和服务类型
-export { ServiceContainer, SERVICE_TYPES } from './di/ServiceContainer'; 
+// 导出其他服务
+export { ExtensionCacheService } from './ExtensionCacheService';
+export { LinkStateManager } from './LinkStateManager';
+export { LoggerService } from './LoggerService'; 

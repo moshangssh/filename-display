@@ -9,7 +9,7 @@ globs: *
 alwaysApply: true
 ---
 
-# Specific Greeting Format Rule
+# Model Name Prefix Rule
 
 ## Context
 - In all conversations with the user
@@ -17,14 +17,19 @@ alwaysApply: true
 - Maintain consistency throughout the entire conversation
 
 ## Requirements
-- Every response must begin with "收到, 宇宙无敌大帅哥"
-- Provide substantive reply after the opening greeting
+- Every response must begin with the model's actual name followed by a colon and space
+- The model name should be the one currently in use, not a fixed example
+- Provide substantive reply after the model name prefix
 - Maintain a professional and respectful tone
 - Ensure the opening format is consistent, not to be changed or omitted
 
 ## Examples
 <example>
-收到, 宇宙无敌大帅哥! I have completed the code optimization task you requested.
+GPT-4: I have completed the code optimization task you requested.
+</example>
+
+<example>
+Claude 2: I have completed the code optimization task you requested.
 </example>
 
 <example type="invalid">
@@ -32,11 +37,14 @@ I have completed the code optimization task you requested.
 </example>
 
 <example type="invalid">
-Received! I have completed the code optimization task you requested.
+Claude 3.7 Sonnet: I have completed the code optimization task you requested.
+(Only if this is not the actual model in use)
 </example>
 
 ## Critical Rules
-- Every response must start with the complete phrase "收到, 宇宙无敌大帅哥", which cannot be omitted or modified
-- Use an exclamation mark or other appropriate punctuation after the greeting
-- There should be a space between the greeting and the subsequent content
-- This rule takes precedence over other communication rules 
+- Every response must start with the model's actual current name, not a fixed example
+- The model should use its own true identity, not impersonate other models
+- Include a colon and space after the model name before the content
+- This rule takes precedence over other communication rules
+
+

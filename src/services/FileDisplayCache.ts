@@ -1,8 +1,8 @@
 // 文件缓存管理器类，负责处理文件显示名称的缓存
 import { TFile } from 'obsidian';
-import { ILoggerService, ITimerService, CacheCleanStrategy } from './interfaces/IServices';
-import { ServiceContainer, SERVICE_TYPES } from './di/ServiceContainer';
+import { IFileDisplayCache, ILoggerService, ITimerService, CacheCleanStrategy } from './interfaces/IServices';
 import { FileProcessorService } from './FileProcessorService';
+import { FileDisplayResult } from '../types';
 
 // 定义文件缓存项类型
 interface FileCacheItem {
@@ -14,9 +14,10 @@ interface FileCacheItem {
     links: Set<string>;          // 该文件引用的其他文件
     priority: boolean;           // 是否为高优先级
     accessCount: number;         // 访问计数，用于LRU策略
+    result?: FileDisplayResult;  // 存储结果对象，便于实现get/set方法
 }
 
-export class FileDisplayCache {
+export class FileDisplayCache implements IFileDisplayCache {
     // 主缓存，存储所有文件信息
     private fileCache: Map<string, FileCacheItem> = new Map();
     
@@ -36,7 +37,6 @@ export class FileDisplayCache {
     private plugin: any; // 存储插件引用，用于访问 app.vault
     private cacheWarmedUp: boolean = false;
     private logger: ILoggerService;
-    private serviceContainer: ServiceContainer;
     private cleanStrategy: CacheCleanStrategy = CacheCleanStrategy.LRU; // 默认使用LRU策略
     private lastCleanupTime: number = 0; // 上次清理时间
     private pendingCleanup: boolean = false; // 是否有待处理的清理
@@ -49,6 +49,10 @@ export class FileDisplayCache {
     private warmupPromise: Promise<void> | null = null;
     // 预热任务的唯一标识符，用于防止多个预热任务冲突
     private warmupTaskId: string = '';
+    
+    // 添加TimerService引用
+    private timerService: ITimerService | null = null;
+    private fileProcessorService: FileProcessorService | null = null;
     
     constructor(
         private timerCallback?: (cleanupCallback: () => void) => number, 
@@ -66,19 +70,25 @@ export class FileDisplayCache {
             error: (message: string, ...args: any[]) => console.error(`[FileDisplayCache] ${message}`, ...args),
             debug: (message: string, ...args: any[]) => console.debug(`[FileDisplayCache] ${message}`, ...args),
             getLogger: (prefix: string) => this.logger,
-            dispose: () => {}
+            dispose: () => {},
+            isDebugEnabled: () => false
         };
-        
-        // 获取服务容器
-        if (plugin) {
-            this.serviceContainer = ServiceContainer.getInstance(plugin);
-        }
         
         // 开始定期清理缓存
         this.startPeriodicCleanup();
         
         // 初始化时加载缓存数据
         this.loadCacheFromData();
+    }
+    
+    // 添加设置TimerService的方法
+    public setTimerService(timerService: ITimerService): void {
+        this.timerService = timerService;
+    }
+    
+    // 添加设置FileProcessorService的方法
+    public setFileProcessorService(fileProcessorService: FileProcessorService): void {
+        this.fileProcessorService = fileProcessorService;
     }
     
     // 开始定期清理计时器
@@ -383,23 +393,29 @@ export class FileDisplayCache {
         }
     }
     
-    // 检查是否需要触发惰性清理
+    /**
+     * 检查并触发懒清理
+     */
     private checkAndTriggerLazyCleanup(): void {
         // 如果缓存大小超过阈值且距离上次清理已经过去了一定时间
         const now = Date.now();
         if (this.fileCache.size > this.CACHE_SIZE_THRESHOLD && 
             now - this.lastCleanupTime > this.CLEANUP_INTERVAL / 2) {
             
-            // 使用requestIdleCallback在浏览器空闲时执行清理
-            if (this.serviceContainer) {
-                const timerService = this.serviceContainer.get<ITimerService>(SERVICE_TYPES.TimerService);
-                if (timerService) {
-                    timerService.requestIdleCallback(() => {
-                        this.clearExpired();
-                        this.enforceCacheSizeLimit();
-                        this.lastCleanupTime = Date.now();
-                    });
-                }
+            // 替换对ServiceContainer的引用
+            if (this.timerService) {
+                this.timerService.requestIdleCallback(() => {
+                    this.clearExpired();
+                    this.enforceCacheSizeLimit();
+                    this.lastCleanupTime = Date.now();
+                });
+            } else {
+                // 使用setTimeout作为后备
+                setTimeout(() => {
+                    this.clearExpired();
+                    this.enforceCacheSizeLimit();
+                    this.lastCleanupTime = Date.now();
+                }, 0);
             }
         }
     }
@@ -673,7 +689,9 @@ export class FileDisplayCache {
         return this.warmupPromise !== null;
     }
     
-    // 执行缓存预热
+    /**
+     * 预热缓存
+     */
     public async warmUpCache(): Promise<void> {
         // 防止重复预热
         if (this.cacheWarmedUp) {
@@ -794,133 +812,183 @@ export class FileDisplayCache {
                 }
                 
                 // 2. 分离可见文件和其他文件
-                const fileProcessorService = this.serviceContainer.get<FileProcessorService>(SERVICE_TYPES.FileProcessorService);
-                const { visibleFiles, otherFiles } = fileProcessorService.separateFilesByVisibility(files);
-                
-                // 更新进度
-                this.warmupProgress = 30;
-                
-                // 检查是否已取消
-                if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
-                    return;
-                }
-                
-                // 3. 先处理可见文件
-                let processedCount = 0;
-                for (const file of visibleFiles) {
-                    try {
-                        // 获取文件的缓存
-                        const fileCache = this.plugin?.app?.metadataCache?.getFileCache(file);
-                        if (!fileCache || !fileCache.links) continue;
-                        
-                        // 记录链接关系
-                        for (const link of fileCache.links) {
-                            if (!link.link) continue;
-                            
-                            // 获取链接目标文件
-                            const targetFile = this.plugin?.app?.metadataCache?.getFirstLinkpathDest(link.link, file.path);
-                            if (!targetFile) continue;
-                            
-                            // 添加链接关系
-                            this.addFileLink(file.path, targetFile.path);
-                        }
-                        
-                        // 定期更新进度并检查取消
-                        if (++processedCount % 20 === 0) {
-                            // 计算可见文件的进度（30%-60%）
-                            const visibleProgress = 30 + Math.min(30, Math.floor(30 * processedCount / visibleFiles.length));
-                            this.warmupProgress = visibleProgress;
-                            
-                            // 检查是否已取消
-                            if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
-                                return;
-                            }
-                            
-                            // 让UI有机会更新（避免长时间阻塞主线程）
-                            await new Promise(resolve => setTimeout(resolve, 0));
-                        }
-                    } catch (error) {
-                        this.logger?.error(`处理可见文件 ${file.path} 时出错:`, error);
-                        // 继续处理其他文件
+                if (this.fileProcessorService) {
+                    const { visibleFiles, otherFiles } = this.fileProcessorService.separateFilesByVisibility(files);
+                    
+                    // 更新进度
+                    this.warmupProgress = 30;
+                    
+                    // 检查是否已取消
+                    if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
+                        return;
                     }
-                }
-                
-                // 更新进度
-                this.warmupProgress = 60;
-                
-                // 检查是否已取消
-                if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
-                    return;
-                }
-                
-                // 4. 在后台处理其他文件
-                if (otherFiles.length > 0) {
-                    // 创建一个处理函数
-                    const processFile = async (file: TFile): Promise<boolean> => {
+                    
+                    // 3. 先处理可见文件
+                    let processedCount = 0;
+                    for (const file of visibleFiles) {
                         try {
+                            // 获取文件的缓存
                             const fileCache = this.plugin?.app?.metadataCache?.getFileCache(file);
-                            if (!fileCache || !fileCache.links) return true;
+                            if (!fileCache || !fileCache.links) continue;
                             
+                            // 记录链接关系
                             for (const link of fileCache.links) {
                                 if (!link.link) continue;
                                 
+                                // 获取链接目标文件
                                 const targetFile = this.plugin?.app?.metadataCache?.getFirstLinkpathDest(link.link, file.path);
                                 if (!targetFile) continue;
                                 
+                                // 添加链接关系
                                 this.addFileLink(file.path, targetFile.path);
                             }
-                            return true;
+                            
+                            // 定期更新进度并检查取消
+                            if (++processedCount % 20 === 0) {
+                                // 计算可见文件的进度（30%-60%）
+                                const visibleProgress = 30 + Math.min(30, Math.floor(30 * processedCount / visibleFiles.length));
+                                this.warmupProgress = visibleProgress;
+                                
+                                // 检查是否已取消
+                                if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
+                                    return;
+                                }
+                                
+                                // 让UI有机会更新（避免长时间阻塞主线程）
+                                await new Promise(resolve => setTimeout(resolve, 0));
+                            }
                         } catch (error) {
-                            this.logger?.error(`处理文件 ${file.path} 时出错:`, error);
-                            return false;
+                            this.logger?.error(`处理可见文件 ${file.path} 时出错:`, error);
+                            // 继续处理其他文件
                         }
-                    };
+                    }
                     
-                    // 使用TimerService在空闲时间处理其余文件
-                    const timerService = this.serviceContainer.get<ITimerService>(SERVICE_TYPES.TimerService);
+                    // 更新进度
+                    this.warmupProgress = 60;
                     
-                    // 分批处理文件
+                    // 检查是否已取消
+                    if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
+                        return;
+                    }
+                    
+                    // 4. 在后台处理其他文件
+                    if (otherFiles.length > 0) {
+                        // 创建一个处理函数
+                        const processFile = async (file: TFile): Promise<boolean> => {
+                            try {
+                                const fileCache = this.plugin?.app?.metadataCache?.getFileCache(file);
+                                if (!fileCache || !fileCache.links) return true;
+                                
+                                for (const link of fileCache.links) {
+                                    if (!link.link) continue;
+                                    
+                                    const targetFile = this.plugin?.app?.metadataCache?.getFirstLinkpathDest(link.link, file.path);
+                                    if (!targetFile) continue;
+                                    
+                                    this.addFileLink(file.path, targetFile.path);
+                                }
+                                return true;
+                            } catch (error) {
+                                this.logger?.error(`处理文件 ${file.path} 时出错:`, error);
+                                return false;
+                            }
+                        };
+                        
+                        // 使用TimerService在空闲时间处理其余文件
+                        const timerService = this.timerService;
+                        
+                        // 分批处理文件
+                        const batchSize = 20;
+                        let successCount = 0;
+                        let errorCount = 0;
+                        
+                        if (timerService) {
+                            for (let i = 0; i < otherFiles.length; i += batchSize) {
+                                // 检查是否已取消
+                                if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
+                                    return;
+                                }
+                                
+                                const batch = otherFiles.slice(i, i + batchSize);
+                                
+                                // 使用Promise.all处理一批文件，但使用requestIdleCallback调度
+                                await new Promise<void>((resolve) => {
+                                    timerService.requestIdleCallback(async () => {
+                                        // 处理这一批文件
+                                        const results = await Promise.allSettled(
+                                            batch.map((file: TFile) => processFile(file))
+                                        );
+                                        
+                                        // 统计成功和失败的数量
+                                        for (const result of results) {
+                                            if (result.status === 'fulfilled' && result.value) {
+                                                successCount++;
+                                            } else {
+                                                errorCount++;
+                                            }
+                                        }
+                                        
+                                        // 计算其他文件的进度（60%-90%）
+                                        const totalProcessed = i + batch.length;
+                                        const otherProgress = 60 + Math.min(30, Math.floor(30 * totalProcessed / otherFiles.length));
+                                        this.warmupProgress = otherProgress;
+                                        
+                                        resolve();
+                                    });
+                                });
+                            }
+                        } else {
+                            // 如果没有timerService，使用简单的批处理
+                            for (let i = 0; i < otherFiles.length; i += batchSize) {
+                                // 检查是否已取消
+                                if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
+                                    return;
+                                }
+                                
+                                const batch = otherFiles.slice(i, i + batchSize);
+                                
+                                // 处理这一批文件
+                                const results = await Promise.allSettled(
+                                    batch.map((file: TFile) => processFile(file))
+                                );
+                                
+                                // 更新进度
+                                this.warmupProgress = Math.min(100, 30 + Math.floor((i + batch.length) / otherFiles.length * 70));
+                            }
+                        }
+                        
+                        // 记录处理结果
+                        this.logger?.log(`后台文件处理完成: 成功=${successCount}, 失败=${errorCount}`);
+                    }
+                } else {
+                    // 如果没有fileProcessorService，直接处理所有文件
                     const batchSize = 20;
-                    let successCount = 0;
-                    let errorCount = 0;
-                    
-                    for (let i = 0; i < otherFiles.length; i += batchSize) {
+                    for (let i = 0; i < files.length; i += batchSize) {
                         // 检查是否已取消
                         if (this.checkWarmupCancelled() || currentTaskId !== this.warmupTaskId) {
                             return;
                         }
                         
-                        const batch = otherFiles.slice(i, i + batchSize);
+                        const batch = files.slice(i, i + batchSize);
                         
-                        // 使用Promise.all处理一批文件，但使用requestIdleCallback调度
-                        await new Promise<void>((resolve) => {
-                            timerService.requestIdleCallback(async () => {
-                                // 处理这一批文件
-                                const results = await Promise.allSettled(
-                                    batch.map(file => processFile(file))
-                                );
-                                
-                                // 统计成功和失败的数量
-                                for (const result of results) {
-                                    if (result.status === 'fulfilled' && result.value) {
-                                        successCount++;
-                                    } else {
-                                        errorCount++;
+                        // 处理这一批文件
+                        await Promise.all(
+                            batch.map(async (file: TFile) => {
+                                try {
+                                    if (file.extension === 'md') {
+                                        await this.processFileForDisplayName(file);
                                     }
+                                    return true;
+                                } catch (error) {
+                                    this.logger?.error(`处理文件 ${file.path} 时出错:`, error);
+                                    return false;
                                 }
-                                
-                                // 计算其他文件的进度（60%-90%）
-                                const totalProcessed = i + batch.length;
-                                const otherProgress = 60 + Math.min(30, Math.floor(30 * totalProcessed / otherFiles.length));
-                                this.warmupProgress = otherProgress;
-                                
-                                resolve();
-                            });
-                        });
+                            })
+                        );
+                        
+                        // 更新进度
+                        this.warmupProgress = Math.min(100, Math.floor((i + batch.length) / files.length * 100));
                     }
-                    
-                    // 记录处理结果
-                    this.logger?.log(`后台文件处理完成: 成功=${successCount}, 失败=${errorCount}`);
                 }
                 
                 // 检查是否已取消
@@ -1036,9 +1104,70 @@ export class FileDisplayCache {
         
         // 解除对外部服务的引用
         (this as any).plugin = null;
-        (this as any).serviceContainer = null;
         (this as any).timerCallback = null;
         
         this.logger.log('FileDisplayCache资源已完全释放');
+    }
+    
+    /**
+     * 实现IFileDisplayCache接口的get方法
+     */
+    public get(path: string): FileDisplayResult | undefined {
+        if (this.fileCache.has(path)) {
+            const item = this.fileCache.get(path)!;
+            return item.result || {
+                success: true,
+                displayName: item.displayName
+            };
+        }
+        return undefined;
+    }
+
+    /**
+     * 实现IFileDisplayCache接口的set方法
+     */
+    public set(path: string, result: FileDisplayResult): void {
+        if (!this.fileCache.has(path)) {
+            this.initCacheItem(path);
+        }
+        
+        const item = this.fileCache.get(path)!;
+        item.displayName = result.displayName;
+        item.result = result;
+        item.processed = true;
+        item.timestamp = Date.now();
+        item.accessCount++;
+        
+        // 自动保存缓存
+        this.saveCacheToData();
+    }
+
+    /**
+     * 为单个文件处理显示名称
+     */
+    private async processFileForDisplayName(file: TFile): Promise<boolean> {
+        if (!file || file.extension !== 'md') {
+            return false;
+        }
+        
+        try {
+            // 获取文件的元数据
+            const metadata = this.plugin.app.metadataCache.getFileCache(file);
+            
+            // 从元数据提取显示名称
+            let displayName = file.basename;
+            
+            // 检查是否有前置元数据标题
+            if (metadata?.frontmatter && 'title' in metadata.frontmatter) {
+                displayName = String(metadata.frontmatter.title).trim();
+            }
+            
+            // 保存到缓存
+            this.setDisplayName(file.path, displayName);
+            return true;
+        } catch (error) {
+            this.logger.error(`处理文件显示名称失败: ${file.path}`, error);
+            return false;
+        }
     }
 } 

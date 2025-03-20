@@ -1,4 +1,4 @@
-import { Logger } from '../../utils/logger';
+import { LoggerService } from "../../services/LoggerService";
 import type { ITitleExtractorPlugin } from '../../types';
 
 /**
@@ -6,7 +6,7 @@ import type { ITitleExtractorPlugin } from '../../types';
  * 提供缓存服务共享的基本功能（保存/加载数据等）
  */
 export abstract class BaseCacheService<T> {
-    protected readonly logger: Logger;
+    protected readonly logger: LoggerService;
     protected readonly plugin: ITitleExtractorPlugin;
     protected readonly storageKey: string;
     
@@ -20,7 +20,7 @@ export abstract class BaseCacheService<T> {
     constructor(plugin: ITitleExtractorPlugin, storageKey: string, loggerPrefix: string) {
         this.plugin = plugin;
         this.storageKey = storageKey;
-        this.logger = new Logger(loggerPrefix);
+        this.logger = new LoggerService(loggerPrefix);
     }
     
     /**

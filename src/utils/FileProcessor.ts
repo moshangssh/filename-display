@@ -2,9 +2,9 @@ import { TFile } from 'obsidian';
 import { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from '../services/FilenameParser';
 import { FileDisplayCache } from '../services/FileDisplayCache';
-import { Logger } from './logger';
+import { LoggerService } from '../services/LoggerService';
 
-const logger = new Logger('FileProcessor');
+const logger = new LoggerService('FileProcessor');
 
 /**
  * 共享的文件处理工具类，用于处理文件名称显示逻辑

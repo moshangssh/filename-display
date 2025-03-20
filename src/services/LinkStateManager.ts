@@ -1,5 +1,5 @@
 import { EditorView } from '@codemirror/view';
-import { Logger } from '../utils/logger';
+import { LoggerService } from "../services/LoggerService";
 import { updateTextEffect, updateLinkDisplayName, removeLinkDecoration } from '../extensions';
 import type { ITitleExtractorPlugin } from '../types';
 import { ILinkStateManager } from './interfaces/IServices';
@@ -7,7 +7,7 @@ import { MarkdownView } from 'obsidian';
 import { getEditorView } from '../utils/editor-utils';
 
 // 创建服务特定的日志记录器
-const logger = new Logger('LinkStateManager');
+const logger = new LoggerService('LinkStateManager');
 
 /**
  * 链接状态更新结果

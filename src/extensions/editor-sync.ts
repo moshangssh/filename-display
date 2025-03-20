@@ -1,9 +1,9 @@
 import { Extension } from '@codemirror/state';
 import { ViewPlugin, ViewUpdate, EditorView, PluginValue } from '@codemirror/view';
-import { Logger } from '../utils/logger';
+import { LoggerService } from '../services/LoggerService';
 import type { ITitleExtractorPlugin } from '../types';
 
-const logger = new Logger('EditorSync');
+const logger = new LoggerService('EditorSync');
 
 // 实现PluginValue接口，处理更新生命周期
 class EditorSyncPlugin implements PluginValue {

@@ -1,7 +1,7 @@
-import { Logger } from '../utils/logger';
+import { LoggerService } from "../services/LoggerService";
 import type { ITitleExtractorPlugin } from '../types';
 
-const logger = new Logger('DOMObserverService');
+const logger = new LoggerService('DOMObserverService');
 
 interface MutationRecord {
   type: 'childList' | 'attributes' | 'characterData';
