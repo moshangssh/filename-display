@@ -1,9 +1,8 @@
 import { MarkdownView, TFile } from 'obsidian';
 import type { ITitleExtractorPlugin } from '../types';
 import { FilenameParser } from './FilenameParser';
-import { FileDisplayCache } from './FileDisplayCache';
+import { IFileDisplayCache, IMarkdownLinkService } from './interfaces/IServices';
 import { LoggerService } from "../services/LoggerService";
-import { IMarkdownLinkService } from './interfaces/IServices';
 import { LinkUtils, LinkInfo, LinkProcessResult, LinkHandlerConfig } from './LinkUtils';
 
 // 创建服务特定的日志记录器
@@ -23,7 +22,7 @@ export class MarkdownLinkService implements IMarkdownLinkService {
     constructor(
         plugin: ITitleExtractorPlugin,
         filenameParser: FilenameParser,
-        fileDisplayCache: FileDisplayCache
+        fileDisplayCache: IFileDisplayCache
     ) {
         this.plugin = plugin;
         this.linkUtils = new LinkUtils(plugin, filenameParser, fileDisplayCache, {

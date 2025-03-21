@@ -3,7 +3,7 @@ import { EditorView } from '@codemirror/view';
 import { Extension } from '@codemirror/state';
 import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from './FilenameParser';
-import { FileDisplayCache } from './FileDisplayCache';
+import { IFileDisplayCache, ILinkStateManager } from './interfaces/IServices';
 import { LinkInfo, LinkProcessResult, LinkUtils } from './LinkUtils';
 import { LoggerService } from "../services/LoggerService";
 import { 
@@ -14,7 +14,6 @@ import {
 } from '../extensions';
 import { ExtensionCacheService, ExtensionType } from './ExtensionCacheService';
 import { getEditorView } from '../utils/editor-utils';
-import { ILinkStateManager } from './interfaces/IServices';
 
 // 创建服务特定的日志记录器
 const logger = new LoggerService('EditorLinkDecorator');
@@ -50,7 +49,7 @@ export class EditorLinkDecorator {
     constructor(
         private plugin: ITitleExtractorPlugin, 
         private filenameParser: FilenameParser, 
-        private fileDisplayCache: FileDisplayCache,
+        private fileDisplayCache: IFileDisplayCache,
         linkStateManager?: ILinkStateManager,
         loggerService?: LoggerService
     ) {
@@ -133,7 +132,7 @@ export class EditorLinkDecorator {
     }
 
     // 更新活跃视图和当前文件引用
-    private updateActiveView(): void {
+    public updateActiveView(): void {
         const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
         const editor = view?.editor;
         
@@ -224,8 +223,14 @@ export class EditorLinkDecorator {
             .map(link => link.path)
             .filter(path => !!path);
         
-        // 批量获取显示名称
-        const displayNamesMap = this.fileDisplayCache.batchGetDisplayNames(allPaths);
+        // 逐个获取显示名称，替代批量获取
+        const displayNamesMap = new Map<string, string>();
+        for (const path of allPaths) {
+            const displayName = this.fileDisplayCache.getDisplayName(path);
+            if (displayName) {
+                displayNamesMap.set(path, displayName);
+            }
+        }
         
         // 对于没有缓存的路径，创建任务来处理这些文件
         const pathsToProcess = allPaths.filter(path => !displayNamesMap.has(path));
@@ -283,13 +288,13 @@ export class EditorLinkDecorator {
         }
     }
 
-    // 收集需要处理的链接
-    private collectLinks(): LinkInfo[] {
-        const links: LinkInfo[] = [];
-        
-        if (!this.activeEditorView) {
-            return links;
+    // 收集链接
+    public collectLinks(): LinkInfo[] {
+        if (!this.activeEditorView || !this.currentFile) {
+            return [];
         }
+        
+        const links: LinkInfo[] = [];
         
         // 获取编辑器中的内容
         const content = this.activeEditorView.state.doc.toString();
@@ -328,8 +333,22 @@ export class EditorLinkDecorator {
                 this.processedLinks.delete(key);
             }
 
-            // 查找链接对应的文件
-            const file = this.linkUtils.getFileFromLink(linkPath);
+            // 先进行初始文件查找
+            let file = this.linkUtils.getFileFromLink(linkPath);
+            
+            // 如果找不到文件，尝试在包含下划线的路径上进行更多处理
+            if (!file && (linkPath.includes('_') || linkPath.includes(' '))) {
+                // 尝试使用替代路径
+                let altPath = linkPath.includes('_') ? linkPath.replace(/_/g, ' ') : linkPath.replace(/ /g, '_');
+                
+                // 再次尝试查找文件
+                file = this.linkUtils.getFileFromLink(altPath);
+                
+                // 如果找到了文件，更新linkPath
+                if (file) {
+                    linkPath = file.path;
+                }
+            }
             
             // 记录源文件和目标文件的链接关系（用于未来预加载）
             if (file && this.currentFile) {

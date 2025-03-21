@@ -1,7 +1,8 @@
 // 导出所有服务
 export { FileDisplayService } from './FileDisplayService';
 export { FilenameParser } from './FilenameParser';
-export { FileDisplayCache } from './FileDisplayCache';
+export { FileDisplayCache } from './cache/FileDisplayCache';
+export { FileDisplayCacheFactory } from './cache/FileDisplayCacheFactory';
 export { FileExplorerDisplayService } from './FileExplorerDisplayService';
 export { FileProcessorService } from './FileProcessorService';
 export { MarkdownLinkService } from './MarkdownLinkService';

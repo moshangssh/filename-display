@@ -1,7 +1,7 @@
 import { TFile } from 'obsidian';
 import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from './FilenameParser';
-import { FileDisplayCache } from './FileDisplayCache';
+import { IFileDisplayCache } from './interfaces/IServices';
 import { LoggerService } from "./LoggerService";
 
 // 创建服务特定的日志记录器
@@ -38,7 +38,7 @@ export interface LinkHandlerConfig {
 export class LinkUtils {
     private plugin: ITitleExtractorPlugin;
     private filenameParser: FilenameParser;
-    private fileDisplayCache: FileDisplayCache;
+    private fileDisplayCache: IFileDisplayCache;
     private config: LinkHandlerConfig;
     public readonly BATCH_SIZE = 25; // 每批处理的链接数量
     public readonly BATCH_DELAY = 0; // 批次间延迟(毫秒)
@@ -46,7 +46,7 @@ export class LinkUtils {
     constructor(
         plugin: ITitleExtractorPlugin,
         filenameParser: FilenameParser,
-        fileDisplayCache: FileDisplayCache,
+        fileDisplayCache: IFileDisplayCache,
         config?: Partial<LinkHandlerConfig>
     ) {
         this.plugin = plugin;
@@ -248,7 +248,41 @@ export class LinkUtils {
                 if (file) return pathWithoutExt;
             }
             
+            // 4. 尝试规范化文件名中的特殊字符
+            // 处理可能包含特殊字符的文件名（例如将下划线替换为空格）
+            if (path.includes('_')) {
+                const normalizedPath = path.replace(/_/g, ' ');
+                file = this.plugin.app.vault.getAbstractFileByPath(normalizedPath);
+                if (file) return normalizedPath;
+                
+                // 同时尝试带 .md 后缀的版本
+                if (!normalizedPath.endsWith('.md')) {
+                    const normalizedPathWithExt = normalizedPath + '.md';
+                    file = this.plugin.app.vault.getAbstractFileByPath(normalizedPathWithExt);
+                    if (file) return normalizedPathWithExt;
+                }
+            }
+            
+            // 5. 使用 getFirstLinkpathDest 进行更智能的查找（用于别名和其他情况）
+            const linkedFile = this.plugin.app.metadataCache.getFirstLinkpathDest(path, '');
+            if (linkedFile) {
+                return linkedFile.path;
+            }
+            
+            // 如果包含特殊字符，尝试使用 getFirstLinkpathDest
+            if (path.includes('_') || path.includes(' ')) {
+                // 尝试使用规范化路径
+                const altPath = path.includes('_') ? path.replace(/_/g, ' ') : path.replace(/ /g, '_');
+                const altFile = this.plugin.app.metadataCache.getFirstLinkpathDest(altPath, '');
+                if (altFile) {
+                    return altFile.path;
+                }
+            }
+            
             // 如果以上都没找到，则返回原始路径，让调用方自行判断
+            if (path.includes('_') || path.includes(' ')) {
+                logger.debug(`尝试查找文件: ${path} (使用了多种路径形式但未找到)`);
+            }
             logger.log(`无法在库中找到匹配文件: ${path}，可能是别名或不存在的链接`);
             return path;
         } catch (error) {

@@ -1,33 +1,54 @@
 import { TFile, MarkdownView, WorkspaceLeaf } from 'obsidian';
 import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from './FilenameParser';
-import { FileDisplayCache } from './FileDisplayCache';
-import { IFileProcessorService, ITimerService, ILoggerService } from './interfaces/IServices';
+import { IFileProcessorService, ITimerService, ILoggerService, IFileDisplayCache } from './interfaces/IServices';
 
 export class FileProcessorService implements IFileProcessorService {
     private plugin: ITitleExtractorPlugin;
     private filenameParser: FilenameParser;
-    private fileDisplayCache: FileDisplayCache;
-    private timerService: ITimerService;
+    private fileDisplayCache: IFileDisplayCache | null;
     private logger: ILoggerService;
+    private timerService: ITimerService | null = null;
     private processQueue: Array<{file: TFile; priority: boolean}> = [];
     private processingBatch = false;
     private batchSize = 50;
+    private updateFileDisplayFn: ((file: TFile) => Promise<void>) | null = null;
     
     constructor(
         plugin: ITitleExtractorPlugin,
         filenameParser: FilenameParser,
-        fileDisplayCache: FileDisplayCache,
-        timerService: ITimerService,
-        loggerService: ILoggerService,
-        private updateFileDisplayFn: (file: TFile) => Promise<void>
+        fileDisplayCache: IFileDisplayCache | null,
+        loggerService: ILoggerService
     ) {
         this.plugin = plugin;
         this.filenameParser = filenameParser;
         this.fileDisplayCache = fileDisplayCache;
-        this.timerService = timerService;
         this.logger = loggerService.getLogger('FileProcessorService');
         this.logger.debug('FileProcessorService已初始化');
+    }
+    
+    /**
+     * 设置定时器服务
+     * @param timerService 定时器服务实例
+     */
+    public setTimerService(timerService: ITimerService): void {
+        this.timerService = timerService;
+    }
+    
+    /**
+     * 设置文件显示缓存引用
+     * @param cache 文件显示缓存实例
+     */
+    public setFileDisplayCache(cache: IFileDisplayCache): void {
+        this.fileDisplayCache = cache;
+    }
+    
+    /**
+     * 设置文件显示更新函数
+     * @param fn 更新函数
+     */
+    public setUpdateFileDisplayFn(fn: (file: TFile) => Promise<void>): void {
+        this.updateFileDisplayFn = fn;
     }
     
     // 处理单个文件并返回处理结果
@@ -42,7 +63,7 @@ export class FileProcessorService implements IFileProcessorService {
         }
 
         // 检查缓存
-        if (this.fileDisplayCache.hasDisplayName(file.path)) {
+        if (this.fileDisplayCache && this.fileDisplayCache.hasDisplayName(file.path)) {
             const cachedName = this.fileDisplayCache.getDisplayName(file.path);
             if (cachedName) {
                 return {
@@ -55,7 +76,7 @@ export class FileProcessorService implements IFileProcessorService {
 
         // 使用metadataCache获取文件元数据，处理文件名
         const result = this.filenameParser.getDisplayNameFromMetadata(file);
-        if (result.success && result.displayName) {
+        if (result.success && result.displayName && this.fileDisplayCache) {
             this.fileDisplayCache.setDisplayName(file.path, result.displayName);
         }
         return result;
@@ -63,31 +84,21 @@ export class FileProcessorService implements IFileProcessorService {
     
     // 更新所有文件显示
     public updateAllFilesDisplay(clearCache = true): void {
-        // 根据参数决定是清除所有缓存还是只清除过期缓存
-        if (clearCache) {
-            this.fileDisplayCache.clearAll();
-        } else {
-            this.fileDisplayCache.clearExpired();
-        }
-
-        // 获取所有启用目录中的文件
-        const allEligibleFiles = this.plugin.app.vault.getMarkdownFiles()
-            .filter(file => this.filenameParser.isFileInEnabledFolder(file));
-        
-        if (allEligibleFiles.length === 0) return;
-
-        // 分离可见文件和其他文件
-        const { visibleFiles, otherFiles } = this.separateFilesByVisibility(allEligibleFiles);
-        
-        // 先处理可见文件
-        if (visibleFiles.length > 0) {
-            this.addToProcessQueue(visibleFiles, true); // 高优先级
+        if (clearCache && this.fileDisplayCache) {
+            this.fileDisplayCache.clear();
         }
         
-        // 然后处理其他文件
-        if (otherFiles.length > 0) {
-            this.addToProcessQueue(otherFiles, false); // 低优先级
-        }
+        // 获取所有启用文件夹中的markdown文件
+        const files = this.plugin.app.vault.getMarkdownFiles().filter(
+            file => this.filenameParser.isFileInEnabledFolder(file)
+        );
+        
+        // 先处理可见文件，再处理其他文件
+        const { visibleFiles, otherFiles } = this.separateFilesByVisibility(files);
+        
+        // 加入处理队列
+        this.addToProcessQueue(visibleFiles, true);
+        this.addToProcessQueue(otherFiles, false);
     }
     
     // 将文件分为可见文件和其他文件
@@ -172,16 +183,32 @@ export class FileProcessorService implements IFileProcessorService {
         const batchItems = this.processQueue.splice(0, this.batchSize);
         const batch = batchItems.map(item => item.file);
 
-        // 使用TimerService的requestIdleCallback
-        this.timerService.requestIdleCallback(() => {
-            this.processBatchItems(batch);
-        });
+        // 使用TimerService的requestIdleCallback，如果可用的话
+        if (this.timerService) {
+            this.timerService.requestIdleCallback(() => {
+                this.processBatchItems(batch);
+            });
+        } else {
+            // 退化方案：直接使用setTimeout
+            setTimeout(() => {
+                this.processBatchItems(batch);
+            }, 0);
+        }
     }
     
     // 处理批次中的项目
     private async processBatchItems(files: TFile[]): Promise<void> {
         for (const file of files) {
-            await this.updateFileDisplayFn(file);
+            try {
+                const result = this.processFile(file);
+                
+                // 如果有更新函数并且处理成功，调用更新
+                if (this.updateFileDisplayFn && result.success) {
+                    await this.updateFileDisplayFn(file);
+                }
+            } catch (error) {
+                this.logger.error(`处理文件 ${file.path} 时出错:`, error);
+            }
         }
         
         if (this.processQueue.length > 0) {
@@ -207,12 +234,16 @@ export class FileProcessorService implements IFileProcessorService {
         this.processQueue = [];
         this.processingBatch = false;
         
+        // 清除引用
+        this.fileDisplayCache = null;
+        this.updateFileDisplayFn = null;
+        this.timerService = null;
+        
         // 解除引用
         (this as any).plugin = null;
         (this as any).filenameParser = null;
         (this as any).fileDisplayCache = null;
         (this as any).timerService = null;
-        (this as any).updateFileDisplayFn = null;
         
         this.logger.debug('FileProcessorService资源已释放');
     }

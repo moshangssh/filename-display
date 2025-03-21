@@ -45,6 +45,13 @@ export interface IFileDisplayCache {
     clear(): void;
     stopPeriodicCleanup(): void;
     
+    // 缓存预热相关方法
+    warmUpCache(): Promise<void>;
+    isWarmingUp(): boolean;
+    cancelWarmupCache(): void;
+    preloadLinkedFiles(path: string): void;
+    addFileLink(sourcePath: string, targetPath: string): void;
+    
     // 为FileExplorerDisplayService增加的方法
     getDisplayName(path: string): string | undefined;
     setDisplayName(path: string, displayName: string): void;
@@ -102,6 +109,8 @@ export interface IMarkdownLinkService {
 // 编辑器链接装饰器接口
 export interface IEditorLinkDecorator {
     processLinks(): void;
+    updateActiveView(): void;
+    collectLinks(): void;
     dispose(): void;
     getExtension(): Extension[];
 }

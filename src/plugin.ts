@@ -4,7 +4,7 @@ import { DEFAULT_SETTINGS } from './constants';
 import { TitleExtractorSettingTab } from './settings/SettingsTab';
 import { FileDisplayService } from './services/FileDisplayService';
 import { FilenameParser } from './services/FilenameParser';
-import { FileDisplayCache } from './services/FileDisplayCache';
+import { FileDisplayCache } from './services/cache/FileDisplayCache';
 import { FileExplorerDisplayService } from './services/FileExplorerDisplayService';
 import { FileProcessorService } from './services/FileProcessorService';
 import { MarkdownLinkService } from './services/MarkdownLinkService';
@@ -15,7 +15,7 @@ import { LoggerService } from './services/LoggerService';
 import { errorHandler } from './utils/ErrorHandler';
 import { Extension, Compartment } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { IEditorLinkDecorator, IFileExplorerDisplayService, CacheCleanStrategy } from './services/interfaces/IServices';
+import { IEditorLinkDecorator, IFileExplorerDisplayService, CacheCleanStrategy, IFileDisplayCache } from './services/interfaces/IServices';
 import { ExtensionCacheService } from './services/ExtensionCacheService';
 import { getEditorView } from './utils/editor-utils';
 import { 
@@ -25,6 +25,7 @@ import {
     removeLinkDecoration
 } from './extensions';
 import { LinkStateManager } from './services/LinkStateManager';
+import { FileDisplayCacheFactory } from './services/cache/FileDisplayCacheFactory';
 
 const logger = new LoggerService('Plugin');
 
@@ -49,7 +50,7 @@ export default class TitleExtractorPlugin extends Plugin {
     
     // 核心服务组件
     filenameParser: FilenameParser;
-    fileDisplayCache: FileDisplayCache;
+    fileDisplayCache: IFileDisplayCache;
     fileProcessorService: FileProcessorService;
     markdownLinkService: MarkdownLinkService;
     eventManager: EventManagerService;
@@ -106,7 +107,7 @@ export default class TitleExtractorPlugin extends Plugin {
     }
     
     /**
-     * 初始化所有服务
+     * 初始化服务
      */
     private initServices(): void {
         // 初始化基础服务
@@ -116,15 +117,33 @@ export default class TitleExtractorPlugin extends Plugin {
         // 初始化文件名解析器
         this.filenameParser = new FilenameParser(this, this.loggerService);
         
-        // 初始化文件显示缓存
-        this.fileDisplayCache = new FileDisplayCache(
-            (callback: () => void) => this.timerService.setInterval(callback, 60000),
+        // 创建文件更新函数
+        const updateFileFn = async (file: TFile) => {
+            return this.fileExplorerDisplayService?.updateFileExplorerDisplay(file);
+        };
+        
+        // 初始化文件处理服务
+        this.fileProcessorService = new FileProcessorService(
             this,
+            this.filenameParser,
+            null, // 稍后会设置 fileDisplayCache
             this.loggerService
         );
         
-        // 设置FileDisplayCache的依赖项
-        this.fileDisplayCache.setTimerService(this.timerService);
+        // 设置文件处理服务的定时器服务
+        this.fileProcessorService.setTimerService(this.timerService);
+        
+        // 初始化文件显示缓存 - 使用工厂模式创建
+        this.fileDisplayCache = FileDisplayCacheFactory.createFileDisplayCache(
+            this,
+            this.loggerService,
+            this.timerService,
+            this.fileProcessorService
+        );
+        
+        // 设置文件处理服务的缓存依赖
+        this.fileProcessorService.setFileDisplayCache(this.fileDisplayCache);
+        this.fileProcessorService.setUpdateFileDisplayFn(updateFileFn);
         
         // 初始化事件管理服务
         this.eventManager = new EventManagerService(this, this.loggerService);
@@ -146,24 +165,6 @@ export default class TitleExtractorPlugin extends Plugin {
             this.loggerService
         );
         
-        // 创建文件更新函数
-        const updateFileFn = async (file: TFile) => {
-            return this.fileExplorerDisplayService.updateFileExplorerDisplay(file);
-        };
-        
-        // 初始化文件处理服务
-        this.fileProcessorService = new FileProcessorService(
-            this,
-            this.filenameParser,
-            this.fileDisplayCache,
-            this.timerService,
-            this.loggerService,
-            updateFileFn
-        );
-        
-        // 设置FileDisplayCache的FileProcessorService依赖
-        this.fileDisplayCache.setFileProcessorService(this.fileProcessorService);
-        
         // 初始化Markdown链接服务
         this.markdownLinkService = new MarkdownLinkService(
             this,
@@ -171,12 +172,16 @@ export default class TitleExtractorPlugin extends Plugin {
             this.fileDisplayCache
         );
         
-        // 初始化编辑器链接装饰器 - 由于已修改构造函数，直接使用新的参数列表
-        this.editorLinkDecorator = new EditorLinkDecorator(
-            this,
-            this.filenameParser,
-            this.fileDisplayCache
-        );
+        // 初始化编辑器链接装饰器
+        if (this.settings.enableEditorLinkDecorations) {
+            this.editorLinkDecorator = new EditorLinkDecorator(
+                this,
+                this.filenameParser, 
+                this.fileDisplayCache,
+                this.linkStateManager,
+                this.loggerService
+            );
+        }
         
         // 初始化文件显示服务
         this.fileDisplayService = new FileDisplayService(

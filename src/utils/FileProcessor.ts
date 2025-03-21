@@ -1,7 +1,7 @@
 import { TFile } from 'obsidian';
 import { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from '../services/FilenameParser';
-import { FileDisplayCache } from '../services/FileDisplayCache';
+import { IFileDisplayCache } from '../services/interfaces/IServices';
 import { LoggerService } from '../services/LoggerService';
 
 const logger = new LoggerService('FileProcessor');
@@ -12,12 +12,12 @@ const logger = new LoggerService('FileProcessor');
 export class FileProcessor {
     private plugin: ITitleExtractorPlugin;
     private filenameParser: FilenameParser;
-    private fileDisplayCache: FileDisplayCache;
+    private fileDisplayCache: IFileDisplayCache;
 
     constructor(
         plugin: ITitleExtractorPlugin,
         filenameParser: FilenameParser,
-        fileDisplayCache: FileDisplayCache
+        fileDisplayCache: IFileDisplayCache
     ) {
         this.plugin = plugin;
         this.filenameParser = filenameParser;
