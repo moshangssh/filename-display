@@ -2,13 +2,10 @@ import { TFile, WorkspaceLeaf } from 'obsidian';
 import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { IFilenameParser, IFileDisplayCache, IFileExplorerDisplayService, IEventManagerService, ILoggerService } from './interfaces/IServices';
 import { FileEventType, FileEvent } from './EventManagerService';
+import { BaseFileProcessor } from '../core/BaseFileProcessor';
 
-export class FileExplorerDisplayService implements IFileExplorerDisplayService {
-    private plugin: ITitleExtractorPlugin;
-    private filenameParser: IFilenameParser;
-    private fileDisplayCache: IFileDisplayCache;
+export class FileExplorerDisplayService extends BaseFileProcessor implements IFileExplorerDisplayService {
     private eventManager: IEventManagerService;
-    private logger: ILoggerService;
     private unsubscribers: (() => void)[] = [];
     
     // 从 FileExplorerObserver 合并的属性
@@ -22,12 +19,8 @@ export class FileExplorerDisplayService implements IFileExplorerDisplayService {
         eventManager: IEventManagerService,
         loggerService: ILoggerService
     ) {
-        this.plugin = plugin;
-        this.filenameParser = filenameParser;
-        this.fileDisplayCache = fileDisplayCache;
+        super(plugin, filenameParser, fileDisplayCache, loggerService);
         this.eventManager = eventManager;
-        this.logger = loggerService.getLogger('FileExplorerDisplayService');
-        
         this.logger.info('FileExplorerDisplayService 初始化完成');
     }
     
@@ -81,41 +74,6 @@ export class FileExplorerDisplayService implements IFileExplorerDisplayService {
                 }
             }
         }
-    }
-    
-    /**
-     * 处理文件以获取显示名称
-     * @param file 要处理的文件
-     * @returns 文件处理结果
-     */
-    private processFile(file: TFile): FileDisplayResult {
-        // 检查文件是否在启用的文件夹中
-        if (!this.filenameParser.isFileInEnabledFolder(file)) {
-            return {
-                success: false,
-                error: '文件不在启用的文件夹中',
-                displayName: file.basename
-            };
-        }
-
-        // 检查缓存
-        if (this.fileDisplayCache.hasDisplayName(file.path)) {
-            const cachedName = this.fileDisplayCache.getDisplayName(file.path);
-            if (cachedName) {
-                return {
-                    success: true,
-                    displayName: cachedName,
-                    fromCache: true
-                };
-            }
-        }
-
-        // 使用FilenameParser处理文件
-        const result = this.filenameParser.getDisplayNameFromMetadata(file);
-        if (result.success && result.displayName) {
-            this.fileDisplayCache.setDisplayName(file.path, result.displayName);
-        }
-        return result;
     }
 
     /**
@@ -406,52 +364,72 @@ export class FileExplorerDisplayService implements IFileExplorerDisplayService {
         this.setupObservers();
     }
     
-    // 更新文件资源管理器中的文件显示
+    /**
+     * 更新文件浏览器中的文件显示
+     * 集成日志和缓存功能
+     */
     public async updateFileExplorerDisplay(file: TFile): Promise<void> {
         try {
-            if (!file) {
+            // 记录方法调用（日志功能）
+            this.logger.info(`FileExplorerDisplayService.updateFileExplorerDisplay 被调用`, { path: file.path });
+            
+            // 缓存检查（缓存功能）
+            const cacheKey = file.path;
+            if (this.fileDisplayCache.hasDisplayName(cacheKey)) {
+                // 已经处理过，无需再次处理
                 return;
             }
             
-            // 使用 Obsidian 的工作区 API
-            const fileExplorers = this.plugin.app.workspace.getLeavesOfType('file-explorer');
-            if (fileExplorers.length === 0) {
-                return;
+            // 查找文件浏览器中的元素
+            const fileElements = this.findFileElements(file);
+            
+            if (fileElements.length === 0) {
+                return; // 文件不在当前视图中
             }
             
-            for (const explorer of fileExplorers) {
-                // 获取文件资源管理器视图
-                const fileExplorerView = explorer.view as any;
-                if (fileExplorerView && fileExplorerView.fileItems) {
-                    // 使用视图的方法更新特定文件
-                    const fileItem = fileExplorerView.fileItems[file.path];
-                    if (fileItem) {
-                        // 获取文件标题元素
-                        const titleEl = fileItem.titleEl?.querySelector('.nav-file-title-content');
-                        if (titleEl) {
-                            this.updateFileElement(titleEl, file);
-                        }
-                    }
-                }
+            // 处理文件，获取显示名称
+            const result = this.processFile(file);
+            
+            // 更新所有找到的元素
+            for (const el of fileElements) {
+                this.applyDisplayNameToElement(el, file, result);
             }
             
-            // 作为后备方案，如果通过 API 无法找到元素，则使用 DOM 查询
-            // 这是为了保持兼容性，确保在不同版本的 Obsidian 中都能正常工作
-            if (document && this.plugin.settings.fallbackToDOMForFileExplorer) {
-                const fileItems = document.querySelectorAll('.nav-file-title[data-path="' + file.path + '"]');
-                if (fileItems.length > 0) {
-                    for (let i = 0; i < fileItems.length; i++) {
-                        const fileItem = fileItems[i] as HTMLElement;
-                        const titleEl = fileItem.querySelector('.nav-file-title-content') as HTMLElement;
-                        if (titleEl) {
-                            this.updateFileElement(titleEl, file);
-                        }
-                    }
-                }
-            }
+            // 结果已经被BaseFileProcessor.processFile方法缓存
         } catch (error) {
             this.logger.error(`更新文件 ${file.path} 的显示时出错:`, error);
+            throw error;
         }
+    }
+    
+    /**
+     * 查找文件在文件浏览器中的所有元素
+     */
+    private findFileElements(file: TFile): HTMLElement[] {
+        const fileExplorer = this.getFileExplorer();
+        if (!fileExplorer) return [];
+        
+        // 查找所有表示此文件的元素
+        const elements: HTMLElement[] = [];
+        const titles = fileExplorer.querySelectorAll('.nav-file-title');
+        
+        for (let i = 0; i < titles.length; i++) {
+            const titleEl = titles[i] as HTMLElement;
+            const filePath = titleEl.getAttribute('data-path');
+            
+            if (filePath === file.path) {
+                elements.push(titleEl);
+            }
+        }
+        
+        return elements;
+    }
+    
+    /**
+     * 获取文件浏览器元素
+     */
+    private getFileExplorer(): HTMLElement | null {
+        return document.querySelector('.nav-files-container');
     }
     
     // 恢复所有文件的显示名称

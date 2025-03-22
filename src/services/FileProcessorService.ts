@@ -2,12 +2,9 @@ import { TFile, MarkdownView, WorkspaceLeaf } from 'obsidian';
 import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from './FilenameParser';
 import { IFileProcessorService, ITimerService, ILoggerService, IFileDisplayCache } from './interfaces/IServices';
+import { BaseFileProcessor } from '../core/BaseFileProcessor';
 
-export class FileProcessorService implements IFileProcessorService {
-    private plugin: ITitleExtractorPlugin;
-    private filenameParser: FilenameParser;
-    private fileDisplayCache: IFileDisplayCache | null;
-    private logger: ILoggerService;
+export class FileProcessorService extends BaseFileProcessor implements IFileProcessorService {
     private timerService: ITimerService | null = null;
     private processQueue: Array<{file: TFile; priority: boolean}> = [];
     private processingBatch = false;
@@ -20,10 +17,12 @@ export class FileProcessorService implements IFileProcessorService {
         fileDisplayCache: IFileDisplayCache | null,
         loggerService: ILoggerService
     ) {
-        this.plugin = plugin;
-        this.filenameParser = filenameParser;
-        this.fileDisplayCache = fileDisplayCache;
-        this.logger = loggerService.getLogger('FileProcessorService');
+        super(
+            plugin, 
+            filenameParser, 
+            fileDisplayCache as IFileDisplayCache,
+            loggerService
+        );
         this.logger.debug('FileProcessorService已初始化');
     }
     
@@ -40,6 +39,7 @@ export class FileProcessorService implements IFileProcessorService {
      * @param cache 文件显示缓存实例
      */
     public setFileDisplayCache(cache: IFileDisplayCache): void {
+        // @ts-ignore - 动态更新protected属性
         this.fileDisplayCache = cache;
     }
     
@@ -49,37 +49,6 @@ export class FileProcessorService implements IFileProcessorService {
      */
     public setUpdateFileDisplayFn(fn: (file: TFile) => Promise<void>): void {
         this.updateFileDisplayFn = fn;
-    }
-    
-    // 处理单个文件并返回处理结果
-    public processFile(file: TFile): FileDisplayResult {
-        // 检查文件是否在启用的文件夹中
-        if (!this.filenameParser.isFileInEnabledFolder(file)) {
-            return {
-                success: false,
-                error: '文件不在启用的文件夹中',
-                displayName: file.basename
-            };
-        }
-
-        // 检查缓存
-        if (this.fileDisplayCache && this.fileDisplayCache.hasDisplayName(file.path)) {
-            const cachedName = this.fileDisplayCache.getDisplayName(file.path);
-            if (cachedName) {
-                return {
-                    success: true,
-                    displayName: cachedName,
-                    fromCache: true
-                };
-            }
-        }
-
-        // 使用metadataCache获取文件元数据，处理文件名
-        const result = this.filenameParser.getDisplayNameFromMetadata(file);
-        if (result.success && result.displayName && this.fileDisplayCache) {
-            this.fileDisplayCache.setDisplayName(file.path, result.displayName);
-        }
-        return result;
     }
     
     // 更新所有文件显示
@@ -235,15 +204,9 @@ export class FileProcessorService implements IFileProcessorService {
         this.processingBatch = false;
         
         // 清除引用
-        this.fileDisplayCache = null;
+        this.fileDisplayCache = null as any;
         this.updateFileDisplayFn = null;
         this.timerService = null;
-        
-        // 解除引用
-        (this as any).plugin = null;
-        (this as any).filenameParser = null;
-        (this as any).fileDisplayCache = null;
-        (this as any).timerService = null;
         
         this.logger.debug('FileProcessorService资源已释放');
     }

@@ -58,7 +58,8 @@ export class EditorLinkDecorator {
         this.extensionCacheService = plugin.extensionCacheService;
         
         // 初始化LinkUtils
-        this.linkUtils = new LinkUtils(plugin, filenameParser, fileDisplayCache, {
+        const localLoggerService = loggerService || new LoggerService();
+        this.linkUtils = new LinkUtils(plugin, filenameParser, fileDisplayCache, localLoggerService, {
             enabled: plugin.settings.enableEditorLinkDecorations,
             processingScope: 'editor',
             respectCustomLinkText: true

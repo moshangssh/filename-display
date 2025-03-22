@@ -156,4 +156,94 @@ export function LogExecutionTime(
         
         return descriptor;
     };
+}
+
+/**
+ * 缓存装饰器 - 自动缓存方法返回值
+ * @param cacheKeyFn 可选的缓存键生成函数，未提供时使用参数值字符串
+ */
+export function Cacheable(cacheKeyFn?: (...args: any[]) => string) {
+    return function(
+        target: any,
+        propertyKey: string,
+        descriptor: PropertyDescriptor
+    ) {
+        const originalMethod = descriptor.value;
+        
+        descriptor.value = function(...args: any[]) {
+            // 生成缓存键
+            const cacheKey = cacheKeyFn 
+                ? cacheKeyFn(...args) 
+                : `${propertyKey}:${args.map(a => String(a)).join(',')}`;
+                
+            // 如果实例有fileDisplayCache属性
+            if (this.fileDisplayCache && this.fileDisplayCache.has && this.fileDisplayCache.has(cacheKey)) {
+                return this.fileDisplayCache.get(cacheKey);
+            }
+            
+            // 调用原方法
+            const result = originalMethod.apply(this, args);
+            
+            // 缓存结果（处理可能的Promise）
+            if (result instanceof Promise) {
+                return result.then(asyncResult => {
+                    if (this.fileDisplayCache && this.fileDisplayCache.set && asyncResult) {
+                        this.fileDisplayCache.set(cacheKey, asyncResult);
+                    }
+                    return asyncResult;
+                });
+            } else if (this.fileDisplayCache && this.fileDisplayCache.set && result) {
+                this.fileDisplayCache.set(cacheKey, result);
+            }
+            
+            return result;
+        };
+        
+        return descriptor;
+    };
+}
+
+/**
+ * 日志装饰器 - 自动记录方法调用
+ * @param level 日志级别
+ */
+export function Logged(level: 'debug' | 'info' | 'warn' | 'error' = 'debug') {
+    return function(
+        target: any,
+        propertyKey: string,
+        descriptor: PropertyDescriptor
+    ) {
+        const originalMethod = descriptor.value;
+        
+        descriptor.value = function(...args: any[]) {
+            // 如果实例有logger属性
+            if (this.logger && this.logger[level]) {
+                const className = this.constructor.name || '未知类';
+                this.logger[level](`${className}.${propertyKey} 被调用`, args.length > 0 ? args : '无参数');
+            }
+            
+            try {
+                const result = originalMethod.apply(this, args);
+                
+                // 处理可能的Promise结果
+                if (result instanceof Promise) {
+                    return result.catch(error => {
+                        if (this.logger && this.logger.error) {
+                            this.logger.error(`${propertyKey} 方法出错:`, error);
+                        }
+                        throw error;
+                    });
+                }
+                
+                return result;
+            } catch (error) {
+                if (this.logger && this.logger.error) {
+                    this.logger.error(`${propertyKey} 方法出错:`, error);
+                }
+                throw error;
+            }
+        };
+        
+        return descriptor;
+    };
 } 

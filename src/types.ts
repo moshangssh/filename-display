@@ -12,6 +12,7 @@ export interface TitleExtractorSettings {
     cacheCleanStrategy: CacheCleanStrategy;
     persistentCacheHeatThreshold: number;
     fallbackToDOMForFileExplorer: boolean;
+    cacheMigrationV1?: boolean;
 }
 
 export interface ITitleExtractorPlugin extends Plugin {

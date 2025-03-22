@@ -26,6 +26,8 @@ import {
 } from './extensions';
 import { LinkStateManager } from './services/LinkStateManager';
 import { FileDisplayCacheFactory } from './services/cache/FileDisplayCacheFactory';
+import { ServiceContainer } from './core/ServiceContainer';
+import { FileProcessor } from './utils/FileProcessor';
 
 const logger = new LoggerService('Plugin');
 
@@ -38,6 +40,9 @@ const EXTENSION_GROUPS = {
 
 export default class TitleExtractorPlugin extends Plugin {
     settings: TitleExtractorSettings;
+    
+    // 服务容器实例
+    serviceContainer: ServiceContainer = ServiceContainer.getInstance();
     
     // 服务实例
     private fileDisplayService: FileDisplayService;
@@ -69,6 +74,9 @@ export default class TitleExtractorPlugin extends Plugin {
         this.addSettingTab(new TitleExtractorSettingTab(this.app, this));
 
         try {
+            // 处理缓存迁移
+            await this.handleCacheMigration();
+            
             // 初始化扩展管理
             this.initExtensionCompartments();
             
@@ -110,12 +118,21 @@ export default class TitleExtractorPlugin extends Plugin {
      * 初始化服务
      */
     private initServices(): void {
+        // 初始化服务容器
+        this.serviceContainer.clear(); // 清空容器，防止多次初始化
+        
         // 初始化基础服务
         this.loggerService = new LoggerService();
         this.timerService = new TimerService(this);
         
+        // 将基础服务注册到容器
+        this.serviceContainer.register('plugin', this);
+        this.serviceContainer.register('loggerService', this.loggerService);
+        this.serviceContainer.register('timerService', this.timerService);
+        
         // 初始化文件名解析器
         this.filenameParser = new FilenameParser(this, this.loggerService);
+        this.serviceContainer.register('filenameParser', this.filenameParser);
         
         // 创建文件更新函数
         const updateFileFn = async (file: TFile) => {
@@ -141,14 +158,30 @@ export default class TitleExtractorPlugin extends Plugin {
             this.fileProcessorService
         );
         
+        // 注册缓存服务
+        this.serviceContainer.register('fileDisplayCache', this.fileDisplayCache);
+        
         // 设置文件处理服务的缓存依赖
         this.fileProcessorService.setFileDisplayCache(this.fileDisplayCache);
         this.fileProcessorService.setUpdateFileDisplayFn(updateFileFn);
+        
+        // 注册文件处理服务
+        this.serviceContainer.register('fileProcessorService', this.fileProcessorService);
+        
+        // 注册通用文件处理工具
+        const fileProcessor = new FileProcessor(
+            this,
+            this.filenameParser,
+            this.fileDisplayCache,
+            this.loggerService
+        );
+        this.serviceContainer.register('fileProcessor', fileProcessor);
         
         // 初始化事件管理服务
         this.eventManager = new EventManagerService(this, this.loggerService);
         this.eventManager.setupVaultEventListeners();
         this.eventManager.setupMetadataEventListeners();
+        this.serviceContainer.register('eventManager', this.eventManager);
         
         // 初始化链接状态管理器
         this.linkStateManager = new LinkStateManager(this);
@@ -166,11 +199,8 @@ export default class TitleExtractorPlugin extends Plugin {
         );
         
         // 初始化Markdown链接服务
-        this.markdownLinkService = new MarkdownLinkService(
-            this,
-            this.filenameParser,
-            this.fileDisplayCache
-        );
+        this.markdownLinkService = MarkdownLinkService.create(this);
+        this.serviceContainer.register('markdownLinkService', this.markdownLinkService);
         
         // 初始化编辑器链接装饰器
         if (this.settings.enableEditorLinkDecorations) {
@@ -196,6 +226,31 @@ export default class TitleExtractorPlugin extends Plugin {
             this.timerService,
             this.loggerService
         );
+        
+        // 注册其他服务到容器
+        if (this.linkStateManager) {
+            this.serviceContainer.register('linkStateManager', this.linkStateManager);
+        }
+        
+        if (this.extensionCacheService) {
+            this.serviceContainer.register('extensionCacheService', this.extensionCacheService);
+        }
+        
+        if (this.fileExplorerDisplayService) {
+            this.serviceContainer.register('fileExplorerDisplayService', this.fileExplorerDisplayService);
+        }
+        
+        if (this.markdownLinkService) {
+            this.serviceContainer.register('markdownLinkService', this.markdownLinkService);
+        }
+        
+        if (this.editorLinkDecorator) {
+            this.serviceContainer.register('editorLinkDecorator', this.editorLinkDecorator);
+        }
+        
+        if (this.fileDisplayService) {
+            this.serviceContainer.register('fileDisplayService', this.fileDisplayService);
+        }
     }
 
     onunload() {
@@ -622,6 +677,36 @@ export default class TitleExtractorPlugin extends Plugin {
             }
         } catch (error) {
             console.error('清理服务时出错:', error);
+        }
+    }
+
+    /**
+     * 处理缓存迁移
+     * 检查是否需要清除旧版本的缓存数据
+     */
+    private async handleCacheMigration(): Promise<void> {
+        try {
+            // 检查是否存在迁移标志
+            const migrationFlag = this.settings.cacheMigrationV1;
+            
+            // 如果没有迁移过，执行迁移
+            if (!migrationFlag) {
+                logger.info('检测到首次重构后启动，清除旧缓存数据');
+                
+                // 尝试清除旧缓存
+                try {
+                    await this.saveData(null);
+                    logger.info('旧缓存数据已清除');
+                } catch (e) {
+                    logger.warn('清除旧缓存失败:', e);
+                }
+                
+                // 设置迁移标志
+                this.settings.cacheMigrationV1 = true;
+                await this.saveSettings();
+            }
+        } catch (error) {
+            logger.warn('缓存迁移检查失败:', error);
         }
     }
 } 

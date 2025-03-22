@@ -66,27 +66,51 @@ export class FileDisplayCache implements IFileDisplayCache {
     private async loadCacheFromData(): Promise<void> {
         try {
             const savedData = await this.persistenceManager.load();
-            if (savedData && savedData.fileCache) {
-                for (const [path, itemData] of savedData.fileCache) {
-                    // 将字符串数组转换为Set
-                    const links = new Set<string>(itemData.links);
-                    
-                    // 创建缓存项
-                    const item: FileCacheItem = {
-                        displayName: itemData.displayName,
-                        originalName: itemData.originalName,
-                        timestamp: itemData.timestamp,
-                        mtime: itemData.mtime,
-                        processed: itemData.processed,
-                        priority: itemData.priority,
-                        accessCount: itemData.accessCount,
-                        links,
-                        result: itemData.result
-                    };
-                    
-                    this.cacheStorage.set(path, item);
+            if (savedData && savedData.fileCache && Array.isArray(savedData.fileCache)) {
+                let loadedCount = 0;
+                let errorCount = 0;
+                
+                for (const entry of savedData.fileCache) {
+                    try {
+                        if (!Array.isArray(entry) || entry.length !== 2) {
+                            errorCount++;
+                            continue;
+                        }
+                        
+                        const [path, itemData] = entry;
+                        
+                        // 确保links是数组
+                        if (!Array.isArray(itemData.links)) {
+                            itemData.links = [];
+                        }
+                        
+                        // 将字符串数组转换为Set
+                        const links = new Set<string>(itemData.links);
+                        
+                        // 创建缓存项，添加默认值和类型检查
+                        const item: FileCacheItem = {
+                            displayName: typeof itemData.displayName === 'string' ? itemData.displayName : path,
+                            originalName: typeof itemData.originalName === 'string' ? itemData.originalName : path,
+                            timestamp: typeof itemData.timestamp === 'number' ? itemData.timestamp : Date.now(),
+                            mtime: typeof itemData.mtime === 'number' ? itemData.mtime : 0,
+                            processed: typeof itemData.processed === 'boolean' ? itemData.processed : false,
+                            priority: typeof itemData.priority === 'boolean' ? itemData.priority : false,
+                            accessCount: typeof itemData.accessCount === 'number' ? itemData.accessCount : 1,
+                            links,
+                            result: itemData.result
+                        };
+                        
+                        this.cacheStorage.set(path, item);
+                        loadedCount++;
+                    } catch (itemError) {
+                        this.logger.warn(`处理缓存项时出错: ${itemError}`);
+                        errorCount++;
+                    }
                 }
-                this.logger.info(`已从持久化存储加载 ${savedData.fileCache.length} 条缓存项`);
+                
+                this.logger.info(`已从持久化存储加载 ${loadedCount} 条缓存项 (忽略 ${errorCount} 条无效条目)`);
+            } else {
+                this.logger.info('未找到有效的缓存数据或数据为空');
             }
         } catch (error) {
             this.logger.error('加载缓存数据时出错:', error);

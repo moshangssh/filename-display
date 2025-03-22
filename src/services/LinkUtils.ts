@@ -1,8 +1,9 @@
 import { TFile } from 'obsidian';
 import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { FilenameParser } from './FilenameParser';
-import { IFileDisplayCache } from './interfaces/IServices';
+import { IFileDisplayCache, ILoggerService } from './interfaces/IServices';
 import { LoggerService } from "./LoggerService";
+import { BaseFileProcessor } from '../core/BaseFileProcessor';
 
 // 创建服务特定的日志记录器
 const logger = new LoggerService('LinkUtils');
@@ -35,10 +36,7 @@ export interface LinkHandlerConfig {
 /**
  * 链接处理工具类，提供通用的链接处理功能
  */
-export class LinkUtils {
-    private plugin: ITitleExtractorPlugin;
-    private filenameParser: FilenameParser;
-    private fileDisplayCache: IFileDisplayCache;
+export class LinkUtils extends BaseFileProcessor {
     private config: LinkHandlerConfig;
     public readonly BATCH_SIZE = 25; // 每批处理的链接数量
     public readonly BATCH_DELAY = 0; // 批次间延迟(毫秒)
@@ -47,11 +45,10 @@ export class LinkUtils {
         plugin: ITitleExtractorPlugin,
         filenameParser: FilenameParser,
         fileDisplayCache: IFileDisplayCache,
+        loggerService: ILoggerService,
         config?: Partial<LinkHandlerConfig>
     ) {
-        this.plugin = plugin;
-        this.filenameParser = filenameParser;
-        this.fileDisplayCache = fileDisplayCache;
+        super(plugin, filenameParser, fileDisplayCache, loggerService);
         
         // 默认配置
         this.config = {
@@ -60,41 +57,6 @@ export class LinkUtils {
             processingScope: 'both',
             ...config
         };
-    }
-
-    /**
-     * 处理文件，获取显示名称
-     * @param file 要处理的文件
-     * @returns 文件处理结果
-     */
-    public processFile(file: TFile): FileDisplayResult {
-        // 检查文件是否在启用的文件夹中
-        if (!this.filenameParser.isFileInEnabledFolder(file)) {
-            return {
-                success: false,
-                error: '文件不在启用的文件夹中',
-                displayName: file.basename
-            };
-        }
-
-        // 检查缓存
-        if (this.fileDisplayCache.hasDisplayName(file.path)) {
-            const cachedName = this.fileDisplayCache.getDisplayName(file.path);
-            if (cachedName) {
-                return {
-                    success: true,
-                    displayName: cachedName,
-                    fromCache: true
-                };
-            }
-        }
-
-        // 使用元数据获取文件名
-        const result = this.filenameParser.getDisplayNameFromMetadata(file);
-        if (result.success && result.displayName) {
-            this.fileDisplayCache.setDisplayName(file.path, result.displayName);
-        }
-        return result;
     }
 
     /**
@@ -194,7 +156,7 @@ export class LinkUtils {
                     callback(result);
                 }
             } catch (e) {
-                logger.error(`处理链接 ${i} 时出错: ${e}`);
+                this.logger.error(`处理链接 ${i} 时出错: ${e}`);
             }
         }
         
@@ -279,15 +241,28 @@ export class LinkUtils {
                 }
             }
             
-            // 如果以上都没找到，则返回原始路径，让调用方自行判断
-            if (path.includes('_') || path.includes(' ')) {
-                logger.debug(`尝试查找文件: ${path} (使用了多种路径形式但未找到)`);
-            }
-            logger.log(`无法在库中找到匹配文件: ${path}，可能是别名或不存在的链接`);
-            return path;
+            this.logger.debug(`无法在库中找到匹配文件: ${path}，可能是别名或不存在的链接`);
+            return undefined;
         } catch (error) {
-            logger.error("解析href路径时出错:", error);
+            this.logger.error('解析链接路径出错:', error);
             return undefined;
         }
+    }
+    
+    /**
+     * 批量处理链接和装饰
+     * @param links 待处理的链接
+     * @param callback 处理回调函数
+     */
+    public processBatchWithDelay(
+        links: LinkInfo[],
+        callback: (result: LinkProcessResult) => void
+    ): void {
+        if (!this.config.enabled || links.length === 0) {
+            return;
+        }
+        
+        // 开始处理第一批
+        this.processBatch(links, 0, callback);
     }
 } 

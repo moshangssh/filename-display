@@ -9,5 +9,6 @@ export const DEFAULT_SETTINGS: TitleExtractorSettings = {
     enableEditorLinkDecorations: true,  // 新增：启用编辑器链接装饰功能，默认开启
     cacheCleanStrategy: CacheCleanStrategy.LRU,  // 默认使用LRU缓存清理策略
     persistentCacheHeatThreshold: 5,  // 默认热度阈值
-    fallbackToDOMForFileExplorer: true  // 默认启用DOM回退
+    fallbackToDOMForFileExplorer: true,  // 默认启用DOM回退
+    cacheMigrationV1: false  // 默认未完成V1版本的缓存迁移
 }; 

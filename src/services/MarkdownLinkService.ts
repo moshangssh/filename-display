@@ -1,9 +1,10 @@
 import { MarkdownView, TFile } from 'obsidian';
 import type { ITitleExtractorPlugin } from '../types';
 import { FilenameParser } from './FilenameParser';
-import { IFileDisplayCache, IMarkdownLinkService } from './interfaces/IServices';
+import { IFileDisplayCache, IMarkdownLinkService, ILoggerService } from './interfaces/IServices';
 import { LoggerService } from "../services/LoggerService";
 import { LinkUtils, LinkInfo, LinkProcessResult, LinkHandlerConfig } from './LinkUtils';
+import { ServiceContainer } from '../core/ServiceContainer';
 
 // 创建服务特定的日志记录器
 const logger = new LoggerService('MarkdownLinkService');
@@ -19,13 +20,30 @@ export class MarkdownLinkService implements IMarkdownLinkService {
     // 插件实例
     private plugin: ITitleExtractorPlugin;
     
+    /**
+     * 静态工厂方法，从服务容器获取依赖
+     */
+    public static create(plugin: ITitleExtractorPlugin): MarkdownLinkService {
+        const container = ServiceContainer.getInstance();
+        
+        // 从容器中获取依赖
+        const filenameParser = container.get<FilenameParser>('filenameParser');
+        const fileDisplayCache = container.get<IFileDisplayCache>('fileDisplayCache');
+        const loggerService = container.get<LoggerService>('loggerService');
+        
+        // 创建服务实例
+        return new MarkdownLinkService(plugin, filenameParser, fileDisplayCache, loggerService);
+    }
+    
     constructor(
         plugin: ITitleExtractorPlugin,
         filenameParser: FilenameParser,
-        fileDisplayCache: IFileDisplayCache
+        fileDisplayCache: IFileDisplayCache,
+        loggerService?: ILoggerService
     ) {
         this.plugin = plugin;
-        this.linkUtils = new LinkUtils(plugin, filenameParser, fileDisplayCache, {
+        const linkLoggerService = loggerService || new LoggerService();
+        this.linkUtils = new LinkUtils(plugin, filenameParser, fileDisplayCache, linkLoggerService, {
             enabled: true,
             processingScope: 'preview',
             respectCustomLinkText: true
