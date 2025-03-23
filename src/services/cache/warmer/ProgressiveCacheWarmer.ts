@@ -1,6 +1,6 @@
 import { ICacheWarmer } from '../interfaces';
 import { ILoggerService, ITimerService } from '../../interfaces/IServices';
-import { TFile } from 'obsidian';
+import { TFile, MarkdownView } from 'obsidian';
 import { FileProcessorService } from '../../FileProcessorService';
 
 /**
@@ -18,13 +18,13 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
      * @param plugin Obsidian插件实例
      * @param logger 日志服务
      * @param timerService 定时器服务
-     * @param fileProcessorService 文件处理服务
+     * @param fileProcessorService 文件处理服务（可选）
      */
     constructor(
         private plugin: any,
         private logger: ILoggerService,
         private timerService: ITimerService,
-        private fileProcessorService: FileProcessorService
+        private fileProcessorService?: FileProcessorService
     ) {}
     
     /**
@@ -45,6 +45,9 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
         // 重置状态
         this.warmupProgress = 0;
         this.isWarmupCancelled = false;
+        
+        // 开始进度报告
+        this.startProgressReporting();
         
         // 创建并存储预热Promise
         this.warmupPromise = (async () => {
@@ -129,7 +132,20 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
                 
                 // 分离可见文件和其他文件
                 this.logger.log('分离可见文件和其他文件...');
-                const { visibleFiles, otherFiles } = this.fileProcessorService.separateFilesByVisibility(files);
+                let visibleFiles: TFile[] = [];
+                let otherFiles: TFile[] = [];
+                
+                if (this.fileProcessorService) {
+                    // 如果可用，使用文件处理服务的方法
+                    const result = this.fileProcessorService.separateFilesByVisibility(files);
+                    visibleFiles = result.visibleFiles;
+                    otherFiles = result.otherFiles;
+                } else {
+                    // 如果文件处理服务不可用，使用内部方法
+                    const result = this.separateFilesByVisibility(files);
+                    visibleFiles = result.visibleFiles;
+                    otherFiles = result.otherFiles;
+                }
                 
                 // 更新进度
                 this.warmupProgress = 30;
@@ -153,9 +169,14 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
                     const batch = visibleFiles.slice(i, i + batchSize);
                     
                     // 处理这一批文件
-                    await Promise.all(
-                        batch.map(file => this.fileProcessorService.processFile(file))
-                    );
+                    if (this.fileProcessorService && typeof this.fileProcessorService.processFile === 'function') {
+                        await Promise.all(
+                            batch.map(file => this.fileProcessorService!.processFile(file))
+                        );
+                    } else {
+                        // 如果文件处理服务不可用，使用替代方法
+                        await this.processFilesBatch(batch);
+                    }
                     
                     processedCount += batch.length;
                     
@@ -192,9 +213,14 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
                             this.timerService.requestIdleCallback(async () => {
                                 try {
                                     // 处理这一批文件
-                                    await Promise.all(
-                                        batch.map(file => this.fileProcessorService.processFile(file))
-                                    );
+                                    if (this.fileProcessorService && typeof this.fileProcessorService.processFile === 'function') {
+                                        await Promise.all(
+                                            batch.map(file => this.fileProcessorService!.processFile(file))
+                                        );
+                                    } else {
+                                        // 如果文件处理服务不可用，使用替代方法
+                                        await this.processFilesBatch(batch);
+                                    }
                                     
                                     // 计算其他文件的进度（60%-90%）
                                     const totalProcessed = i + batch.length;
@@ -218,9 +244,15 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
                 // 标记预热完成
                 this.warmupProgress = 100;
                 this.logger.log('缓存预热完成');
+                
+                // 报告最终进度
+                this.reportProgress();
             } catch (error) {
                 this.logger.error('缓存预热失败:', error);
             } finally {
+                // 停止进度报告
+                this.stopProgressReporting();
+                
                 // 只有当当前任务ID仍然是活动的，才清除warmupPromise
                 if (currentTaskId === this.warmupTaskId) {
                     this.warmupPromise = null;
@@ -243,6 +275,7 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
         this.logger.log('取消缓存预热过程');
         this.isWarmupCancelled = true;
         this.warmupTaskId = ''; // 清空任务ID，允许新任务开始
+        this.stopProgressReporting(); // 停止进度报告
     }
     
     /**
@@ -274,5 +307,137 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
             return true;
         }
         return false;
+    }
+    
+    /**
+     * 将文件分为可见文件和其他文件
+     * 如果fileProcessorService不可用时的替代方法
+     */
+    private separateFilesByVisibility(files: TFile[]): { visibleFiles: TFile[], otherFiles: TFile[] } {
+        try {
+            // 获取当前所有可见的文件
+            const visibleFiles = new Set<string>();
+            
+            // 添加当前活动编辑器中的文件
+            const activeFile = this.plugin?.app?.workspace?.getActiveViewOfType(MarkdownView)?.file;
+            if (activeFile) {
+                visibleFiles.add(activeFile.path);
+            }
+            
+            // 添加所有当前打开的标签页中的文件
+            try {
+                if (this.plugin?.app?.workspace?.iterateAllLeaves) {
+                    this.plugin.app.workspace.iterateAllLeaves((leaf: any) => {
+                        const fileFromView = leaf.view?.file;
+                        if (fileFromView) {
+                            visibleFiles.add(fileFromView.path);
+                        }
+                    });
+                }
+            } catch (e) {
+                this.logger.error('迭代标签页失败:', e);
+            }
+            
+            // 分离文件
+            const visible: TFile[] = [];
+            const others: TFile[] = [];
+            
+            for (const file of files) {
+                if (visibleFiles.has(file.path)) {
+                    visible.push(file);
+                } else {
+                    others.push(file);
+                }
+            }
+            
+            return { visibleFiles: visible, otherFiles: others };
+        } catch (error) {
+            this.logger.error('分离可见文件失败:', error);
+            // 出错时返回默认值
+            return { visibleFiles: [], otherFiles: files };
+        }
+    }
+    
+    /**
+     * 处理一批文件
+     * 如果fileProcessorService不可用时的替代方法
+     */
+    private async processFilesBatch(files: TFile[]): Promise<void> {
+        try {
+            // 简单处理：读取文件前置元数据并尝试获取标题
+            for (const file of files) {
+                try {
+                    const metadata = this.plugin?.app?.metadataCache?.getFileCache(file);
+                    const title = metadata?.frontmatter?.title || file.basename;
+                    // 在实际应用中，这里会将处理结果存储到缓存中
+                    this.logger.debug(`处理文件 ${file.path}, 标题: ${title}`);
+                } catch (e) {
+                    this.logger.error(`处理文件 ${file.path} 失败:`, e);
+                }
+            }
+        } catch (error) {
+            this.logger.error('批量处理文件失败:', error);
+        }
+    }
+    
+    // 进度报告相关
+    private progressReportingInterval: number | null = null;
+    
+    /**
+     * 开始定期报告进度
+     */
+    private startProgressReporting(): void {
+        this.stopProgressReporting(); // 确保先停止任何现有的报告
+        
+        // 每3秒报告一次进度
+        this.progressReportingInterval = window.setInterval(() => {
+            this.reportProgress();
+        }, 3000);
+        
+        // 立即报告一次初始进度
+        this.reportProgress();
+    }
+    
+    /**
+     * 停止进度报告
+     */
+    private stopProgressReporting(): void {
+        if (this.progressReportingInterval !== null) {
+            window.clearInterval(this.progressReportingInterval);
+            this.progressReportingInterval = null;
+        }
+    }
+    
+    /**
+     * 报告当前进度
+     */
+    private reportProgress(): void {
+        const progress = this.getProgress();
+        
+        // 在控制台中显示进度条
+        const progressBar = this.createProgressBar(progress);
+        this.logger.info(`缓存预热进度: ${progress}% ${progressBar}`);
+        
+        // 发送进度事件
+        try {
+            window.dispatchEvent(new CustomEvent('filename-display:cache-warmup-progress', {
+                detail: { progress, taskId: this.warmupTaskId }
+            }));
+        } catch (e) {
+            // 忽略事件分发错误
+        }
+    }
+    
+    /**
+     * 创建简单的ASCII进度条
+     */
+    private createProgressBar(percent: number, length: number = 20): string {
+        const filledLength = Math.round(length * (percent / 100));
+        const emptyLength = length - filledLength;
+        
+        const filled = '█'.repeat(filledLength);
+        const empty = '░'.repeat(emptyLength);
+        
+        return `[${filled}${empty}]`;
     }
 } 

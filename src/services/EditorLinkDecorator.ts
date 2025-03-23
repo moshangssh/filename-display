@@ -14,6 +14,8 @@ import {
 } from '../extensions';
 import { ExtensionCacheService, ExtensionType } from './ExtensionCacheService';
 import { getEditorView } from '../utils/editor-utils';
+import { ServiceContainer } from '../core/ServiceContainer';
+import { Logged, Cacheable, CatchError } from '../utils/decorators';
 
 // 创建服务特定的日志记录器
 const logger = new LoggerService('EditorLinkDecorator');
@@ -36,7 +38,7 @@ export class EditorLinkDecorator {
     // 预处理间隔 (毫秒)
     private readonly PREPROCESS_INTERVAL: number = 5000; // 5秒
     // 批处理大小
-    private readonly batchSize = 10;
+    private batchSize = 10;
     // 扩展缓存服务
     private extensionCacheService: ExtensionCacheService;
     // 链接状态管理器
@@ -45,6 +47,43 @@ export class EditorLinkDecorator {
     private extensions: Extension[] = [];
     // 链接工具类实例
     private linkUtils: LinkUtils;
+    // 是否已注册扩展
+    private isExtensionRegistered: boolean = false;
+    
+    /**
+     * 静态工厂方法，从服务容器获取依赖
+     */
+    public static create(plugin: ITitleExtractorPlugin): EditorLinkDecorator {
+        const container = ServiceContainer.getInstance();
+        
+        // 从容器中获取依赖
+        const filenameParser = container.get<FilenameParser>('filenameParser');
+        const fileDisplayCache = container.get<IFileDisplayCache>('fileDisplayCache');
+        
+        // 安全获取 linkStateManager
+        let linkStateManager;
+        try {
+            if (container.has('linkStateManager')) {
+                linkStateManager = container.get<ILinkStateManager>('linkStateManager');
+            } else {
+                linkStateManager = plugin.linkStateManager;
+            }
+        } catch (error) {
+            logger.error('获取 linkStateManager 服务失败', error);
+            linkStateManager = plugin.linkStateManager;
+        }
+        
+        const loggerService = container.get<LoggerService>('loggerService');
+        
+        // 创建服务实例
+        return new EditorLinkDecorator(
+            plugin, 
+            filenameParser, 
+            fileDisplayCache, 
+            linkStateManager, 
+            loggerService
+        );
+    }
     
     constructor(
         private plugin: ITitleExtractorPlugin, 
@@ -68,7 +107,13 @@ export class EditorLinkDecorator {
         // 创建扩展（但不直接注册，由Plugin主类调用getExtension获取）
         this.extensions = [
             this.extensionCacheService.getLinkDecorationExtension((view) => this.onEditorChange(view)),
-            this.extensionCacheService.getLinkObserverExtension((view) => this.onEditorChange(view))
+            this.extensionCacheService.getLinkObserverExtension((view) => this.onEditorChange(view)),
+            // 将updateListener添加到初始扩展列表中，而不是在运行时动态添加
+            EditorView.updateListener.of(update => {
+                if (update.docChanged || update.viewportChanged) {
+                    this.queueUpdate();
+                }
+            })
         ];
         
         // 保存装饰器引用，供扩展使用
@@ -103,6 +148,58 @@ export class EditorLinkDecorator {
         await this.fileDisplayCache.warmUpCache();
     }
 
+    // 添加动态批处理大小调整功能
+    private adjustBatchSize() {
+        const totalLinks = this.allCurrentLinks.length;
+        const lastProcessTime = this.lastPreprocessTime ? (Date.now() - this.lastPreprocessTime) : 0;
+        
+        // 根据链接总数和处理时间动态调整批处理大小
+        let newBatchSize = this.batchSize;
+        
+        // 如果上次处理时间太长，减小批处理大小
+        if (lastProcessTime > 150) {
+            newBatchSize = Math.max(5, Math.floor(this.batchSize * 0.8));
+        } 
+        // 如果处理时间快，适当增加批处理大小
+        else if (lastProcessTime < 50 && totalLinks > this.batchSize * 2) {
+            newBatchSize = Math.min(50, Math.floor(this.batchSize * 1.2));
+        } 
+        // 根据链接总数调整基准批处理大小
+        else {
+            newBatchSize = Math.max(
+                5,
+                Math.min(
+                    50, 
+                    Math.floor(totalLinks / 10)
+                )
+            );
+        }
+        
+        if (newBatchSize !== this.batchSize) {
+            this.batchSize = newBatchSize;
+            logger.debug(`动态调整批处理大小为: ${this.batchSize}, 总链接数: ${totalLinks}, 上次处理时间: ${lastProcessTime}ms`);
+        }
+    }
+
+    // 使用 requestIdleCallback 进行非紧急更新
+    private scheduleProcessLinks() {
+        // 如果已经在处理中，不再重复调度
+        if (this.isProcessing) {
+            this.pendingUpdate = true;
+            return;
+        }
+        
+        if ('requestIdleCallback' in window) {
+            window.requestIdleCallback(
+                () => this.processLinks(), 
+                { timeout: 300 }
+            );
+        } else {
+            // 回退到 setTimeout
+            setTimeout(() => this.processLinks(), 10);
+        }
+    }
+
     // 编辑器变更处理，由扩展触发
     public onEditorChange(view: EditorView): void {
         if (view === this.activeEditorView) {
@@ -110,29 +207,15 @@ export class EditorLinkDecorator {
         }
     }
 
-    // 调度更新处理，避免频繁处理
-    private queueUpdate(): void {
-        if (this.isProcessing) {
-            this.pendingUpdate = true;
-            return;
+    // 队列更新处理
+    public queueUpdate(): void {
+        if (this.plugin.settings.enableEditorLinkDecorations) {
+            this.scheduleProcessLinks();
         }
-        
-        this.isProcessing = true;
-        
-        // 使用requestAnimationFrame确保视觉更新在下一帧
-        requestAnimationFrame(() => {
-            this.processLinks();
-            this.isProcessing = false;
-            
-            // 如果在处理过程中有新的更新请求，继续处理
-            if (this.pendingUpdate) {
-                this.pendingUpdate = false;
-                this.queueUpdate();
-            }
-        });
     }
 
     // 更新活跃视图和当前文件引用
+    @Logged('info')
     public updateActiveView(): void {
         const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
         const editor = view?.editor;
@@ -182,22 +265,14 @@ export class EditorLinkDecorator {
         }
     }
 
-    // 更新编辑器视图引用
+    // 更新编辑器视图
     private updateEditorView(editor: Editor, view: MarkdownView): void {
-        try {
-            // 使用规范化的工具函数获取编辑器视图
-            const editorView = getEditorView(view);
+        const editorView = getEditorView(view);
+        if (editorView) {
+            this.activeEditorView = editorView;
             
-            if (editorView instanceof EditorView) {
-                this.activeEditorView = editorView;
-                return;
-            }
-            
-            logger.log("无法获取EditorView：当前视图或编辑器的结构与预期不符");
-            this.activeEditorView = null;
-        } catch (e) {
-            logger.log("获取EditorView时出错，可能当前不是编辑模式：", e);
-            this.activeEditorView = null;
+            // 不再动态添加扩展，而是在初始化时就设置好所有扩展
+            // 利用现有的扩展触发更新，避免重复注册
         }
     }
 
@@ -290,6 +365,7 @@ export class EditorLinkDecorator {
     }
 
     // 收集链接
+    @Logged('debug')
     public collectLinks(): LinkInfo[] {
         if (!this.activeEditorView || !this.currentFile) {
             return [];
@@ -457,68 +533,68 @@ export class EditorLinkDecorator {
         }
     }
 
-    // 处理链接的方法，分批处理以改善性能
+    // 处理链接
+    @Logged('debug')
+    @CatchError({ source: 'EditorLinkDecorator' })
     public processLinks(): void {
         if (!this.activeEditorView || !this.currentFile || !this.plugin.settings.enableEditorLinkDecorations) {
             return;
         }
         
-        try {
-            // 使用已预处理的链接或收集新的链接
-            let links = this.allCurrentLinks.length > 0
-                ? this.allCurrentLinks
-                : this.collectLinks();
-            
-            // 没有链接，直接返回
-            if (links.length === 0) {
-                return;
-            }
-            
-            // 分批处理链接，避免一次性处理太多导致UI卡顿
-            this.processBatchOfLinks(links, 0);
-        } catch (e) {
-            logger.log("处理链接时出错:", e);
-        }
-    }
-
-    // 分批处理链接，每批处理BATCH_SIZE个
-    private processBatchOfLinks(links: LinkInfo[], startIndex: number): void {
-        // 检查是否还有链接需要处理
-        if (startIndex >= links.length || !this.activeEditorView) {
+        // 防止重复处理
+        if (this.isProcessing) {
+            this.pendingUpdate = true;
             return;
         }
         
-        // 计算当前批次的结束索引
-        const endIndex = Math.min(startIndex + this.batchSize, links.length);
-        const currentBatch = links.slice(startIndex, endIndex);
+        this.isProcessing = true;
+        this.pendingUpdate = false;
         
-        // 处理当前批次
-        for (const link of currentBatch) {
-            // 先尝试从缓存获取显示名称
-            const cachedDisplayName = this.fileDisplayCache.getDisplayName(link.path);
-            
-            if (cachedDisplayName) {
-                // 如果缓存中有显示名称，直接使用
-                this.applyDisplayName({
-                    originalInfo: link,
-                    displayName: cachedDisplayName,
-                    shouldUpdate: true,
-                    success: true
-                });
-            } else {
-                // 否则使用LinkUtils处理链接
-                const processResult = this.linkUtils.processLinkInfo(link);
-                if (processResult.success && processResult.shouldUpdate) {
-                    this.applyDisplayName(processResult);
-                }
+        try {
+            // 如果还没有收集链接，先收集
+            if (this.allCurrentLinks.length === 0) {
+                this.allCurrentLinks = this.collectLinks();
             }
-        }
-        
-        // 如果还有剩余链接，安排下一批处理
-        if (endIndex < links.length) {
-            setTimeout(() => {
-                this.processBatchOfLinks(links, endIndex);
-            }, 0); // 使用0延迟让UI有机会响应
+            
+            // 没有链接需要处理
+            if (this.allCurrentLinks.length === 0) {
+                this.isProcessing = false;
+                return;
+            }
+            
+            // 动态调整批处理大小
+            this.adjustBatchSize();
+            
+            // 开始时间
+            const startTime = performance.now();
+            
+            // 使用批处理
+            this.linkUtils.processBatch(
+                this.allCurrentLinks, 
+                0,
+                (result) => {
+                    if (result.success && result.shouldUpdate && result.displayName) {
+                        this.applyDisplayName(result);
+                    }
+                }
+            );
+            
+            // 记录处理时间
+            this.lastPreprocessTime = performance.now() - startTime;
+            
+            // 处理完成后检查是否有挂起的更新
+            this.isProcessing = false;
+            if (this.pendingUpdate) {
+                // 使用requestIdleCallback安排下一次处理，给UI线程喘息机会
+                this.scheduleProcessLinks();
+            }
+        } catch (error) {
+            this.isProcessing = false;
+            logger.error("处理链接出错:", error);
+            // 确保错误不会阻止未来的处理
+            if (this.pendingUpdate) {
+                setTimeout(() => this.queueUpdate(), 1000); // 错误后延迟重试
+            }
         }
     }
 
@@ -527,6 +603,8 @@ export class EditorLinkDecorator {
      * 实现IEditorLinkDecorator接口
      */
     public getExtension(): Extension[] {
+        // 标记扩展已注册，防止重复注册
+        this.isExtensionRegistered = true;
         return this.extensions;
     }
 

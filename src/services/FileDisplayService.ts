@@ -14,6 +14,7 @@ import {
 } from './interfaces/IServices';
 import { throttle } from '../utils';
 import { FileEventType, FileEvent } from './EventManagerService';
+import { ServiceContainer } from '../core/ServiceContainer';
 
 // 主服务类，协调其他组件
 export class FileDisplayService implements IFileDisplayService {
@@ -30,6 +31,53 @@ export class FileDisplayService implements IFileDisplayService {
     private throttledUpdateAllFilesDisplay: (clearCache?: boolean) => void;
     private lastUpdatedFiles: Set<string> = new Set(); // 用于记录上次更新的文件
     private unsubscribers: (() => void)[] = []; // 存储取消订阅函数
+
+    /**
+     * 静态工厂方法，从服务容器获取依赖
+     */
+    public static create(plugin: ITitleExtractorPlugin): FileDisplayService {
+        const container = ServiceContainer.getInstance();
+        
+        // 从容器中获取依赖
+        const filenameParser = container.get<IFilenameParser>('filenameParser');
+        const fileDisplayCache = container.get<IFileDisplayCache>('fileDisplayCache');
+        const fileExplorerDisplayService = container.get<IFileExplorerDisplayService>('fileExplorerDisplayService');
+        const fileProcessorService = container.get<IFileProcessorService>('fileProcessorService');
+        const markdownLinkService = container.get<IMarkdownLinkService>('markdownLinkService');
+        
+        // 安全获取 editorLinkDecorator 服务 - 这个服务可能不存在
+        let editorLinkDecorator;
+        try {
+            // 检查 EditorLinkDecorator 服务是否已注册
+            if (container.has('editorLinkDecorator')) {
+                editorLinkDecorator = container.get<IEditorLinkDecorator>('editorLinkDecorator');
+            } else {
+                // 如果未注册，使用插件实例中的对象（可能为 null）
+                editorLinkDecorator = plugin._linkDecorator;
+            }
+        } catch (error) {
+            // 如果出错，设置为 null
+            editorLinkDecorator = null;
+        }
+        
+        const eventManager = container.get<IEventManagerService>('eventManager');
+        const timerService = container.get<ITimerService>('timerService');
+        const loggerService = container.get<ILoggerService>('loggerService');
+        
+        // 创建服务实例
+        return new FileDisplayService(
+            plugin,
+            filenameParser,
+            fileDisplayCache,
+            fileExplorerDisplayService,
+            fileProcessorService,
+            markdownLinkService,
+            editorLinkDecorator,
+            eventManager,
+            timerService,
+            loggerService
+        );
+    }
 
     constructor(
         plugin: ITitleExtractorPlugin,
@@ -242,7 +290,7 @@ export class FileDisplayService implements IFileDisplayService {
                     // 检查当前活跃编辑器，如果存在则刷新链接装饰
                     try {
                         const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-                        if (view && view.editor) {
+                        if (view && view.editor && this.editorLinkDecorator) {
                             this.editorLinkDecorator.processLinks();
                         }
                     } catch (error) {

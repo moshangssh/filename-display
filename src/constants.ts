@@ -10,5 +10,26 @@ export const DEFAULT_SETTINGS: TitleExtractorSettings = {
     cacheCleanStrategy: CacheCleanStrategy.LRU,  // 默认使用LRU缓存清理策略
     persistentCacheHeatThreshold: 5,  // 默认热度阈值
     fallbackToDOMForFileExplorer: true,  // 默认启用DOM回退
-    cacheMigrationV1: false  // 默认未完成V1版本的缓存迁移
+    cacheMigrationV1: false,  // 默认未完成V1版本的缓存迁移
+    performanceThreshold: 50,  // 默认性能监控阈值：50ms
+    // 新增：文件处理优先级设置默认值
+    processingPriority: {
+        highPriorityFolders: [],   // 默认无高优先级文件夹
+        lowPriorityFolders: []     // 默认无低优先级文件夹
+    },
+    // 新增：额外正则表达式配置默认值
+    additionalPatterns: {
+        enabled: false,            // 默认不启用额外正则表达式
+        patterns: [],              // 默认无额外正则表达式
+        matchMode: 'first'         // 默认使用第一个匹配
+    },
+    // 新增：自定义缓存策略参数默认值
+    cacheSettings: {
+        maxDisplayNameEntries: 1000,  // 显示名称缓存默认最大1000条
+        maxLinkEntries: 5000,         // 链接缓存默认最大5000条
+        maxDecorationEntries: 2000,   // 装饰缓存默认最大2000条
+        expiryTime: 30                // 默认缓存过期时间30分钟
+    },
+    // 新增：调试模式默认值
+    debugMode: false               // 默认不启用调试模式
 }; 

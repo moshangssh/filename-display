@@ -1,6 +1,7 @@
 import { TFile } from 'obsidian';
 import type { ITitleExtractorPlugin, FileDisplayResult } from '../types';
 import { IFilenameParser, IFileDisplayCache, ILoggerService } from '../services/interfaces/IServices';
+import { LoggerService } from '../services/LoggerService';
 
 /**
  * 文件处理基类，集中通用的文件处理逻辑
@@ -9,19 +10,35 @@ import { IFilenameParser, IFileDisplayCache, ILoggerService } from '../services/
 export abstract class BaseFileProcessor {
     protected plugin: ITitleExtractorPlugin;
     protected filenameParser: IFilenameParser;
-    protected fileDisplayCache: IFileDisplayCache;
+    protected fileDisplayCache: IFileDisplayCache | null = null;
     protected logger: ILoggerService;
 
     constructor(
         plugin: ITitleExtractorPlugin,
         filenameParser: IFilenameParser,
-        fileDisplayCache: IFileDisplayCache,
-        loggerService: ILoggerService
+        fileDisplayCache?: IFileDisplayCache,
+        loggerService?: ILoggerService
     ) {
         this.plugin = plugin;
         this.filenameParser = filenameParser;
-        this.fileDisplayCache = fileDisplayCache;
-        this.logger = loggerService.getLogger(this.constructor.name);
+        if (fileDisplayCache) {
+            this.fileDisplayCache = fileDisplayCache;
+        }
+        // 确保始终有一个有效的日志记录器
+        if (loggerService) {
+            this.logger = loggerService.getLogger(this.constructor.name);
+        } else {
+            // 如果没有提供日志服务，创建一个默认的
+            this.logger = new LoggerService(this.constructor.name);
+        }
+    }
+
+    /**
+     * 设置文件显示缓存
+     * @param cache 缓存对象
+     */
+    public setFileDisplayCache(cache: IFileDisplayCache): void {
+        this.fileDisplayCache = cache;
     }
 
     /**
@@ -73,7 +90,7 @@ export abstract class BaseFileProcessor {
      * 从缓存获取显示名称
      */
     protected getCachedDisplayName(path: string): FileDisplayResult | null {
-        if (this.fileDisplayCache.hasDisplayName(path)) {
+        if (this.fileDisplayCache && this.fileDisplayCache.hasDisplayName(path)) {
             const cachedName = this.fileDisplayCache.getDisplayName(path);
             if (cachedName) {
                 return { 
@@ -97,7 +114,7 @@ export abstract class BaseFileProcessor {
      * 缓存显示结果
      */
     protected cacheDisplayResult(path: string, result: FileDisplayResult): void {
-        if (result.success && result.displayName) {
+        if (result.success && result.displayName && this.fileDisplayCache) {
             this.fileDisplayCache.setDisplayName(path, result.displayName);
         }
     }
@@ -106,6 +123,8 @@ export abstract class BaseFileProcessor {
      * 清除文件的缓存
      */
     public clearFileCache(file: TFile): void {
-        this.fileDisplayCache.deletePath(file.path);
+        if (this.fileDisplayCache) {
+            this.fileDisplayCache.deletePath(file.path);
+        }
     }
 } 

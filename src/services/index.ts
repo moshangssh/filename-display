@@ -13,4 +13,7 @@ export { TimerService } from './TimerService';
 // 导出其他服务
 export { ExtensionCacheService } from './ExtensionCacheService';
 export { LinkStateManager } from './LinkStateManager';
-export { LoggerService } from './LoggerService'; 
+export { LoggerService } from './LoggerService';
+export { CacheManager } from './cache/CacheManager';
+export { PerformanceMonitor } from './PerformanceMonitor';
+export { ErrorHandler, ErrorType, ErrorSeverity } from './ErrorHandler'; 

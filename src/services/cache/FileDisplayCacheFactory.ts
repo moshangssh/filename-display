@@ -19,14 +19,14 @@ export class FileDisplayCacheFactory {
      * @param plugin 插件实例
      * @param loggerService 日志服务
      * @param timerService 定时器服务
-     * @param fileProcessorService 文件处理服务
+     * @param fileProcessorService 文件处理服务（可选）
      * @returns FileDisplayCache实例
      */
     public static createFileDisplayCache(
         plugin: ITitleExtractorPlugin,
         loggerService: ILoggerService,
         timerService: ITimerService,
-        fileProcessorService: FileProcessorService
+        fileProcessorService?: FileProcessorService
     ): IFileDisplayCache {
         // 创建缓存存储
         const cacheStorage = new FileCacheStorage();

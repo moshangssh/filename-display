@@ -15,7 +15,7 @@ import { LoggerService } from './services/LoggerService';
 import { errorHandler } from './utils/ErrorHandler';
 import { Extension, Compartment } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { IEditorLinkDecorator, IFileExplorerDisplayService, CacheCleanStrategy, IFileDisplayCache } from './services/interfaces/IServices';
+import { IEditorLinkDecorator, IFileExplorerDisplayService, CacheCleanStrategy, IFileDisplayCache, IPerformanceMonitor } from './services/interfaces/IServices';
 import { ExtensionCacheService } from './services/ExtensionCacheService';
 import { getEditorView } from './utils/editor-utils';
 import { 
@@ -28,6 +28,9 @@ import { LinkStateManager } from './services/LinkStateManager';
 import { FileDisplayCacheFactory } from './services/cache/FileDisplayCacheFactory';
 import { ServiceContainer } from './core/ServiceContainer';
 import { FileProcessor } from './utils/FileProcessor';
+import { PerformanceMonitor } from './services/PerformanceMonitor';
+import { CacheManager } from './services/cache/CacheManager';
+import { ErrorHandler } from './services/ErrorHandler';
 
 const logger = new LoggerService('Plugin');
 
@@ -125,10 +128,22 @@ export default class TitleExtractorPlugin extends Plugin {
         this.loggerService = new LoggerService();
         this.timerService = new TimerService(this);
         
+        // 初始化性能监控和错误处理服务
+        const performanceMonitor = PerformanceMonitor.getInstance(this.loggerService);
+        performanceMonitor.enable(this.settings.performanceThreshold || 50);
+        
+        const errorHandler = ErrorHandler.getInstance(this.loggerService);
+        
+        // 初始化中心化缓存管理
+        const cacheManager = CacheManager.getInstance(this.loggerService);
+        
         // 将基础服务注册到容器
         this.serviceContainer.register('plugin', this);
         this.serviceContainer.register('loggerService', this.loggerService);
         this.serviceContainer.register('timerService', this.timerService);
+        this.serviceContainer.register('performanceMonitor', performanceMonitor);
+        this.serviceContainer.register('errorHandler', errorHandler);
+        this.serviceContainer.register('cacheManager', cacheManager);
         
         // 初始化文件名解析器
         this.filenameParser = new FilenameParser(this, this.loggerService);
@@ -139,31 +154,33 @@ export default class TitleExtractorPlugin extends Plugin {
             return this.fileExplorerDisplayService?.updateFileExplorerDisplay(file);
         };
         
-        // 初始化文件处理服务
+        // 初始化文件处理服务 - 不传递缓存服务
         this.fileProcessorService = new FileProcessorService(
             this,
             this.filenameParser,
-            null, // 稍后会设置 fileDisplayCache
-            this.loggerService
+            undefined, // 暂时不传入缓存
+            this.loggerService,
+            this.timerService,
+            performanceMonitor,
+            errorHandler
         );
         
-        // 设置文件处理服务的定时器服务
-        this.fileProcessorService.setTimerService(this.timerService);
-        
-        // 初始化文件显示缓存 - 使用工厂模式创建
+        // 初始化文件显示缓存 - 使用工厂模式创建，不传入处理服务（避免循环依赖）
         this.fileDisplayCache = FileDisplayCacheFactory.createFileDisplayCache(
             this,
             this.loggerService,
-            this.timerService,
-            this.fileProcessorService
+            this.timerService
+            // 不传入 fileProcessorService，避免循环依赖
         );
-        
-        // 注册缓存服务
-        this.serviceContainer.register('fileDisplayCache', this.fileDisplayCache);
         
         // 设置文件处理服务的缓存依赖
         this.fileProcessorService.setFileDisplayCache(this.fileDisplayCache);
+        
+        // 设置文件处理服务的更新函数
         this.fileProcessorService.setUpdateFileDisplayFn(updateFileFn);
+        
+        // 注册缓存服务
+        this.serviceContainer.register('fileDisplayCache', this.fileDisplayCache);
         
         // 注册文件处理服务
         this.serviceContainer.register('fileProcessorService', this.fileProcessorService);
@@ -185,18 +202,16 @@ export default class TitleExtractorPlugin extends Plugin {
         
         // 初始化链接状态管理器
         this.linkStateManager = new LinkStateManager(this);
+        // 注册链接状态管理器到容器
+        this.serviceContainer.register('linkStateManager', this.linkStateManager);
         
         // 初始化扩展缓存服务
         this.extensionCacheService = new ExtensionCacheService(this);
+        this.serviceContainer.register('extensionCacheService', this.extensionCacheService);
         
         // 初始化文件浏览器显示服务
-        this.fileExplorerDisplayService = new FileExplorerDisplayService(
-            this,
-            this.filenameParser,
-            this.fileDisplayCache,
-            this.eventManager,
-            this.loggerService
-        );
+        this.fileExplorerDisplayService = FileExplorerDisplayService.create(this);
+        this.serviceContainer.register('fileExplorerDisplayService', this.fileExplorerDisplayService);
         
         // 初始化Markdown链接服务
         this.markdownLinkService = MarkdownLinkService.create(this);
@@ -204,53 +219,13 @@ export default class TitleExtractorPlugin extends Plugin {
         
         // 初始化编辑器链接装饰器
         if (this.settings.enableEditorLinkDecorations) {
-            this.editorLinkDecorator = new EditorLinkDecorator(
-                this,
-                this.filenameParser, 
-                this.fileDisplayCache,
-                this.linkStateManager,
-                this.loggerService
-            );
-        }
-        
-        // 初始化文件显示服务
-        this.fileDisplayService = new FileDisplayService(
-            this,
-            this.filenameParser,
-            this.fileDisplayCache,
-            this.fileExplorerDisplayService,
-            this.fileProcessorService,
-            this.markdownLinkService,
-            this.editorLinkDecorator,
-            this.eventManager,
-            this.timerService,
-            this.loggerService
-        );
-        
-        // 注册其他服务到容器
-        if (this.linkStateManager) {
-            this.serviceContainer.register('linkStateManager', this.linkStateManager);
-        }
-        
-        if (this.extensionCacheService) {
-            this.serviceContainer.register('extensionCacheService', this.extensionCacheService);
-        }
-        
-        if (this.fileExplorerDisplayService) {
-            this.serviceContainer.register('fileExplorerDisplayService', this.fileExplorerDisplayService);
-        }
-        
-        if (this.markdownLinkService) {
-            this.serviceContainer.register('markdownLinkService', this.markdownLinkService);
-        }
-        
-        if (this.editorLinkDecorator) {
+            this.editorLinkDecorator = EditorLinkDecorator.create(this);
             this.serviceContainer.register('editorLinkDecorator', this.editorLinkDecorator);
         }
         
-        if (this.fileDisplayService) {
-            this.serviceContainer.register('fileDisplayService', this.fileDisplayService);
-        }
+        // 初始化文件显示服务
+        this.fileDisplayService = FileDisplayService.create(this);
+        this.serviceContainer.register('fileDisplayService', this.fileDisplayService);
     }
 
     onunload() {
@@ -393,15 +368,71 @@ export default class TitleExtractorPlugin extends Plugin {
      */
     private updateCompartment(compartment: Compartment, extension: Extension): void {
         try {
-            // 注册到Obsidian，使用Compartment.reconfigure
+            // 检查扩展是否已经注册过，避免重复注册
+            const extensionSignature = this.getExtensionSignature(extension);
+            const alreadyRegistered = this.editorExtensions.some(ext => 
+                this.getExtensionSignature(ext) === extensionSignature && extensionSignature !== ''
+            );
+            
+            if (alreadyRegistered) {
+                logger.debug('扩展已存在，跳过重复注册');
+                return;
+            }
+            
+            // 防止Compartment冲突
             super.registerEditorExtension(compartment.of(extension));
             logger.debug('成功通过Compartment注册扩展');
         } catch (error) {
             logger.error('更新扩展Compartment时出错：', error);
             
-            // 回退到标准注册方法
-            super.registerEditorExtension(extension);
-            logger.debug('已回退到标准注册方法');
+            // 尝试使用新的Compartment重新注册
+            try {
+                // 创建新的Compartment
+                const newCompartment = new Compartment();
+                
+                // 找到当前Compartment的分组名称并更新
+                for (const [key, value] of this.extensionCompartments.entries()) {
+                    if (value === compartment) {
+                        this.extensionCompartments.set(key, newCompartment);
+                        break;
+                    }
+                }
+                
+                // 使用新Compartment注册
+                super.registerEditorExtension(newCompartment.of(extension));
+                logger.debug('使用新Compartment重新注册成功');
+            } catch (retryError) {
+                logger.error('重试注册失败，回退到标准注册方法:', retryError);
+                
+                // 最终回退到标准注册方法
+                try {
+                    super.registerEditorExtension(extension);
+                    logger.debug('已回退到标准注册方法');
+                } catch (finalError) {
+                    logger.error('所有注册方法都失败，放弃注册此扩展', finalError);
+                }
+            }
+        }
+    }
+
+    /**
+     * 获取扩展的唯一签名，用于检测重复
+     * 注意：这只是一个简单的启发式方法，无法保证100%准确
+     */
+    private getExtensionSignature(extension: Extension): string {
+        try {
+            // 尝试获取对象的字符串表示
+            const str = extension.toString();
+            
+            // 如果是EditorView的方法，提取其名称
+            if (str.includes('EditorView')) {
+                const match = /EditorView\.([a-zA-Z]+)/.exec(str);
+                return match ? `EditorView.${match[1]}` : str.substring(0, 50);
+            }
+            
+            return str.substring(0, 50); // 取前50个字符作为签名
+        } catch (e) {
+            return ''; // 无法获取签名
         }
     }
 
@@ -438,8 +469,49 @@ export default class TitleExtractorPlugin extends Plugin {
         }
     }
 
-    // 注册文件事件监听
+    /**
+     * 注册事件监听
+     */
     private registerEvents(): void {
+        // 注册文件处理相关的事件监听
+        this.registerFileEvents();
+        
+        // 性能监控阈值更新事件
+        window.addEventListener('filename-display:update-performance-threshold', ((event: CustomEvent) => {
+            try {
+                const threshold = event.detail?.threshold;
+                if (typeof threshold === 'number') {
+                    const performanceMonitor = this.serviceContainer.get<IPerformanceMonitor>('performanceMonitor');
+                    performanceMonitor.enable(threshold);
+                    logger.info(`已更新性能监控阈值: ${threshold}ms`);
+                }
+            } catch (error) {
+                logger.error('更新性能监控阈值失败:', error);
+            }
+        }) as EventListener);
+        
+        // 缓存清理策略更新事件
+        window.addEventListener('filename-display:update-cache-strategy', ((event: CustomEvent) => {
+            try {
+                const strategy = event.detail?.strategy;
+                if (typeof strategy === 'number') {
+                    const fileDisplayCache = this.serviceContainer.get<IFileDisplayCache>('fileDisplayCache');
+                    fileDisplayCache.setCacheCleanStrategy(strategy);
+                    logger.info(`已更新缓存清理策略: ${strategy}`);
+                    
+                    // 触发一次手动清理，应用新策略
+                    fileDisplayCache.triggerCleanup();
+                }
+            } catch (error) {
+                logger.error('更新缓存清理策略失败:', error);
+            }
+        }) as EventListener);
+    }
+    
+    /**
+     * 注册文件相关事件
+     */
+    private registerFileEvents(): void {
         // 监听文件修改事件
         this.registerEvent(
             this.app.vault.on('modify', (file: TAbstractFile) => {
@@ -490,23 +562,6 @@ export default class TitleExtractorPlugin extends Plugin {
                 }, 300);
             })
         );
-        
-        // 监听缓存清理策略更新事件
-        window.addEventListener('filename-display:update-cache-strategy', ((event: CustomEvent) => {
-            try {
-                const strategy = event.detail.strategy as CacheCleanStrategy;
-                const fileDisplayCache = this.fileDisplayCache;
-                if (fileDisplayCache) {
-                    fileDisplayCache.setCacheCleanStrategy(strategy);
-                    logger.log(`已更新缓存清理策略为: ${CacheCleanStrategy[strategy]}`);
-                    
-                    // 触发一次手动清理，应用新策略
-                    fileDisplayCache.triggerCleanup();
-                }
-            } catch (error) {
-                logger.error('更新缓存清理策略失败:', error);
-            }
-        }) as EventListener);
     }
 
     /**
@@ -567,65 +622,75 @@ export default class TitleExtractorPlugin extends Plugin {
     }
 
     /**
-     * 注册标准编辑器扩展，按功能分组
+     * 注册标准编辑器扩展
+     * 一次性注册所有扩展，避免在运行时修改
      */
     private registerStandardEditorExtensions() {
         try {
-            // 获取核心扩展组件
+            // 创建核心扩展分组的Compartment
+            if (!this.extensionCompartments.has(EXTENSION_GROUPS.CORE)) {
+                this.extensionCompartments.set(EXTENSION_GROUPS.CORE, new Compartment());
+            }
+            
+            // 创建链接扩展分组的Compartment
+            if (!this.extensionCompartments.has(EXTENSION_GROUPS.LINK)) {
+                this.extensionCompartments.set(EXTENSION_GROUPS.LINK, new Compartment());
+            }
+            
+            // 创建自定义扩展分组的Compartment
+            if (!this.extensionCompartments.has(EXTENSION_GROUPS.CUSTOM)) {
+                this.extensionCompartments.set(EXTENSION_GROUPS.CUSTOM, new Compartment());
+            }
+            
+            // 获取各分组的Compartment
             const coreCompartment = this.extensionCompartments.get(EXTENSION_GROUPS.CORE)!;
             const linkCompartment = this.extensionCompartments.get(EXTENSION_GROUPS.LINK)!;
             
-            // 1. 注册核心扩展
-            const coreExtensions = [
-                // 添加视口、增量更新和编辑器同步扩展
+            // 构建核心扩展数组 - 注意调用函数获取真正的扩展实例
+            const coreExtensions: Extension[] = [
                 viewportExtension(),
                 incrementalUpdateExtension(),
-                editorSyncExtension(this) // 传入插件实例
+                editorSyncExtension(this)
             ];
             
-            this.registerEditorExtension(coreExtensions, EXTENSION_GROUPS.CORE);
+            // 注册核心扩展
+            super.registerEditorExtension(coreCompartment.of(coreExtensions));
+            logger.debug('成功注册核心编辑器扩展');
             
-            // 2. 注册链接相关扩展
-            const linkExtensions = [
-                // 从编辑器链接装饰器获取扩展
-                ...this.editorLinkDecorator.getExtension()
-            ];
-            
-            this.registerEditorExtension(linkExtensions, EXTENSION_GROUPS.LINK);
-            
-            // 3. 注册组合扩展
-            this.registerEditorExtension([this.createCombinedExtensions()], EXTENSION_GROUPS.CUSTOM);
-            
-            logger.log('已注册所有编辑器扩展');
+            // 当启用了编辑器链接装饰时，注册链接扩展
+            if (this.settings.enableEditorLinkDecorations) {
+                // 获取链接装饰器扩展
+                if (!this.editorLinkDecorator) {
+                    logger.error('找不到EditorLinkDecorator实例，跳过链接扩展注册');
+                    return;
+                }
+                
+                const linkExtensions = this.editorLinkDecorator.getExtension();
+                
+                // 一次性注册所有链接扩展
+                super.registerEditorExtension(linkCompartment.of(linkExtensions));
+                logger.debug('成功注册链接编辑器扩展');
+            } else {
+                logger.debug('链接装饰已禁用，跳过注册链接扩展');
+                
+                // 注册一个空扩展以保持Compartment结构
+                super.registerEditorExtension(linkCompartment.of([]));
+            }
         } catch (error) {
-            logger.error('注册编辑器扩展时出错：', error);
+            logger.error('注册标准编辑器扩展时出错:', error);
             
-            // 兜底方案：使用传统方式注册所有扩展
-            this.editorExtensions = [
-                // 从编辑器链接装饰器获取扩展
-                ...this.editorLinkDecorator.getExtension(),
-                
-                // 添加其他必要的扩展
-                viewportExtension(),
-                incrementalUpdateExtension(),
-                editorSyncExtension(this),
-                
-                // 添加组合扩展
-                this.createCombinedExtensions()
-            ];
-            
-            // 使用父类方法直接注册所有扩展
-            super.registerEditorExtension(this.editorExtensions);
-            logger.log('已使用兜底方式注册编辑器扩展');
+            // 出错时使用最简单的方式注册核心扩展
+            try {
+                super.registerEditorExtension([
+                    viewportExtension(),
+                    incrementalUpdateExtension(),
+                    editorSyncExtension(this)
+                ]);
+                logger.debug('已使用简单方式注册核心扩展');
+            } catch (fallbackError) {
+                logger.error('注册核心扩展失败，编辑器功能可能受到影响:', fallbackError);
+            }
         }
-    }
-
-    /**
-     * 创建 CodeMirror 扩展集合
-     * 使用扩展缓存服务来优化性能
-     */
-    private createCombinedExtensions(): Extension {
-        return this.extensionCacheService.getCombinedExtensions();
     }
 
     /**

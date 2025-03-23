@@ -75,10 +75,64 @@ export class FilenameParser implements IFilenameParser {
         }
 
         try {
+            // 首先使用主要正则表达式
+            let result = this.extractWithRegex(filename, this.plugin.settings.pattern);
+            
+            // 如果主要正则表达式匹配失败且启用了额外正则表达式，尝试使用额外正则表达式
+            if (!result.success && this.plugin.settings.additionalPatterns.enabled && 
+                this.plugin.settings.additionalPatterns.patterns.length > 0) {
+                
+                // 根据匹配模式决定处理方式
+                if (this.plugin.settings.additionalPatterns.matchMode === 'first') {
+                    // 使用第一个匹配的正则表达式
+                    for (const pattern of this.plugin.settings.additionalPatterns.patterns) {
+                        const patternResult = this.extractWithRegex(filename, pattern);
+                        if (patternResult.success) {
+                            result = patternResult;
+                            break;
+                        }
+                    }
+                } else if (this.plugin.settings.additionalPatterns.matchMode === 'all') {
+                    // 使用所有匹配的正则表达式（拼接结果）
+                    const matchResults: string[] = [];
+                    let anySuccess = false;
+                    
+                    for (const pattern of this.plugin.settings.additionalPatterns.patterns) {
+                        const patternResult = this.extractWithRegex(filename, pattern);
+                        if (patternResult.success && patternResult.displayName) {
+                            matchResults.push(patternResult.displayName);
+                            anySuccess = true;
+                        }
+                    }
+                    
+                    if (anySuccess) {
+                        result = {
+                            success: true,
+                            displayName: matchResults.join(' ')
+                        };
+                    }
+                }
+            }
+            
+            return result;
+        } catch (e) {
+            const error = e instanceof Error ? e.message : String(e);
+            console.error('文件名解析错误:', error);
+            return { 
+                success: false, 
+                error: `正则处理错误: ${error}`,
+                displayName: filename 
+            };
+        }
+    }
+    
+    // 使用指定的正则表达式提取内容
+    private extractWithRegex(filename: string, pattern: string): FileDisplayResult {
+        try {
             // 验证正则表达式的有效性
             let regex: RegExp;
             try {
-                regex = new RegExp(this.plugin.settings.pattern);
+                regex = new RegExp(pattern);
             } catch (regexError) {
                 const error = regexError instanceof Error ? regexError.message : String(regexError);
                 return { 
@@ -129,7 +183,6 @@ export class FilenameParser implements IFilenameParser {
             };
         } catch (e) {
             const error = e instanceof Error ? e.message : String(e);
-            console.error('文件名解析错误:', error);
             return { 
                 success: false, 
                 error: `正则处理错误: ${error}`,
@@ -158,6 +211,34 @@ export class FilenameParser implements IFilenameParser {
             return filePath === normalizedFolder || 
                    filePath.startsWith(normalizedFolder + '/');
         });
+    }
+
+    /**
+     * 获取文件的优先级
+     * 返回值: 2=高优先级, 1=普通优先级, 0=低优先级
+     */
+    public getFilePriority(file: TFile): number {
+        const filePath = file.path;
+        
+        // 检查是否在高优先级文件夹
+        for (const folder of this.plugin.settings.processingPriority.highPriorityFolders) {
+            const normalizedFolder = normalizePath(folder);
+            if (filePath === normalizedFolder || 
+                filePath.startsWith(normalizedFolder + '/')) {
+                return 2; // 高优先级
+            }
+        }
+        
+        // 检查是否在低优先级文件夹
+        for (const folder of this.plugin.settings.processingPriority.lowPriorityFolders) {
+            const normalizedFolder = normalizePath(folder);
+            if (filePath === normalizedFolder || 
+                filePath.startsWith(normalizedFolder + '/')) {
+                return 0; // 低优先级
+            }
+        }
+        
+        return 1; // 默认为普通优先级
     }
 
     /**

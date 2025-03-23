@@ -13,6 +13,23 @@ export interface TitleExtractorSettings {
     persistentCacheHeatThreshold: number;
     fallbackToDOMForFileExplorer: boolean;
     cacheMigrationV1?: boolean;
+    performanceThreshold: number;
+    processingPriority: {
+        highPriorityFolders: string[];
+        lowPriorityFolders: string[];
+    };
+    additionalPatterns: {
+        enabled: boolean;
+        patterns: string[];
+        matchMode: 'first' | 'all';
+    };
+    cacheSettings: {
+        maxDisplayNameEntries: number;
+        maxLinkEntries: number;
+        maxDecorationEntries: number;
+        expiryTime: number;
+    };
+    debugMode: boolean;
 }
 
 export interface ITitleExtractorPlugin extends Plugin {
@@ -24,6 +41,11 @@ export interface ITitleExtractorPlugin extends Plugin {
     // 添加服务组件引用
     linkStateManager: ILinkStateManager;
     extensionCacheService: ExtensionCacheService;
+    
+    // 新增：诊断和性能监控服务引用
+    diagnosticService?: any;
+    performanceMonitor?: any;
+    errorHandler?: any;
     
     // 内部使用的属性，用于存储链接装饰器引用
     _linkDecorator?: any;

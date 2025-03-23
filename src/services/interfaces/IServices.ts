@@ -1,13 +1,12 @@
 import { TFile, TAbstractFile } from 'obsidian';
 import { FileDisplayResult } from '../../types';
 import { Extension } from '@codemirror/state';
-import { IErrorHandler } from './IErrorHandler';
 import { FileEventType, EventCallback, FileEvent } from '../EventManagerService';
 import { EditorView } from '@codemirror/view';
 import { LinkBatchCallback, LinkInfo, LinkUpdateResult } from '../LinkStateManager';
-
-// 导出错误处理服务接口
-export type { IErrorHandler };
+import { ErrorRecord, ErrorSeverity, ErrorType } from '../ErrorHandler';
+import { PerformanceReport } from '../PerformanceMonitor';
+import { CacheEntry } from '../cache/CacheManager';
 
 // 缓存清理策略枚举
 export enum CacheCleanStrategy {
@@ -28,12 +27,84 @@ export interface ILoggerService {
     dispose(): void;
 }
 
+// 中心化缓存管理服务接口
+export interface ICacheManager {
+    // 显示名称缓存方法
+    setDisplayName(path: string, displayName: string, originalName: string, mtime: number): void;
+    getDisplayName(path: string): string | undefined;
+    getOriginalName(path: string): string | undefined;
+    isCacheValid(path: string, file: TFile): boolean;
+    
+    // 链接缓存方法
+    setCachedLink(sourcePath: string, targetPath: string, displayName: string): void;
+    getCachedLink(sourcePath: string, targetPath: string): string | undefined;
+    updateLinkMTime(targetPath: string, mtime: number): void;
+    
+    // 编辑器装饰缓存方法
+    setDecorationCache(editorId: string, linkId: string, from: number, to: number, displayText: string): void;
+    getDecorationCache(editorId: string, linkId: string): { from: number, to: number, displayText: string } | undefined;
+    
+    // 缓存管理方法
+    clearFileCache(path: string): void;
+    cleanupCache(maxDisplayNameEntries?: number, maxLinkEntries?: number, maxDecorationEntries?: number): void;
+    clearAll(): void;
+    getStats(): { displayNameSize: number, linkSize: number, decorationSize: number };
+}
+
+// 性能监控服务接口
+export interface IPerformanceMonitor {
+    enable(autoReportThreshold?: number): void;
+    disable(): void;
+    startMeasure(id: string): () => void;
+    measure<T extends any[], R>(id: string, fn: (...args: T) => R): (...args: T) => R;
+    measureAsync<T extends any[], R>(id: string, fn: (...args: T) => Promise<R>): (...args: T) => Promise<R>;
+    getReport(): PerformanceReport;
+    getMetric(id: string): { avg: number, max: number, min: number, count: number, lastValue: number } | undefined;
+    logReport(): void;
+    reset(): void;
+    dispose(): void;
+}
+
+// 错误处理服务接口
+export interface IErrorHandler {
+    handleError(
+        component: string, 
+        error: Error | string, 
+        type?: ErrorType,
+        severity?: ErrorSeverity,
+        recoveryFn?: () => void
+    ): boolean;
+    getErrorCount(component: string): number;
+    isComponentInErrorState(component: string): boolean;
+    resetComponentErrorCount(component: string): void;
+    getErrorHistory(): ErrorRecord[];
+    getErrorSummaryByComponent(): Record<string, { count: number, lastError: string, severity: ErrorSeverity }>;
+    getErrorStats(): { total: number, byType: Record<ErrorType, number>, byComponent: Record<string, number> };
+    clearAll(): void;
+    wrapWithErrorHandler<T extends any[], R>(
+        component: string,
+        fn: (...args: T) => R,
+        type?: ErrorType,
+        severity?: ErrorSeverity,
+        recoveryFn?: () => void
+    ): (...args: T) => R | undefined;
+    wrapAsyncWithErrorHandler<T extends any[], R>(
+        component: string,
+        fn: (...args: T) => Promise<R>,
+        type?: ErrorType,
+        severity?: ErrorSeverity,
+        recoveryFn?: () => void
+    ): (...args: T) => Promise<R | undefined>;
+}
+
 // 文件名解析服务接口
 export interface IFilenameParser {
     parseFilename(file: TFile): Promise<FileDisplayResult>;
     shouldProcess(file: TFile): boolean;
     isFileInEnabledFolder(file: TFile): boolean;
     getDisplayNameFromMetadata(file: TFile): FileDisplayResult;
+    extractDisplayName(filename: string): FileDisplayResult;
+    getFilePriority(file: TFile): number;
     dispose(): void;
 }
 
@@ -62,6 +133,9 @@ export interface IFileDisplayCache {
     getElementData(element: HTMLElement): { path: string; originalName: string } | undefined;
     getAllOriginalNames(): Map<string, string>;
     clearAll(): void;
+    
+    // 缓存验证相关方法
+    isCacheValid(path: string, file: TFile): boolean;
     
     // 缓存清理策略相关方法
     setCacheCleanStrategy(strategy: CacheCleanStrategy): void;
