@@ -1,0 +1,62 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# Code Quality and Minimal Modification Guidelines
+
+## Context
+
+- Applies to all code writing and modification tasks
+- Ensures all code changes remain concise and efficient
+- Avoids introducing unnecessary complexity and redundancy
+- Cultivates the habit of thorough thinking before implementation
+
+## Critical Rules
+
+- Make each modification with minimal changes to meet user requirements
+- Maintain extremely high code reusability, prioritize existing functions and libraries
+- Do not introduce duplicate, redundant, or unused code
+- Think through multiple implementation approaches before actual coding
+- Clean and optimize any modified code segments
+- Maintain code structure consistency and readability
+- Ensure all modifications have clear purpose and value
+- Preserve functional integrity of existing features with every change
+- Maintain consistent UI/layout patterns throughout modifications
+- Design new features with elegance and refinement in mind
+
+## Examples
+
+<example>
+// Good code modification example
+// Reuse existing function for new requirements
+function processItem(item) {
+  return transformData(item);
+}
+
+// Reuse existing structure when adding new features
+function handleNewFeature() {
+  const data = fetchData();
+  return processItem(data);
+}
+</example>
+
+<example type="invalid">
+// Poor code modification example
+// Duplicating existing functionality
+function processItem(item) {
+  return transformData(item);
+}
+
+// Redundant code, not reusing existing function
+function handleNewFeature() {
+  const data = fetchData();
+  return transformData(data); // Should call processItem
+}
+
+// Introducing unused code
+function unusedFunction() {
+  // Never called function
+}
+</example> 

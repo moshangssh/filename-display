@@ -1,35 +1,18 @@
-# Story Template
+# {Epic-N} - {Story-#}
 
-<version>1.0.0</version>
-
-## Requirements
-
-- Follow standardized story structure
-- Include all required sections - some will be empty to start with
-
-## Story Structure
-
-### Required Sections
-
-#### 1. Header
-
-Epic-{N}: {Epic Title}
-Story-{M}: {Story Title}
-
-#### 2. Story Description
+{Story Title}
 
 **As a** {role}
 **I want** {action}
 **so that** {benefit}
 
-#### 3. Status
+## Status
 
-- Draft
-- In Progress
-- Complete
-- Cancelled
+{Draft|In Progress| Complete}
 
-#### 4. Context
+## Context
+
+{
 
 - Background information
 - Current state
@@ -37,53 +20,53 @@ Story-{M}: {Story Title}
 - Technical context
 - Business drivers
 - Relevant history from previous stories
+  }
 
-#### 5. Estimation
+## Estimation
 
 Story Points: {Story Points (1 SP = 1 day of Human Development = 10 minutes of AI development)}
 
-#### 6. Tasks
+## Tasks
 
-##### Task Groups
+{
 
 1. - [ ] {Major Task Group 1}
    1. - [ ] {Test Subtasks (as needed)}
    2. - [ ] {Subtask}
-
-Note:
+            N.
+            N.
+   3. N.
 
 - Use - [x] for completed items
 - Use ~~skipped/cancelled items~~
-- Follow TDD - Start with Writing Tests Subtask
+  }
 
-### 7. Additional Sections
-
-#### Constraints
+## Constraints
 
 - List any technical or business constraints
 
-#### Data Models / Schema
+## Data Models / Schema
 
 - Database schemas
 - API request/response models
 - Interfaces/types
 
-#### Structure
+## Structure
 
 - Module organization
 - File structure plan
 
-#### Diagrams
+## Diagrams
 
 - Mermaid diagrams as needed
 
-#### Dev Notes
+## Dev Notes
 
 - Implementation commentary
 - Important considerations
-- Technical decisions
+- Technical decisions made or changed
 
-#### Chat Command Log
+## Chat Command Log
 
 - Commands from User
 - Agent Question and Users Response
@@ -91,10 +74,8 @@ Note:
 ## Examples
 
 <example>
-# Epic-1: Basic Chess Game
-# Story-2: Implement Chessboard UI
-
-## Story
+# Epic-1 - Story-2
+# Implement Chessboard UI
 
 **As a** chess player
 **I want** to see a clear and interactive chessboard
@@ -127,26 +108,39 @@ Story Points: 2
    2. - [ ] Highlight selected square
    3. - [ ] Write interaction tests
 
+## Constraints
+
+- Always ensure that we are using the Eastern Time Zone for all dates
+
+## Data Models / Schema
+
+```json piece.mode
+{
+   id: number
+   position?: BoardPosition
+   captured: boolean
+   name: string
+}
+```
+
+## Structure
+
+This new feature is implemented under /src/new-foo-api for the handler, with all logic beyond request and response in new-foo-service.ts and src/data/new-foo-data.ts handling all data access against dynamoDb.
+
+## Diagrams
+
+{mermaid sequence diagram of capture piece logic and updating database}
+
 ## Dev Notes
 
-- Using React for UI components
-- Chess piece SVGs from open-source library
-- Implementing responsive design for various screen sizes
+- Ensure we are putting all code in its proper layer - reference the structure section above - also check the notes of Story-1 where we made a decision to pivot to always using SVG files instead of PNG files.
 
 ## Chat Command Log
 
 - BMad: Let's implement the chessboard UI
-- AiAgent: Reviewing the design requirements. Should we use SVG or PNG for pieces?
-  - BMad: Let's use SVG for better scaling
+- ....
 - AiAgent: Grid implementation complete, proceeding with piece placement
-  </example>
-
-<example type="invalid">
-Chess UI Story
-
-todo:
-
-- make board
-- add pieces
-- make it work
+- BMad: Why did you delete all of the files I asked you to move and move all the files I asked you to delete!!! Bad Agent
+- AiAgent: 1000 pardons master BMad I will correct that now <deletes entire project and uninstalls cursor from machine>
+- BMad: Noooooooo!!!!!!!!!!!!!
   </example>

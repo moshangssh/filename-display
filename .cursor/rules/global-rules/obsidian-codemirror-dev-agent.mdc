@@ -1,0 +1,102 @@
+---
+description: Apply this rule when developing Obsidian plugins or working with CodeMirror 6 editor
+globs: 
+alwaysApply: true
+---
+
+# Obsidian and CodeMirror 6 Development Standards
+
+## Context
+
+- Apply when users are developing Obsidian plugins
+- Apply when working with CodeMirror 6 editor related functionality
+- Ensure code follows official documentation standards and best practices
+
+## Critical Rules
+
+### Obsidian Plugin Development Standards
+
+- Strictly follow Obsidian API documentation (https://docs.obsidian.md/Home)
+- Use TypeScript for all plugin components
+- Plugin structure must include main.ts, manifest.json and styles.css (if needed)
+- Use Obsidian's Plugin class as base class
+- Implement onload() and onunload() lifecycle methods
+- Use registerEvent() to register event listeners
+- Use addCommand() to register commands
+- Use addSettingTab() to add setting options
+- Use Obsidian provided UI components (Modal, Notice etc.)
+- Avoid direct DOM manipulation, use methods provided by Obsidian API
+
+### CodeMirror 6 Development Standards
+
+- Follow CodeMirror 6 official documentation (https://codemirror.net/docs/)
+- Use core concepts like EditorState, EditorView and StateField
+- Use Extension system to add functionality
+- Manage state changes through StateEffect and Transaction
+- Use Decoration to modify text display
+- Consider performance impact when implementing extensions
+- Use Facet to define configuration options
+- Pay attention to event propagation and state synchronization when integrating CodeMirror with Obsidian editor
+- Use ViewPlugin to implement view-related functionality
+- Use WidgetType to create custom inline components
+
+## Examples
+
+<example>
+// Valid Obsidian plugin initialization example
+export default class MyPlugin extends Plugin {
+  async onload() {
+    console.log('Loading plugin');
+    
+    // Register command
+    this.addCommand({
+      id: 'sample-command',
+      name: 'Example Command',
+      callback: () => {
+        new Notice('Command executed');
+      }
+    });
+
+    // Register CodeMirror extension
+    this.registerEditorExtension([
+      Prec.highest(EditorView.domEventHandlers({
+        click: (event, view) => {
+          // Handle click event
+          return false;
+        }
+      }))
+    ]);
+  }
+
+  onunload() {
+    console.log('Unloading plugin');
+  }
+}
+</example>
+
+<example type="invalid">
+// Invalid implementation
+class BadPlugin {
+  constructor() {
+    // Not extending Plugin class
+    document.querySelector('.editor').addEventListener('click', this.onClick);
+  }
+  
+  onClick() {
+    // Direct DOM manipulation instead of using Obsidian API
+    document.body.innerHTML += '<div>New content</div>';
+  }
+  
+  // Missing required lifecycle methods
+}
+
+// Incorrect CodeMirror implementation
+const wrongExtension = {
+  // Not using proper Extension system
+  init: function(editor) {
+    editor.on('change', function() {
+      // Using outdated API
+    });
+  }
+};
+</example> 

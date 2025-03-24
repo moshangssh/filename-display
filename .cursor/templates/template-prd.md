@@ -1,150 +1,136 @@
-# PRD Template Standards
+# 1. Title: {PRD for {project}}
 
 <version>1.0.0</version>
 
-## Requirements
+## Status: { Draft | Approved }
 
-- Follow standardized PRD structure
-- Include all required sections
-- Maintain proper documentation hierarchy
-- Use consistent formatting
+## Intro
 
-## PRD Structure
+{ Short 1-2 paragraph describing the what and why of what the prd will achieve}
 
-### Required Sections
+## Goals
 
-#### 1. Header
-
-- Title: "Product Requirements Document (PRD) for {project-name}"
-
-#### 2. Status
-
-- Draft
-- Approved
-
-#### 3. Introduction
-
-- Clear description of {project-name}
-- Overview of the project scope
-- Business context and drivers
-- Target users/stakeholders
-
-#### 4. Goals
+{
 
 - Clear project objectives
 - Measurable outcomes
 - Success criteria
 - Key performance indicators (KPIs)
+  }
 
-#### 5. Features and Requirements
+## Features and Requirements
+
+{
 
 - Functional requirements
 - Non-functional requirements
 - User experience requirements
 - Integration requirements
 - Compliance requirements
+  }
 
-#### 6. Epic Structure
+## Epic List
 
-- At least one Epic must be defined
-- Format: Epic-{N}: {Title} ({Status})
-  - Status can be: Current, Future, Complete
-- Only one Epic can be "Current" at a time
-- Each Epic represents a major feature or functionality
-- Epics must be implemented sequentially
+### Epic-1: Current PRD Epic (for example backend epic)
 
-#### 7. Story List
+### Epic-2: Second Current PRD Epic (for example front end epic)
 
-- Stories are organized under Epics
-- Format: Story-{N}: {Description of story/task}
-  <note>The details of the story will be drafted later in story files</note>
+### Epic-N: Future Epic Enhancements (Beyond Scope of current PRD)
 
-#### 8. Tech Stack
+## Epic 1: Story List
 
-- languages
-- frameworks
-- note: this will be further defined in more detail in the arch document>
+<example>
+- Story 1: NestJS Configuration
+  Status: {''|'InProgress'|'Complete'}
+  Requirements:
+  - Install NestJS CLI Globally
+  - Create a new NestJS project with the nestJS cli generator
 
-#### 9. Future Enhancements
+- Story 2: Hacker News Retrieval API Route
+  Status: {''|'InProgress'|'Complete'}
+  Requirements:
+  - Create API Route that returns a list of Hacker News TopPosts, Scrapped Article from the top posts, and a list of comments from the top posts
+  - Route post body specifies the number of posts, articles, and comments to return
+  - Create a command in package.json that I can use to call the API Route (route configured in env.local)
+    </example>
 
-- Potential Epics for future consideration
-- Ideas collected during Epic progression
-- Prioritization guidelines
-- Impact assessment
+## Technology Stack
 
-## Examples
+{ Table listing choices for languages, libraries, infra, etc...}
 
-<example type="valid">
-# Product Requirements Document (PRD) for Imperial Defense Platform v2
-
-## Status: Draft
-
-## Introduction
-
-The Imperial Defense Platform v2 (IDP2) is a state-of-the-art battle station designed to maintain peace and order throughout the galaxy. This project encompasses the development of a fully operational space station with unprecedented defensive capabilities. The platform will serve as both a military installation and a symbol of Imperial might.
-
-## Goals
-
-- Achieve 200% increase in planetary defense coverage compared to v1
-- Reduce response time to rebel incursions by 75%
-- Implement automated defense systems with 99.99% accuracy
-- Establish capacity for housing 1.2 million Imperial personnel
-- Achieve energy self-sufficiency through advanced reactor technology
-
-## Features and Requirements
-
-### Functional Requirements
-
-- Automated defense grid with predictive targeting
-- Quantum-encrypted communication systems
-- Advanced life support systems for 1.2M personnel
-- Modular construction system for rapid repairs
-- AI-powered threat detection and response
-
-### Non-functional Requirements
-
-- 99.999% system uptime
-- Sub-millisecond weapon response time
-- Zero-latency internal communications
-- Radiation shielding for all habitable areas
-- Energy efficiency rating of 95%
-
-## Epic Structure
-
-Epic-1: Core Infrastructure Development (Complete)
-Epic-2: Defense Systems Integration (Current)
-Epic-3: Life Support and Personnel Systems (Future)
-Epic-4: Command and Control Implementation (Future)
-
-## Story List
-
-### Epic-2: Defense Systems Integration
-
-Story-1: Implement primary weapon targeting system
-Story-2: Develop shield generator network
-Story-3: Create automated defense grid control interface
-Story-4: Integration of threat detection AI
-Story-5: Deploy backup power distribution for weapons
-
-## Tech Stack
-
-- Languages: Galactic Basic C++23, QuantumScript
-- Frameworks: ImperialCore, DefenseGrid Pro
-- Infrastructure: HyperScale Cloud, QuantumNet
-- Security: Imperial Grade Encryption (IGE) v4
-
-## Future Enhancements
-
-- Planet-scale tractor beam capability
-- Advanced cloaking technology integration
-- Expanded hangar facilities for TIE defender squadrons
-- Redundant shield generator systems
-- Deep space hyperspace tracking system
+  <example>
+  | Technology | Description |
+  | ------------ | ------------------------------------------------------------- |
+  | Kubernetes | Container orchestration platform for microservices deployment |
+  | Apache Kafka | Event streaming platform for real-time data ingestion |
+  | TimescaleDB | Time-series database for sensor data storage |
+  | Go | Primary language for data processing services |
+  | GoRilla Mux | REST API Framework |
+  | Python | Used for data analysis and ML services |
   </example>
 
-<example type="invalid">
-Chess Game
-- Add basic game
-- Maybe add AI later
-- Other features we might need
+## Reference
+
+{ Mermaid Diagrams for models tables, visual aids as needed, citations and external urls }
+
+## Data Models, API Specs, Schemas, etc...
+
+{ As needed - may not be exhaustive - but key ideas that need to be retained and followed into the architecture and stories }
+
+<example>
+### Sensor Reading Schema
+
+```json
+{
+  "sensor_id": "string",
+  "timestamp": "datetime",
+  "readings": {
+    "temperature": "float",
+    "pressure": "float",
+    "humidity": "float"
+  },
+  "metadata": {
+    "location": "string",
+    "calibration_date": "datetime"
+  }
+}
+```
+
+</example>
+
+## Project Structure
+
+{ Diagram the folder and file organization structure along with descriptions }
+
+<example>
+
+````
+// Start of Selection
+```text
+src/
+├── services/
+│   ├── gateway/        # Sensor data ingestion
+│   ├── processor/      # Data processing and validation
+│   ├── analytics/      # Data analysis and ML
+│   └── notifier/       # Alert and notification system
+├── deploy/
+│   ├── kubernetes/     # K8s manifests
+│   └── terraform/      # Infrastructure as Code
+└── docs/
+    ├── api/           # API documentation
+    └── schemas/       # Data schemas
+````
+
+</example>
+
+## Change Log
+
+{ Markdown table of key changes after document is no longer in draft and is updated, table includes the change title, the story id that the change happened during, and a description if the title is not clear enough }
+
+<example>
+| Change               | Story ID | Description                                                   |
+| -------------------- | -------- | ------------------------------------------------------------- |
+| Initial draft        | N/A      | Initial draft prd                                             |
+| Add ML Pipeline      | story-4  | Integration of machine learning prediction service story      |
+| Kafka Upgrade        | story-6  | Upgraded from Kafka 2.0 to Kafka 3.0 for improved performance |
 </example>
