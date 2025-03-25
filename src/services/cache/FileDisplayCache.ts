@@ -15,6 +15,7 @@ import { CacheCleanStrategy, ILoggerService, ITimerService } from '../interfaces
 import { ITitleExtractorPlugin } from '../../types';
 import { CacheStrategyFactory } from './strategies/CacheStrategyFactory';
 import { DependencyTracker } from '../../utils/DependencyTracker';
+import { EventBus } from '../../core/events/EventBus';
 
 /**
  * 文件显示缓存类
@@ -272,22 +273,31 @@ export class FileDisplayCache implements IFileDisplayCache {
     }
     
     /**
-     * 获取文件显示名称
+     * 获取显示名称
+     * @param path 文件路径
+     * @returns 显示名称，如果不存在则返回undefined
      */
     public getDisplayName(path: string): string | undefined {
         const item = this.cacheStorage.get(path);
+        
         if (item) {
-            // 检查缓存是否有效
-            if (this.isCacheValid(path)) {
-                this.metadataManager.updateAccessTime(path);
-                this.metadataManager.incrementAccessCount(path);
-                return item.displayName;
+            // 更新访问时间和计数
+            this.metadataManager.updateAccessTime(path);
+            this.metadataManager.incrementAccessCount(path);
+            
+            return item.displayName;
+        } else {
+            // 通过EventBus发布缓存未命中事件，而不是直接调用处理服务
+            // 尝试通过vault获取TFile对象
+            const file = this.plugin.app.vault.getAbstractFileByPath(path);
+            if (file instanceof TFile && EventBus.getInstance().hasSubscribers('cache:miss')) {
+                EventBus.getInstance().publish('cache:miss', file);
+                this.logger.debug(`文件 ${path} 的缓存未命中，已发布缓存未命中事件`);
             } else {
-                // 缓存过期，需要重新处理
-                return undefined;
+                this.logger.debug(`文件 ${path} 的缓存未命中，无法处理`);
             }
+            return undefined;
         }
-        return undefined;
     }
     
     /**

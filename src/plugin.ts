@@ -32,6 +32,7 @@ import { PerformanceMonitor } from './services/PerformanceMonitor';
 import { CacheManager } from './services/cache/CacheManager';
 import { ErrorHandler } from './services/ErrorHandler';
 import { DependencyTracker } from './utils/DependencyTracker';
+import { EventBus } from './core/events/EventBus';
 
 const logger = new LoggerService('Plugin');
 
@@ -477,39 +478,62 @@ export default class TitleExtractorPlugin extends Plugin {
      * 注册事件监听
      */
     private registerEvents(): void {
-        // 注册文件处理相关的事件监听
+        // 添加设置变更事件处理
+        this.registerEvent(
+            this.app.workspace.on('file-menu', (menu, file) => {
+                if (file instanceof TFile && file.extension === 'md') {
+                    menu.addItem((item) => {
+                        item
+                            .setTitle('刷新显示标题')
+                            .setIcon('refresh-cw')
+                            .onClick(async () => {
+                                await this.fileProcessorService.processFile(file);
+                                if (this.fileExplorerDisplayService) {
+                                    await this.fileExplorerDisplayService.updateFileExplorerDisplay(file);
+                                }
+                            });
+                    });
+                }
+            })
+        );
+        
+        // 注册文件事件
         this.registerFileEvents();
         
-        // 性能监控阈值更新事件
-        window.addEventListener('filename-display:update-performance-threshold', ((event: CustomEvent) => {
+        // 使用EventBus注册缓存未命中事件处理
+        const eventBus = EventBus.getInstance();
+        eventBus.subscribe('cache:miss', async (file: TFile) => {
+            this.loggerService.debug(`响应 cache:miss 事件：处理文件 ${file.path}`);
             try {
-                const threshold = event.detail?.threshold;
-                if (typeof threshold === 'number') {
-                    const performanceMonitor = this.serviceContainer.get<IPerformanceMonitor>('performanceMonitor');
-                    performanceMonitor.enable(threshold);
-                    logger.info(`已更新性能监控阈值: ${threshold}ms`);
+                // 因为processFile可能返回Promise<FileDisplayResult>或直接返回FileDisplayResult
+                // 使用await确保无论返回类型是什么都能正确处理
+                const result = await Promise.resolve(this.fileProcessorService.processFile(file));
+                if (result && result.success && this.fileExplorerDisplayService) {
+                    await this.fileExplorerDisplayService.updateFileExplorerDisplay(file);
                 }
-            } catch (error) {
-                logger.error('更新性能监控阈值失败:', error);
+            } catch (error: unknown) {
+                this.loggerService.error(`处理文件 ${file.path} 时出错:`, error);
             }
-        }) as EventListener);
+        });
         
-        // 缓存清理策略更新事件
-        window.addEventListener('filename-display:update-cache-strategy', ((event: CustomEvent) => {
-            try {
-                const strategy = event.detail?.strategy;
-                if (typeof strategy === 'number') {
-                    const fileDisplayCache = this.serviceContainer.get<IFileDisplayCache>('fileDisplayCache');
-                    fileDisplayCache.setCacheCleanStrategy(strategy);
-                    logger.info(`已更新缓存清理策略: ${strategy}`);
-                    
-                    // 触发一次手动清理，应用新策略
-                    fileDisplayCache.triggerCleanup();
-                }
-            } catch (error) {
-                logger.error('更新缓存清理策略失败:', error);
-            }
-        }) as EventListener);
+        // 添加命令: 重新处理所有文件
+        this.addCommand({
+            id: 'refresh-all-files',
+            name: '重新处理所有文件',
+            callback: () => {
+                this.updateAllFilesDisplay();
+            },
+        });
+        
+        // 添加命令: 清除缓存
+        this.addCommand({
+            id: 'clear-display-cache',
+            name: '清除文件显示缓存',
+            callback: () => {
+                this.fileDisplayCache.clearAll();
+                new Notice('已清除文件显示缓存');
+            },
+        });
     }
     
     /**
