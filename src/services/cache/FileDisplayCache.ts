@@ -30,16 +30,39 @@ export class FileDisplayCache implements IFileDisplayCache {
     private cacheCleanStrategy: CacheCleanStrategy = CacheCleanStrategy.LRU;
     private cacheWarmedUp: boolean = false;
     
+    // 依赖组件
+    private cacheStorage: ICacheStorage<string, FileCacheItem>;
+    private elementAssociator: IElementAssociator;
+    private metadataManager: ICacheMetadataManager;
+    private persistenceManager: IPersistenceManager<CacheData>;
+    private cacheWarmer: ICacheWarmer;
+    private plugin: ITitleExtractorPlugin;
+    private logger: ILoggerService;
+    private timerService: ITimerService;
+    
+    /**
+     * 构造函数
+     */
     constructor(
-        private readonly cacheStorage: ICacheStorage<string, FileCacheItem>,
-        private readonly elementAssociator: IElementAssociator,
-        private readonly metadataManager: ICacheMetadataManager,
-        private readonly persistenceManager: IPersistenceManager<CacheData>,
-        private readonly cacheWarmer: ICacheWarmer,
-        private readonly plugin: ITitleExtractorPlugin,
-        private readonly logger: ILoggerService,
-        private readonly timerService: ITimerService
+        plugin: ITitleExtractorPlugin,
+        cacheStorage: ICacheStorage<string, FileCacheItem>,
+        elementAssociator: IElementAssociator,
+        metadataManager: ICacheMetadataManager,
+        persistenceManager: IPersistenceManager<CacheData>,
+        cacheWarmer: ICacheWarmer,
+        loggerService: ILoggerService,
+        timerService: ITimerService
     ) {
+        // 初始化属性
+        this.plugin = plugin;
+        this.cacheStorage = cacheStorage;
+        this.elementAssociator = elementAssociator;
+        this.metadataManager = metadataManager;
+        this.persistenceManager = persistenceManager;
+        this.cacheWarmer = cacheWarmer;
+        this.logger = loggerService.getLogger('FileDisplayCache');
+        this.timerService = timerService;
+        
         // 添加依赖跟踪
         DependencyTracker.addDependency('FileDisplayCache', 'ICacheStorage');
         DependencyTracker.addDependency('FileDisplayCache', 'IElementAssociator');
@@ -50,7 +73,15 @@ export class FileDisplayCache implements IFileDisplayCache {
         DependencyTracker.addDependency('FileDisplayCache', 'ILoggerService');
         DependencyTracker.addDependency('FileDisplayCache', 'ITimerService');
         
-        // 初始化
+        // 初始化操作
+        this.initializeCache();
+    }
+    
+    /**
+     * 初始化缓存
+     */
+    private initializeCache(): void {
+        // 从持久化存储加载缓存数据
         this.loadCacheFromData().catch(err => {
             this.logger.error('加载缓存数据失败:', err);
         });

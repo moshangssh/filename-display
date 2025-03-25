@@ -167,6 +167,7 @@ export interface IFileExplorerDisplayService {
 // 文件处理服务接口
 export interface IFileProcessorService {
     processFile(file: TFile): Promise<FileDisplayResult | undefined> | FileDisplayResult;
+    processFileWrapper(file: TFile): Promise<FileDisplayResult>;
     updateAllFilesDisplay(clearCache?: boolean): void;
     separateFilesByVisibility(files: TFile[]): { visibleFiles: TFile[], otherFiles: TFile[] };
     addToProcessQueue(files: TFile[], highPriority?: boolean): void;

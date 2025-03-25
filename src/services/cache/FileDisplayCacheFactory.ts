@@ -8,6 +8,7 @@ import { ObsidianPersistenceManager } from './persistence/ObsidianPersistenceMan
 import { ProgressiveCacheWarmer } from './warmer/ProgressiveCacheWarmer';
 import { IFileDisplayCache, FileCacheItem, CacheData, IPersistenceManager } from './interfaces';
 import { ServiceContainer } from '../../core/ServiceContainer';
+import { DependencyResolver } from '../../core/DependencyResolver';
 
 /**
  * 文件显示缓存工厂类
@@ -39,29 +40,31 @@ export class FileDisplayCacheFactory {
         
         // 创建持久化管理器
         const persistenceManager: IPersistenceManager<CacheData> = new ObsidianPersistenceManager(
-            plugin, 
+            plugin,
             loggerService
         );
         
-        // 创建缓存预热器 - 不直接传入处理服务，而是通过服务容器延迟获取
+        // 创建缓存预热器
         const cacheWarmer = new ProgressiveCacheWarmer(
-            plugin,
-            loggerService,
+            plugin, 
+            loggerService, 
             timerService
-            // 移除传入的 fileProcessorService 参数，改为通过服务容器获取
+            // 不再传递fileProcessorService，以避免循环依赖
         );
         
-        // 创建文件显示缓存
-        return new FileDisplayCache(
+        // 创建并返回文件显示缓存
+        const fileDisplayCache = new FileDisplayCache(
+            plugin,
             cacheStorage,
             elementAssociator,
             metadataManager,
             persistenceManager,
             cacheWarmer,
-            plugin,
             loggerService,
             timerService
         );
+        
+        return fileDisplayCache;
     }
     
     /**
@@ -78,7 +81,42 @@ export class FileDisplayCacheFactory {
             return container.get<IFileDisplayCache>('fileDisplayCache');
         }
         
-        // 获取必要的依赖服务
+        // 使用依赖解析器
+        const resolver = new DependencyResolver();
+        
+        // 定义依赖项
+        const dependencies = ['loggerService', 'timerService'];
+        
+        // 等待依赖项就绪后创建缓存
+        resolver.whenReady(dependencies, (loggerService, timerService) => {
+            if (!loggerService || !timerService) {
+                throw new Error('创建FileDisplayCache失败: 缺少必要的依赖服务');
+            }
+            
+            // 创建缓存并注册到容器
+            const cache = this.createFileDisplayCache(plugin, loggerService, timerService);
+            container.register('fileDisplayCache', cache);
+            
+            return cache;
+        });
+        
+        // 注册缓存的参数化工厂函数
+        container.registerParameterizedFactory('createFileDisplayCache', 
+            (pluginInstance, logger, timer) => {
+                return this.createFileDisplayCache(
+                    pluginInstance,
+                    logger,
+                    timer
+                );
+            }
+        );
+        
+        // 如果此时缓存已创建，返回它
+        if (container.has('fileDisplayCache')) {
+            return container.get<IFileDisplayCache>('fileDisplayCache');
+        }
+        
+        // 否则强制创建并注册
         const loggerService = container.has('loggerService') 
             ? container.get<ILoggerService>('loggerService')
             : undefined;

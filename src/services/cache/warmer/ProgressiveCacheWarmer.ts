@@ -2,6 +2,9 @@ import { ICacheWarmer } from '../interfaces';
 import { ILoggerService, ITimerService, IFileProcessorService } from '../../interfaces/IServices';
 import { TFile, MarkdownView } from 'obsidian';
 import { ServiceContainer } from '../../../core/ServiceContainer';
+import { DependencyResolver } from '../../../core/DependencyResolver';
+import { DependencyTracker } from '../../../utils/DependencyTracker';
+import { ITitleExtractorPlugin } from '../../../types';
 
 /**
  * 渐进式缓存预热器
@@ -12,6 +15,8 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
     private isWarmupCancelled: boolean = false;
     private warmupPromise: Promise<void> | null = null;
     private warmupTaskId: string = '';
+    private fileProcessorService: IFileProcessorService | null = null;
+    private resolver: DependencyResolver;
     
     /**
      * 构造函数
@@ -21,11 +26,34 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
      * @param fileProcessorService 文件处理服务（可选）
      */
     constructor(
-        private plugin: any,
+        private plugin: ITitleExtractorPlugin,
         private logger: ILoggerService,
         private timerService: ITimerService,
-        private fileProcessorService?: IFileProcessorService
-    ) {}
+        fileProcessorService?: IFileProcessorService
+    ) {
+        if (fileProcessorService) {
+            this.fileProcessorService = fileProcessorService;
+        }
+        
+        // 添加依赖跟踪
+        DependencyTracker.addDependency('ProgressiveCacheWarmer', 'ITitleExtractorPlugin');
+        DependencyTracker.addDependency('ProgressiveCacheWarmer', 'ILoggerService');
+        DependencyTracker.addDependency('ProgressiveCacheWarmer', 'ITimerService');
+        if (fileProcessorService) {
+            DependencyTracker.addDependency('ProgressiveCacheWarmer', 'IFileProcessorService');
+        }
+        
+        // 初始化依赖解析器
+        this.resolver = new DependencyResolver();
+        
+        // 设置依赖就绪回调
+        if (!fileProcessorService) {
+            this.resolver.whenReady(['fileProcessorService'], (service) => {
+                this.fileProcessorService = service;
+                this.logger.debug('ProgressiveCacheWarmer: 通过依赖解析器获取到文件处理服务');
+            });
+        }
+    }
     
     /**
      * 从服务容器获取文件处理服务
@@ -41,7 +69,10 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
         try {
             const container = ServiceContainer.getInstance();
             if (container.has('fileProcessorService')) {
-                return container.get<IFileProcessorService>('fileProcessorService');
+                // 获取服务并缓存引用以提高后续性能
+                const service = container.get<IFileProcessorService>('fileProcessorService');
+                this.fileProcessorService = service;
+                return service;
             }
         } catch (error) {
             this.logger.error('从服务容器获取fileProcessorService失败:', error);
@@ -334,13 +365,13 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
     
     /**
      * 分离可见文件和其他文件
-     * 优先使用从服务容器获取的处理服务
+     * 使用延迟获取的处理服务
      */
     private separateFilesByVisibility(files: TFile[]): { visibleFiles: TFile[], otherFiles: TFile[] } {
         // 尝试从服务容器获取处理服务
         const processorService = this.getFileProcessorService();
         
-        if (processorService) {
+        if (processorService && typeof processorService.separateFilesByVisibility === 'function') {
             // 如果获取到处理服务，使用其方法
             try {
                 return processorService.separateFilesByVisibility(files);
@@ -351,86 +382,49 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
         }
         
         // 如果没有处理服务或处理服务调用失败，使用内部实现
-        try {
-            // 获取当前所有可见的文件
-            const visibleFiles = new Set<string>();
-            
-            // 添加当前活动编辑器中的文件
-            const activeFile = this.plugin?.app?.workspace?.getActiveViewOfType(MarkdownView)?.file;
-            if (activeFile) {
-                visibleFiles.add(activeFile.path);
+        const visibleFiles: TFile[] = [];
+        const otherFiles: TFile[] = [];
+        
+        for (const file of files) {
+            // 简单实现：根据是否有父目录判断是否可能可见
+            // 这是一个粗略的判断，实际上应该由FileProcessorService处理
+            const parent = file.parent;
+            if (parent && !parent.path.startsWith('.')) {
+                visibleFiles.push(file);
+            } else {
+                otherFiles.push(file);
             }
-            
-            // 添加所有当前打开的标签页中的文件
-            try {
-                if (this.plugin?.app?.workspace?.iterateAllLeaves) {
-                    this.plugin.app.workspace.iterateAllLeaves((leaf: any) => {
-                        const fileFromView = leaf.view?.file;
-                        if (fileFromView) {
-                            visibleFiles.add(fileFromView.path);
-                        }
-                    });
-                }
-            } catch (e) {
-                this.logger.error('迭代标签页失败:', e);
-            }
-            
-            // 分离文件
-            const visible: TFile[] = [];
-            const others: TFile[] = [];
-            
-            for (const file of files) {
-                if (visibleFiles.has(file.path)) {
-                    visible.push(file);
-                } else {
-                    others.push(file);
-                }
-            }
-            
-            return { visibleFiles: visible, otherFiles: others };
-        } catch (error) {
-            this.logger.error('分离可见文件失败:', error);
-            // 出错时返回默认值
-            return { visibleFiles: [], otherFiles: files };
         }
+        
+        return { visibleFiles, otherFiles };
     }
     
     /**
-     * 处理一批文件
-     * 优先使用从服务容器获取的处理服务
+     * 处理文件批次
+     * 使用依赖解析获取的处理服务
      */
     private async processFilesBatch(files: TFile[]): Promise<void> {
-        // 尝试从服务容器获取处理服务
+        // 获取处理服务
         const processorService = this.getFileProcessorService();
-        
-        if (processorService && typeof processorService.processFile === 'function') {
-            try {
-                // 使用处理服务处理文件
-                await Promise.all(
-                    files.map(file => processorService.processFile(file))
-                );
-                return;
-            } catch (error) {
-                this.logger.error('使用处理服务批量处理文件失败:', error);
-                // 出错时继续执行内部方法
-            }
+        if (!processorService) {
+            this.logger.warn('无法处理文件：缺少文件处理服务');
+            return;
         }
         
-        // 内部处理方法（备用）
-        try {
-            // 简单处理：读取文件前置元数据并尝试获取标题
-            for (const file of files) {
-                try {
-                    const metadata = this.plugin?.app?.metadataCache?.getFileCache(file);
-                    const title = metadata?.frontmatter?.title || file.basename;
-                    // 在实际应用中，这里会将处理结果存储到缓存中
-                    this.logger.debug(`处理文件 ${file.path}, 标题: ${title}`);
-                } catch (e) {
-                    this.logger.error(`处理文件 ${file.path} 失败:`, e);
+        // 使用处理服务处理文件
+        for (const file of files) {
+            try {
+                // 异步处理文件，使用正确的方法
+                if (typeof processorService.processFileWrapper === 'function') {
+                    await processorService.processFileWrapper(file);
+                } else if (typeof processorService.processFile === 'function') {
+                    await Promise.resolve(processorService.processFile(file));
+                } else {
+                    this.logger.warn(`处理服务缺少processFile或processFileWrapper方法`);
                 }
+            } catch (error) {
+                this.logger.error(`处理文件 ${file.path} 失败:`, error);
             }
-        } catch (error) {
-            this.logger.error('批量处理文件失败:', error);
         }
     }
     

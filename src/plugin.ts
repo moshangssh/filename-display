@@ -33,6 +33,7 @@ import { CacheManager } from './services/cache/CacheManager';
 import { ErrorHandler } from './services/ErrorHandler';
 import { DependencyTracker } from './utils/DependencyTracker';
 import { EventBus } from './core/events/EventBus';
+import { DependencyResolver } from './core/DependencyResolver';
 
 const logger = new LoggerService('Plugin');
 
@@ -100,10 +101,7 @@ export default class TitleExtractorPlugin extends Plugin {
             // 注册事件监听
             this.registerEvents();
             
-            // 记录依赖关系
-            DependencyTracker.logDependencies();
-            
-            // 在插件初始化后更新服务之间的依赖关系
+            // 在插件完全初始化后更新服务之间的依赖关系
             this.updateServiceDependencies();
             
             logger.log('插件加载完成');
@@ -132,6 +130,9 @@ export default class TitleExtractorPlugin extends Plugin {
         // 初始化服务容器
         this.serviceContainer.clear(); // 清空容器，防止多次初始化
         
+        // 创建依赖解析器
+        const resolver = new DependencyResolver();
+        
         // 初始化基础服务
         this.loggerService = new LoggerService();
         this.timerService = new TimerService(this);
@@ -153,55 +154,91 @@ export default class TitleExtractorPlugin extends Plugin {
         this.serviceContainer.register('errorHandler', errorHandler);
         this.serviceContainer.register('cacheManager', cacheManager);
         
+        // 使用参数化工厂注册服务
+        this.serviceContainer.registerParameterizedFactory('createLogger', (name: string) => {
+            return this.loggerService.getLogger(name);
+        });
+        
         // 初始化文件名解析器
         this.filenameParser = new FilenameParser(this, this.loggerService);
         this.serviceContainer.register('filenameParser', this.filenameParser);
         
-        // 创建文件更新函数
-        const updateFileFn = async (file: TFile) => {
-            return this.fileExplorerDisplayService?.updateFileExplorerDisplay(file);
-        };
-        
-        // 初始化文件处理服务 - 不传递缓存服务
-        this.fileProcessorService = new FileProcessorService(
-            this,
-            this.filenameParser,
-            undefined, // 暂时不传入缓存
-            this.loggerService,
-            this.timerService,
-            performanceMonitor,
-            errorHandler
+        // 使用依赖解析器注册带依赖的文件处理服务
+        resolver.registerWithDependencies(
+            'fileProcessorService',
+            ['plugin', 'filenameParser', 'loggerService', 'timerService', 'performanceMonitor', 'errorHandler'],
+            (plugin, filenameParser, loggerService, timerService, perfMonitor, errHandler) => {
+                // 创建文件处理服务，不直接传入缓存服务
+                this.fileProcessorService = new FileProcessorService(
+                    plugin,
+                    filenameParser,
+                    undefined, // 暂时不传入缓存
+                    loggerService,
+                    timerService,
+                    perfMonitor,
+                    errHandler
+                );
+                return this.fileProcessorService;
+            }
         );
         
-        // 注册文件处理服务工厂函数 - 用于延迟解析
-        this.serviceContainer.registerFactory('fileProcessorService', () => {
-            return this.fileProcessorService;
-        });
-        
-        // 使用工厂方法初始化文件显示缓存 - 不传入处理服务（避免循环依赖）
-        this.fileDisplayCache = FileDisplayCacheFactory.createFileDisplayCache(
-            this,
-            this.loggerService,
-            this.timerService
-            // 不传入 fileProcessorService，避免循环依赖
+        // 使用依赖解析器注册文件显示缓存服务
+        resolver.registerWithDependencies(
+            'fileDisplayCache', 
+            ['plugin', 'loggerService', 'timerService'],
+            (plugin, loggerService, timerService) => {
+                // 创建文件显示缓存，不传入处理服务
+                this.fileDisplayCache = FileDisplayCacheFactory.createFileDisplayCache(
+                    plugin,
+                    loggerService,
+                    timerService
+                );
+                return this.fileDisplayCache;
+            }
         );
         
-        // 注册缓存服务工厂函数 - 用于延迟解析
-        this.serviceContainer.registerFactory('fileDisplayCache', () => {
-            return this.fileDisplayCache;
-        });
-        
-        // 设置文件处理服务的更新函数
-        this.fileProcessorService.setUpdateFileDisplayFn(updateFileFn);
+        // 等待关键服务初始化完成后设置依赖关系
+        resolver.whenReady(
+            ['fileProcessorService', 'fileDisplayCache'], 
+            (processorService, displayCache) => {
+                // 创建文件更新函数
+                const updateFileFn = async (file: TFile) => {
+                    return this.fileExplorerDisplayService?.updateFileExplorerDisplay(file);
+                };
+                
+                // 设置文件处理服务的更新函数
+                processorService.setUpdateFileDisplayFn(updateFileFn);
+                
+                // 注册事件监听
+                const eventBus = EventBus.getInstance();
+                eventBus.subscribe('cache:miss', async (file: TFile) => {
+                    this.loggerService.debug(`响应 cache:miss 事件：处理文件 ${file.path}`);
+                    try {
+                        // 使用 processFileWrapper 异步处理文件
+                        const result = await processorService.processFileWrapper(file);
+                        if (result && result.success && this.fileExplorerDisplayService) {
+                            await this.fileExplorerDisplayService.updateFileExplorerDisplay(file);
+                        }
+                    } catch (error: unknown) {
+                        this.loggerService.error(`处理文件 ${file.path} 时出错:`, error);
+                    }
+                });
+            }
+        );
         
         // 注册通用文件处理工具
-        const fileProcessor = new FileProcessor(
-            this,
-            this.filenameParser,
-            this.fileDisplayCache,
-            this.loggerService
+        resolver.registerWithDependencies(
+            'fileProcessor',
+            ['plugin', 'filenameParser', 'fileDisplayCache', 'loggerService'],
+            (plugin, filenameParser, fileDisplayCache, loggerService) => {
+                return new FileProcessor(
+                    plugin,
+                    filenameParser,
+                    fileDisplayCache,
+                    loggerService
+                );
+            }
         );
-        this.serviceContainer.register('fileProcessor', fileProcessor);
         
         // 初始化事件管理服务
         this.eventManager = new EventManagerService(this, this.loggerService);
@@ -211,18 +248,17 @@ export default class TitleExtractorPlugin extends Plugin {
         
         // 初始化链接状态管理器
         this.linkStateManager = new LinkStateManager(this);
-        // 注册链接状态管理器到容器
         this.serviceContainer.register('linkStateManager', this.linkStateManager);
         
         // 初始化扩展缓存服务
         this.extensionCacheService = new ExtensionCacheService(this);
         this.serviceContainer.register('extensionCacheService', this.extensionCacheService);
         
-        // 初始化文件浏览器显示服务
+        // 使用静态工厂方法创建文件浏览器显示服务
         this.fileExplorerDisplayService = FileExplorerDisplayService.create(this);
         this.serviceContainer.register('fileExplorerDisplayService', this.fileExplorerDisplayService);
         
-        // 初始化Markdown链接服务
+        // 使用静态工厂方法创建Markdown链接服务
         this.markdownLinkService = MarkdownLinkService.create(this);
         this.serviceContainer.register('markdownLinkService', this.markdownLinkService);
         
@@ -232,9 +268,12 @@ export default class TitleExtractorPlugin extends Plugin {
             this.serviceContainer.register('editorLinkDecorator', this.editorLinkDecorator);
         }
         
-        // 初始化文件显示服务
+        // 使用静态工厂方法创建文件显示服务
         this.fileDisplayService = FileDisplayService.create(this);
         this.serviceContainer.register('fileDisplayService', this.fileDisplayService);
+        
+        // 记录依赖关系图
+        DependencyTracker.logDependencies();
     }
 
     onunload() {
@@ -507,45 +546,36 @@ export default class TitleExtractorPlugin extends Plugin {
     }
 
     /**
-     * 注册事件监听
+     * 注册事件
      */
     private registerEvents(): void {
-        // 添加设置变更事件处理
+        // 注册布局事件
         this.registerEvent(
-            this.app.workspace.on('file-menu', (menu, file) => {
-                if (file instanceof TFile && file.extension === 'md') {
-                    menu.addItem((item) => {
-                        item
-                            .setTitle('刷新显示标题')
-                            .setIcon('refresh-cw')
-                            .onClick(async () => {
-                                await this.fileProcessorService.processFile(file);
-                                if (this.fileExplorerDisplayService) {
-                                    await this.fileExplorerDisplayService.updateFileExplorerDisplay(file);
-                                }
-                            });
-                    });
+            this.app.workspace.on('layout-change', () => {
+                // 当布局变化时，处理相关更新
+                if (this.fileExplorerDisplayService) {
+                    this.app.workspace.trigger('file-explorer-style-change');
+                }
+            })
+        );
+        
+        // 注册活动页面变更事件
+        this.registerEvent(
+            this.app.workspace.on('active-leaf-change', async (leaf) => {
+                if (!leaf) return;
+                if (leaf.view instanceof MarkdownView) {
+                    const file = leaf.view.file;
+                    if (file) {
+                        // 处理活动文件变更
+                        // 使用处理服务来确保文件显示正确
+                        this.fileProcessorService.processFile(file);
+                    }
                 }
             })
         );
         
         // 注册文件事件
         this.registerFileEvents();
-        
-        // 使用EventBus注册缓存未命中事件处理
-        const eventBus = EventBus.getInstance();
-        eventBus.subscribe('cache:miss', async (file: TFile) => {
-            this.loggerService.debug(`响应 cache:miss 事件：处理文件 ${file.path}`);
-            try {
-                // 使用 processFileWrapper 而不是 processFile
-                const result = await this.fileProcessorService.processFileWrapper(file);
-                if (result && result.success && this.fileExplorerDisplayService) {
-                    await this.fileExplorerDisplayService.updateFileExplorerDisplay(file);
-                }
-            } catch (error: unknown) {
-                this.loggerService.error(`处理文件 ${file.path} 时出错:`, error);
-            }
-        });
         
         // 添加命令: 重新处理所有文件
         this.addCommand({
@@ -853,37 +883,40 @@ export default class TitleExtractorPlugin extends Plugin {
     }
 
     /**
-     * 在插件初始化后更新服务之间的依赖关系
-     * 用于解决循环依赖问题
+     * 更新服务之间的依赖关系
+     * 在插件完全初始化后调用，用于处理动态依赖
      */
     private updateServiceDependencies(): void {
-        this.loggerService.debug('更新服务依赖关系...');
-        
         try {
-            // 在FileExplorerDisplayService初始化后，更新文件处理服务的更新函数
-            if (this.fileExplorerDisplayService) {
-                const updateFileFn = async (file: TFile) => {
-                    return this.fileExplorerDisplayService?.updateFileExplorerDisplay(file);
-                };
-                this.fileProcessorService.setUpdateFileDisplayFn(updateFileFn);
+            this.loggerService.debug('更新服务依赖关系...');
+            
+            // 创建依赖解析器
+            const resolver = new DependencyResolver();
+            
+            // 等待关键服务解析完成后处理回调
+            resolver.whenReady(
+                ['fileProcessorService', 'fileDisplayCache', 'fileExplorerDisplayService'], 
+                (processorService, displayCache, displayService) => {
+                    // 设置或更新服务回调函数
+                    if (processorService && displayService) {
+                        const updateFileFn = async (file: TFile) => {
+                            return displayService.updateFileExplorerDisplay(file);
+                        };
+                        processorService.setUpdateFileDisplayFn(updateFileFn);
+                        this.loggerService.debug('已更新FileProcessorService的文件更新回调');
+                    }
+                }
+            );
+            
+            // 确保事件管理服务正确运行
+            if (this.eventManager) {
+                // 重新设置事件监听器
+                this.eventManager.setupVaultEventListeners();
+                this.eventManager.setupMetadataEventListeners();
+                this.loggerService.debug('已重新设置事件监听器');
             }
             
-            // 注册EventBus事件处理
-            const eventBus = EventBus.getInstance();
-            eventBus.subscribe('cache:miss', async (file: TFile) => {
-                this.loggerService.debug(`响应 cache:miss 事件：处理文件 ${file.path}`);
-                try {
-                    // 使用 processFileWrapper 而不是 processFile
-                    const result = await this.fileProcessorService.processFileWrapper(file);
-                    if (result && result.success && this.fileExplorerDisplayService) {
-                        await this.fileExplorerDisplayService.updateFileExplorerDisplay(file);
-                    }
-                } catch (error: unknown) {
-                    this.loggerService.error(`处理文件 ${file.path} 时出错:`, error);
-                }
-            });
-            
-            // 记录依赖关系图，用于调试和监控
+            // 记录服务依赖状态
             DependencyTracker.logDependencies();
         } catch (error) {
             this.loggerService.error('更新服务依赖关系时出错:', error);
