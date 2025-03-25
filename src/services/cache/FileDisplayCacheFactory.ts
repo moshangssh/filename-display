@@ -1,5 +1,5 @@
 import { ITitleExtractorPlugin } from '../../types';
-import { ILoggerService, ITimerService } from '../interfaces/IServices';
+import { ILoggerService, ITimerService, IFileProcessorService } from '../interfaces/IServices';
 import { FileDisplayCache } from './FileDisplayCache';
 import { FileCacheStorage } from './storage/FileCacheStorage';
 import { WeakMapElementAssociator } from './associator/WeakMapElementAssociator';
@@ -7,7 +7,6 @@ import { CacheMetadataManager } from './metadata/CacheMetadataManager';
 import { ObsidianPersistenceManager } from './persistence/ObsidianPersistenceManager';
 import { ProgressiveCacheWarmer } from './warmer/ProgressiveCacheWarmer';
 import { IFileDisplayCache, FileCacheItem, CacheData, IPersistenceManager } from './interfaces';
-import { FileProcessorService } from '../FileProcessorService';
 
 /**
  * 文件显示缓存工厂类
@@ -26,7 +25,7 @@ export class FileDisplayCacheFactory {
         plugin: ITitleExtractorPlugin,
         loggerService: ILoggerService,
         timerService: ITimerService,
-        fileProcessorService?: FileProcessorService
+        fileProcessorService?: IFileProcessorService
     ): IFileDisplayCache {
         // 创建缓存存储
         const cacheStorage = new FileCacheStorage();

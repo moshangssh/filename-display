@@ -1,7 +1,6 @@
 import { ICacheWarmer } from '../interfaces';
-import { ILoggerService, ITimerService } from '../../interfaces/IServices';
+import { ILoggerService, ITimerService, IFileProcessorService } from '../../interfaces/IServices';
 import { TFile, MarkdownView } from 'obsidian';
-import { FileProcessorService } from '../../FileProcessorService';
 
 /**
  * 渐进式缓存预热器
@@ -24,7 +23,7 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
         private plugin: any,
         private logger: ILoggerService,
         private timerService: ITimerService,
-        private fileProcessorService?: FileProcessorService
+        private fileProcessorService?: IFileProcessorService
     ) {}
     
     /**

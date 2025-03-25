@@ -42,7 +42,7 @@ export class FileProcessorService extends BaseFileProcessor implements IFileProc
         // 添加依赖跟踪
         DependencyTracker.addDependency('FileProcessorService', 'FilenameParser');
         if (fileDisplayCache) {
-            DependencyTracker.addDependency('FileProcessorService', 'FileDisplayCache');
+            DependencyTracker.addDependency('FileProcessorService', 'IFileDisplayCache');
         }
         DependencyTracker.addDependency('FileProcessorService', 'ILoggerService');
         DependencyTracker.addDependency('FileProcessorService', 'ITimerService');
