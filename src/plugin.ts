@@ -103,6 +103,9 @@ export default class TitleExtractorPlugin extends Plugin {
             // 记录依赖关系
             DependencyTracker.logDependencies();
             
+            // 在插件初始化后更新服务之间的依赖关系
+            this.updateServiceDependencies();
+            
             logger.log('插件加载完成');
         } catch (error) {
             logger.error('插件加载时发生错误:', error);
@@ -170,7 +173,12 @@ export default class TitleExtractorPlugin extends Plugin {
             errorHandler
         );
         
-        // 初始化文件显示缓存 - 使用工厂模式创建，不传入处理服务（避免循环依赖）
+        // 注册文件处理服务工厂函数 - 用于延迟解析
+        this.serviceContainer.registerFactory('fileProcessorService', () => {
+            return this.fileProcessorService;
+        });
+        
+        // 使用工厂方法初始化文件显示缓存 - 不传入处理服务（避免循环依赖）
         this.fileDisplayCache = FileDisplayCacheFactory.createFileDisplayCache(
             this,
             this.loggerService,
@@ -178,17 +186,13 @@ export default class TitleExtractorPlugin extends Plugin {
             // 不传入 fileProcessorService，避免循环依赖
         );
         
-        // 设置文件处理服务的缓存依赖
-        this.fileProcessorService.setFileDisplayCache(this.fileDisplayCache);
+        // 注册缓存服务工厂函数 - 用于延迟解析
+        this.serviceContainer.registerFactory('fileDisplayCache', () => {
+            return this.fileDisplayCache;
+        });
         
         // 设置文件处理服务的更新函数
         this.fileProcessorService.setUpdateFileDisplayFn(updateFileFn);
-        
-        // 注册缓存服务
-        this.serviceContainer.register('fileDisplayCache', this.fileDisplayCache);
-        
-        // 注册文件处理服务
-        this.serviceContainer.register('fileProcessorService', this.fileProcessorService);
         
         // 注册通用文件处理工具
         const fileProcessor = new FileProcessor(
@@ -252,7 +256,30 @@ export default class TitleExtractorPlugin extends Plugin {
                 logger.error('取消缓存预热时出错:', e);
             }
             
-            // 清理所有活跃编辑器中的 CodeMirror 装饰
+            // 首先清理所有活跃编辑器中的 CodeMirror 字段
+            try {
+                // 在清理装饰之前，先安全地移除字段处理器
+                this.app.workspace.iterateAllLeaves(leaf => {
+                    if (leaf.view instanceof MarkdownView) {
+                        try {
+                            const editorView = getEditorView(leaf.view);
+                            if (editorView) {
+                                // 使用空的效果清理装饰，避免在卸载时尝试读取可能不存在的字段
+                                editorView.dispatch({
+                                    effects: removeLinkDecoration.of(null)
+                                });
+                            }
+                        } catch (e) {
+                            // 静默失败，继续卸载过程
+                            logger.debug(`清理编辑器视图失败: ${leaf.view.file?.path || 'unknown file'}`, e);
+                        }
+                    }
+                });
+            } catch (e) {
+                logger.error('清理编辑器视图时出错:', e);
+            }
+            
+            // 然后清理所有活跃编辑器中的 CodeMirror 装饰
             this.cleanupAllCodeMirrorDecorations();
             
             // 显式卸载编辑器扩展 - 使用Compartment进行清理
@@ -273,8 +300,16 @@ export default class TitleExtractorPlugin extends Plugin {
                 // 清空本地扩展集合
                 this.editorExtensions = [];
                 
-                // 更新编辑器选项，强制应用变更
-                this.app.workspace.updateOptions();
+                // 强制更新编辑器选项，确保应用变更
+                setTimeout(() => {
+                    try {
+                        // 延迟执行更新选项，确保在卸载过程中正确应用
+                        this.app.workspace.updateOptions();
+                    } catch (e) {
+                        // 忽略任何错误，不要中断卸载流程
+                    }
+                }, 0);
+                
                 logger.log('已清理所有编辑器扩展');
             } catch (e) {
                 logger.error('清理编辑器扩展时出错:', e);
@@ -630,10 +665,19 @@ export default class TitleExtractorPlugin extends Plugin {
                     if (editorView instanceof EditorView) {
                         // 发送清除所有装饰的效果
                         try {
-                            editorView.dispatch({
-                                effects: removeLinkDecoration.of(null)
-                            });
-                            logger.log(`已清理编辑器装饰: ${view.file?.path || 'unknown file'}`);
+                            // 使用安全的方法分发效果
+                            setTimeout(() => {
+                                try {
+                                    editorView.dispatch({
+                                        effects: removeLinkDecoration.of(null)
+                                    });
+                                } catch (innerError) {
+                                    // 静默失败，记录调试信息
+                                    logger.debug(`延迟清理装饰失败: ${view.file?.path || 'unknown file'}`, innerError);
+                                }
+                            }, 0);
+                            
+                            logger.log(`已安排清理编辑器装饰: ${view.file?.path || 'unknown file'}`);
                         } catch (e) {
                             logger.error(`清理编辑器装饰失败: ${view.file?.path || 'unknown file'}`, e);
                         }
@@ -806,5 +850,43 @@ export default class TitleExtractorPlugin extends Plugin {
      */
     private wait(ms: number): Promise<void> {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
+     * 在插件初始化后更新服务之间的依赖关系
+     * 用于解决循环依赖问题
+     */
+    private updateServiceDependencies(): void {
+        this.loggerService.debug('更新服务依赖关系...');
+        
+        try {
+            // 在FileExplorerDisplayService初始化后，更新文件处理服务的更新函数
+            if (this.fileExplorerDisplayService) {
+                const updateFileFn = async (file: TFile) => {
+                    return this.fileExplorerDisplayService?.updateFileExplorerDisplay(file);
+                };
+                this.fileProcessorService.setUpdateFileDisplayFn(updateFileFn);
+            }
+            
+            // 注册EventBus事件处理
+            const eventBus = EventBus.getInstance();
+            eventBus.subscribe('cache:miss', async (file: TFile) => {
+                this.loggerService.debug(`响应 cache:miss 事件：处理文件 ${file.path}`);
+                try {
+                    // 使用 processFileWrapper 而不是 processFile
+                    const result = await this.fileProcessorService.processFileWrapper(file);
+                    if (result && result.success && this.fileExplorerDisplayService) {
+                        await this.fileExplorerDisplayService.updateFileExplorerDisplay(file);
+                    }
+                } catch (error: unknown) {
+                    this.loggerService.error(`处理文件 ${file.path} 时出错:`, error);
+                }
+            });
+            
+            // 记录依赖关系图，用于调试和监控
+            DependencyTracker.logDependencies();
+        } catch (error) {
+            this.loggerService.error('更新服务依赖关系时出错:', error);
+        }
     }
 } 

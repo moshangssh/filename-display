@@ -1,6 +1,7 @@
 import { ICacheWarmer } from '../interfaces';
 import { ILoggerService, ITimerService, IFileProcessorService } from '../../interfaces/IServices';
 import { TFile, MarkdownView } from 'obsidian';
+import { ServiceContainer } from '../../../core/ServiceContainer';
 
 /**
  * 渐进式缓存预热器
@@ -25,6 +26,29 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
         private timerService: ITimerService,
         private fileProcessorService?: IFileProcessorService
     ) {}
+    
+    /**
+     * 从服务容器获取文件处理服务
+     * 在需要时延迟获取，避免循环依赖问题
+     */
+    private getFileProcessorService(): IFileProcessorService | null {
+        // 如果已有直接依赖的处理服务实例，优先使用
+        if (this.fileProcessorService) {
+            return this.fileProcessorService;
+        }
+        
+        // 否则尝试从服务容器获取
+        try {
+            const container = ServiceContainer.getInstance();
+            if (container.has('fileProcessorService')) {
+                return container.get<IFileProcessorService>('fileProcessorService');
+            }
+        } catch (error) {
+            this.logger.error('从服务容器获取fileProcessorService失败:', error);
+        }
+        
+        return null;
+    }
     
     /**
      * 开始预热缓存
@@ -309,10 +333,24 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
     }
     
     /**
-     * 将文件分为可见文件和其他文件
-     * 如果fileProcessorService不可用时的替代方法
+     * 分离可见文件和其他文件
+     * 优先使用从服务容器获取的处理服务
      */
     private separateFilesByVisibility(files: TFile[]): { visibleFiles: TFile[], otherFiles: TFile[] } {
+        // 尝试从服务容器获取处理服务
+        const processorService = this.getFileProcessorService();
+        
+        if (processorService) {
+            // 如果获取到处理服务，使用其方法
+            try {
+                return processorService.separateFilesByVisibility(files);
+            } catch (error) {
+                this.logger.error('使用处理服务分离文件失败:', error);
+                // 出错时回退到内部实现
+            }
+        }
+        
+        // 如果没有处理服务或处理服务调用失败，使用内部实现
         try {
             // 获取当前所有可见的文件
             const visibleFiles = new Set<string>();
@@ -359,9 +397,26 @@ export class ProgressiveCacheWarmer implements ICacheWarmer {
     
     /**
      * 处理一批文件
-     * 如果fileProcessorService不可用时的替代方法
+     * 优先使用从服务容器获取的处理服务
      */
     private async processFilesBatch(files: TFile[]): Promise<void> {
+        // 尝试从服务容器获取处理服务
+        const processorService = this.getFileProcessorService();
+        
+        if (processorService && typeof processorService.processFile === 'function') {
+            try {
+                // 使用处理服务处理文件
+                await Promise.all(
+                    files.map(file => processorService.processFile(file))
+                );
+                return;
+            } catch (error) {
+                this.logger.error('使用处理服务批量处理文件失败:', error);
+                // 出错时继续执行内部方法
+            }
+        }
+        
+        // 内部处理方法（备用）
         try {
             // 简单处理：读取文件前置元数据并尝试获取标题
             for (const file of files) {

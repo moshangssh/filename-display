@@ -383,7 +383,10 @@ export class FileProcessorService extends BaseFileProcessor implements IFileProc
         try {
             const container = ServiceContainer.getInstance();
             if (container.has('fileDisplayCache')) {
-                return container.get<IFileDisplayCache>('fileDisplayCache');
+                const cache = container.get<IFileDisplayCache>('fileDisplayCache');
+                // 缓存获取到的实例以提高后续访问性能
+                this.fileDisplayCache = cache;
+                return cache;
             }
         } catch (error) {
             this.logger.error('从服务容器获取fileDisplayCache失败:', error);
@@ -407,7 +410,7 @@ export class FileProcessorService extends BaseFileProcessor implements IFileProc
     }
     
     /**
-     * 重写父类的获取缓存显示名称方法
+     * 重写父类的获取缓存方法
      * 使用服务定位器获取缓存服务
      */
     protected getCachedDisplayName(path: string): FileDisplayResult | null {

@@ -47,6 +47,16 @@ export class EventBus {
     }
     
     /**
+     * 检查是否有指定事件的订阅者
+     * @param event 事件名称
+     * @returns 是否存在订阅者
+     */
+    hasSubscribers(event: string): boolean {
+        const callbacks = this.listeners.get(event);
+        return !!callbacks && callbacks.length > 0;
+    }
+    
+    /**
      * 发布事件
      * @param event 事件名称
      * @param args 事件参数
@@ -60,16 +70,6 @@ export class EventBus {
                 console.error(`EventBus: 执行事件 ${event} 的回调时发生错误:`, error);
             }
         });
-    }
-    
-    /**
-     * 检查事件是否有订阅者
-     * @param event 事件名称
-     * @returns 是否有订阅者
-     */
-    hasSubscribers(event: string): boolean {
-        const callbacks = this.listeners.get(event);
-        return callbacks !== undefined && callbacks.length > 0;
     }
     
     /**

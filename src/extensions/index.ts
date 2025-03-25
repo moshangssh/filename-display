@@ -18,5 +18,6 @@ export {
   updateLinkDisplayName,
   updateWidgetText,
   EditorErrorHandler,
-  EditorErrorType
+  EditorErrorType,
+  hasStateField
 } from './editor'; 

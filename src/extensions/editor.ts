@@ -402,25 +402,60 @@ export const linkDecorationField = StateField.define<DecorationSet>({
         
         // 从序列化数据重建装饰集合
         try {
+            // 额外防御性检查 - 确保json.decorations是一个数组
+            if (!Array.isArray(json.decorations)) {
+                logger.warn('恢复过程中无效的装饰数据格式 (非数组):', json);
+                return Decoration.none;
+            }
+            
             const decorations = json.decorations.map((item: any) => {
+                // 防御性检查：确保item是有效对象
+                if (!item || typeof item !== 'object') {
+                    return null;
+                }
+                
                 const {from, to, data} = item;
                 
-                // 防御性检查
-                if (!data || !data.originalPath || !data.displayName) {
+                // 防御性检查：确保所有必要的字段都存在
+                if (from === undefined || to === undefined || !data || !data.originalPath || !data.displayName) {
                     logger.warn('恢复过程中发现无效的装饰数据:', item);
                     return null;
                 }
                 
-                return Decoration.replace({
-                    widget: new LinkReplaceWidget(
-                        data.displayName, 
-                        data.originalPath, 
-                        // 尝试从state中获取plugin实例
-                        state.facet && state.facet.plugin 
+                // 额外防御性检查：确保索引在文档范围内
+                if (typeof from !== 'number' || typeof to !== 'number' || from < 0 || to < from) {
+                    logger.warn('恢复过程中发现无效的范围数据:', {from, to});
+                    return null;
+                }
+                
+                try {
+                    // 获取插件实例，添加更多防御性检查
+                    let plugin;
+                    try {
+                        plugin = state.facet && state.facet.plugin 
                             ? state.facet.plugin
-                            : (window as any).app.plugins.plugins['filename-display']
-                    )
-                }).range(from, to);
+                            : (window as any).app?.plugins?.plugins['filename-display'];
+                    } catch (e) {
+                        // 如果无法获取插件，使用备用方法
+                        plugin = (window as any).app?.plugins?.plugins['filename-display'];
+                    }
+                    
+                    if (!plugin) {
+                        logger.warn('恢复过程中无法获取插件实例');
+                        return null;
+                    }
+                    
+                    return Decoration.replace({
+                        widget: new LinkReplaceWidget(
+                            data.displayName, 
+                            data.originalPath, 
+                            plugin
+                        )
+                    }).range(from, to);
+                } catch (innerError) {
+                    logger.warn('创建装饰项失败:', innerError);
+                    return null;
+                }
             }).filter(Boolean); // 过滤掉null值
             
             return Decoration.set(decorations);
@@ -477,97 +512,61 @@ export function createLinkDecorationExtension(
  * 小部件清理扩展 - 用于跟踪和清理不再使用的小部件
  */
 export const widgetCleanupExtension = ViewPlugin.fromClass(class WidgetCleanupPlugin {
-    private activeWidgets: Map<string, { widget: LinkReplaceWidget, from: number, to: number }> = new Map();
+    // 跟踪当前活动的小部件
+    private activeWidgets = new Map<string, { widget: LinkReplaceWidget, from: number, to: number }>();
     private logger = new LoggerService('WidgetCleanupPlugin');
-    
-    constructor(private view: EditorView) {
-        this.logger.debug('小部件清理插件已初始化');
-    }
     
     update(update: ViewUpdate) {
         // 检查文档或视口变化
         if (update.docChanged || update.viewportChanged) {
-            // 创建当前活动的小部件Map
-            const currentWidgets = new Map<string, { widget: LinkReplaceWidget, from: number, to: number }>();
-            
-            // 从当前文档中扫描所有小部件
-            const decorations = update.state.field(linkDecorationField);
-            decorations.between(0, update.state.doc.length, (from, to, deco) => {
-                if (deco.spec.widget instanceof LinkReplaceWidget) {
-                    const widget = deco.spec.widget as LinkReplaceWidget;
-                    currentWidgets.set(widget.getId(), { widget, from, to });
-                }
-                return false;
-            });
-            
-            // 找出已经不再活动的小部件
-            const toRemove: { from: number, to: number }[] = [];
-            this.activeWidgets.forEach(({ widget, from, to }, id) => {
-                if (!currentWidgets.has(id)) {
-                    toRemove.push({ from, to });
-                }
-            });
-            
-            // 使用事务效果清理不再活动的小部件
-            if (toRemove.length > 0) {
-                // 分批处理，避免过大的事务
-                const batchSize = 50;
-                
-                // 收集所有效果，一次性分发而不是循环中分发
-                const allEffects: StateEffect<any>[] = [];
-                
-                for (let i = 0; i < toRemove.length; i += batchSize) {
-                    const batch = toRemove.slice(i, i + batchSize);
-                    allEffects.push(...batch.map(pos => cleanupWidgetsEffect.of(pos)));
+            try {
+                // 安全检查：确保linkDecorationField字段存在
+                if (!hasStateField(update.state, linkDecorationField)) {
+                    // 字段不存在，静默返回
+                    return;
                 }
                 
-                // 使用事务一次性分发所有效果，避免嵌套更新
-                if (allEffects.length > 0) {
-                    // 使用安全的方式分发效果，使用setTimeout确保在当前更新周期完成后执行
-                    setTimeout(() => {
+                // 创建当前活动的小部件Map
+                const currentWidgets = new Map<string, { widget: LinkReplaceWidget, from: number, to: number }>();
+                
+                // 从当前文档中扫描所有小部件
+                const decorations = update.state.field(linkDecorationField);
+                decorations.between(0, update.state.doc.length, (from, to, deco) => {
+                    if (deco.spec.widget instanceof LinkReplaceWidget) {
+                        const widget = deco.spec.widget as LinkReplaceWidget;
+                        currentWidgets.set(widget.getId(), { widget, from, to });
+                    }
+                    return false;
+                });
+                
+                // 找出已经不再活动的小部件
+                const toRemove: { from: number, to: number }[] = [];
+                this.activeWidgets.forEach(({ widget, from, to }, id) => {
+                    if (!currentWidgets.has(id)) {
+                        toRemove.push({ from, to });
+                    }
+                });
+                
+                // 更新活动小部件列表
+                this.activeWidgets = currentWidgets;
+                
+                // 如果有需要移除的小部件，发送清理效果
+                if (toRemove.length > 0) {
+                    // 对每个要移除的范围创建清理效果
+                    toRemove.forEach(({ from, to }) => {
                         try {
-                            this.view.dispatch({ effects: allEffects });
+                            update.view.dispatch({
+                                effects: cleanupWidgetsEffect.of({ from, to })
+                            });
                         } catch (e) {
-                            console.error('清理小部件时出错:', e);
-                        }
-                    }, 0);
-                }
-                
-                // 更新活动小部件集合
-                toRemove.forEach(({ from, to }) => {
-                    // 查找对应的小部件ID并从活动集合中移除
-                    this.activeWidgets.forEach((value, key) => {
-                        if (value.from === from && value.to === to) {
-                            this.activeWidgets.delete(key);
+                            this.logger.warn(`清理小部件失败: ${from}-${to}`, e);
                         }
                     });
-                });
-            }
-            
-            // 添加新的活动小部件
-            currentWidgets.forEach((value, key) => {
-                this.activeWidgets.set(key, value);
-            });
-        }
-    }
-    
-    destroy() {
-        // 清理所有活动的小部件
-        if (this.activeWidgets.size > 0) {
-            const effects = Array.from(this.activeWidgets.values())
-                .map(({ from, to }) => cleanupWidgetsEffect.of({ from, to }));
-            
-            // 使用安全的方式分发效果，使用setTimeout确保在当前更新周期完成后执行
-            setTimeout(() => {
-                try {
-                    this.view.dispatch({ effects });
-                } catch (e) {
-                    console.error('销毁插件时清理小部件出错:', e);
                 }
-            }, 0);
-            
-            // 清空活动小部件集合
-            this.activeWidgets.clear();
+            } catch (e) {
+                // 捕获任何错误，防止崩溃
+                this.logger.error('小部件清理插件错误:', e);
+            }
         }
     }
 });
@@ -614,15 +613,40 @@ export function createEditorExtensions(plugin: ITitleExtractorPlugin): Extension
                  'editorSyncExtension', 'createLinkClickHandler', 'widgetCleanupExtension',
                  'batchProcessField', 'createBatchProcessorPlugin']);
     
+    // 创建可回收扩展组
+    const cleanupExtensions = [
+        EditorView.domEventHandlers({
+            // 添加清理处理程序，确保在编辑器被销毁前清理字段
+            beforeunload: (event, view) => {
+                try {
+                    // 尝试清除所有装饰，避免保存时出现字段不存在错误
+                    view.dispatch({
+                        effects: removeLinkDecoration.of(null)
+                    });
+                } catch (e) {
+                    // 忽略错误，继续卸载过程
+                    logger.debug('卸载前清理装饰失败', e);
+                }
+                return false; // 允许卸载继续
+            }
+        })
+    ];
+    
     return [
+        // 先注册状态字段，确保在扩展中可用
         linkDecorationField,
-        batchProcessField, // 确保batchProcessField直接在顶层注册
+        batchProcessField,
+        
+        // 然后注册各种扩展
         viewportExtension(),
         incrementalUpdateExtension(),
         editorSyncExtension(plugin),
         createLinkClickHandler(plugin),
         widgetCleanupExtension,
-        createBatchProcessorPlugin()
+        createBatchProcessorPlugin(),
+        
+        // 添加清理扩展
+        ...cleanupExtensions
     ];
 }
 
@@ -1131,17 +1155,35 @@ export const batchProcessField = StateField.define<BatchProcessState>({
         }
         
         try {
+            // 额外防御性检查：确保所有字段都有合理的默认值
+            const processedCount = typeof json.processedCount === 'number' && json.processedCount >= 0 
+                ? json.processedCount : 0;
+                
+            const isProcessing = json.isProcessing === true; // 确保布尔值
+            
+            // 防御性地检查元数据
+            let metadata = {
+                lastProcessTime: 0,
+                batchCount: 0,
+                errorCount: 0,
+                totalProcessingTime: 0
+            };
+            
+            if (json.metadata && typeof json.metadata === 'object') {
+                metadata.lastProcessTime = typeof json.metadata.lastProcessTime === 'number' 
+                    ? json.metadata.lastProcessTime : 0;
+                metadata.batchCount = typeof json.metadata.batchCount === 'number' 
+                    ? json.metadata.batchCount : 0;
+                metadata.errorCount = typeof json.metadata.errorCount === 'number' 
+                    ? json.metadata.errorCount : 0;
+            }
+            
             return {
                 links: [], // 恢复时链接内容总是空的
-                processedCount: typeof json.processedCount === 'number' ? json.processedCount : 0,
-                isProcessing: json.isProcessing === true, // 确保布尔值
+                processedCount,
+                isProcessing,
                 startTime: Date.now(), // 总是使用当前时间
-                metadata: {
-                    lastProcessTime: json.metadata?.lastProcessTime || 0,
-                    batchCount: json.metadata?.batchCount || 0,
-                    errorCount: json.metadata?.errorCount || 0,
-                    totalProcessingTime: 0 // 重置处理时间
-                }
+                metadata
             };
         } catch (e) {
             logger.error('批处理状态字段: 从JSON恢复失败', e);
@@ -1172,6 +1214,12 @@ export function createBatchProcessorPlugin(): Extension {
             }
             
             try {
+                // 使用辅助函数检查字段是否存在
+                if (!hasStateField(update.state, batchProcessField)) {
+                    // 字段不存在时静默返回
+                    return;
+                }
+                
                 const state = update.state.field(batchProcessField);
                 
                 // 如果有批处理任务正在进行中，并且有未处理的链接
@@ -1337,4 +1385,25 @@ export function createBatchProcessorPlugin(): Extension {
             batchProcessField
         ]
     });
+}
+
+/**
+ * 在编辑器状态中安全地检查字段是否存在
+ * 这是一个辅助函数，可以在任何需要检查字段是否存在的地方使用
+ */
+export function hasStateField(state: any, field: any): boolean {
+    if (!state) return false;
+    
+    try {
+        // 尝试获取字段
+        state.field(field);
+        return true;
+    } catch (e) {
+        // 如果是"Field is not present"错误，返回false
+        if (e instanceof Error && e.message && e.message.includes('not present')) {
+            return false;
+        }
+        // 其他错误继续抛出
+        throw e;
+    }
 } 
