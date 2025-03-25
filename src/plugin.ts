@@ -31,6 +31,7 @@ import { FileProcessor } from './utils/FileProcessor';
 import { PerformanceMonitor } from './services/PerformanceMonitor';
 import { CacheManager } from './services/cache/CacheManager';
 import { ErrorHandler } from './services/ErrorHandler';
+import { DependencyTracker } from './utils/DependencyTracker';
 
 const logger = new LoggerService('Plugin');
 
@@ -97,6 +98,9 @@ export default class TitleExtractorPlugin extends Plugin {
             
             // 注册事件监听
             this.registerEvents();
+            
+            // 记录依赖关系
+            DependencyTracker.logDependencies();
             
             logger.log('插件加载完成');
         } catch (error) {

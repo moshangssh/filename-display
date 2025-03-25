@@ -14,6 +14,7 @@ import { FileDisplayResult } from '../../types';
 import { CacheCleanStrategy, ILoggerService, ITimerService } from '../interfaces/IServices';
 import { ITitleExtractorPlugin } from '../../types';
 import { CacheStrategyFactory } from './strategies/CacheStrategyFactory';
+import { DependencyTracker } from '../../utils/DependencyTracker';
 
 /**
  * 文件显示缓存类
@@ -38,6 +39,16 @@ export class FileDisplayCache implements IFileDisplayCache {
         private readonly logger: ILoggerService,
         private readonly timerService: ITimerService
     ) {
+        // 添加依赖跟踪
+        DependencyTracker.addDependency('FileDisplayCache', 'ICacheStorage');
+        DependencyTracker.addDependency('FileDisplayCache', 'IElementAssociator');
+        DependencyTracker.addDependency('FileDisplayCache', 'ICacheMetadataManager');
+        DependencyTracker.addDependency('FileDisplayCache', 'IPersistenceManager');
+        DependencyTracker.addDependency('FileDisplayCache', 'ICacheWarmer');
+        DependencyTracker.addDependency('FileDisplayCache', 'ITitleExtractorPlugin');
+        DependencyTracker.addDependency('FileDisplayCache', 'ILoggerService');
+        DependencyTracker.addDependency('FileDisplayCache', 'ITimerService');
+        
         // 初始化
         this.loadCacheFromData().catch(err => {
             this.logger.error('加载缓存数据失败:', err);

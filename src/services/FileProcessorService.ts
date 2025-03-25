@@ -13,6 +13,7 @@ import { BaseFileProcessor } from '../core/BaseFileProcessor';
 import { BatchProcessorService, BatchProcessingOptions } from './BatchProcessorService';
 import { FileNameIndexService } from './file/FileNameIndexService';
 import { ErrorType, ErrorSeverity } from './ErrorHandler';
+import { DependencyTracker } from '../utils/DependencyTracker';
 
 export class FileProcessorService extends BaseFileProcessor implements IFileProcessorService {
     private timerService: ITimerService;
@@ -37,6 +38,16 @@ export class FileProcessorService extends BaseFileProcessor implements IFileProc
             fileDisplayCache,
             loggerService
         );
+        
+        // 添加依赖跟踪
+        DependencyTracker.addDependency('FileProcessorService', 'FilenameParser');
+        if (fileDisplayCache) {
+            DependencyTracker.addDependency('FileProcessorService', 'FileDisplayCache');
+        }
+        DependencyTracker.addDependency('FileProcessorService', 'ILoggerService');
+        DependencyTracker.addDependency('FileProcessorService', 'ITimerService');
+        DependencyTracker.addDependency('FileProcessorService', 'IPerformanceMonitor');
+        DependencyTracker.addDependency('FileProcessorService', 'IErrorHandler');
         
         this.timerService = timerService;
         this.performanceMonitor = performanceMonitor;
