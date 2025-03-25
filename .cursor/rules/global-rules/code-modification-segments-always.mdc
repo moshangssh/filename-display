@@ -1,0 +1,82 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# 代码修改分段输出规则
+
+## 上下文
+
+- 当需要修改文件中的多行代码时
+- 为了提高可读性和理解性
+- 帮助用户更容易跟踪和理解所做的修改
+
+## 关键规则
+
+- 修改多行代码时，不要一次性输出所有修改内容
+- 将修改内容分成有逻辑的段落或功能块进行展示
+- 每个段落应该包含足够的上下文，确保用户理解修改的位置和目的
+- 在每个段落之前简短说明该段修改的目的或功能
+- 使用适当的代码引用格式（例如行号和文件路径）
+- 保持修改的连贯性，确保各个段落之间的逻辑关系清晰
+
+## 示例
+
+<example>
+现在我将修改用户认证功能：
+
+```10:15:src/auth/login.js
+// ... existing code ...
+function validateCredentials(username, password) {
+  if (!username || !password) {
+    return { valid: false, message: "用户名和密码不能为空" };
+  }
+  // ... existing code ...
+}
+```
+
+接下来修改错误处理部分：
+
+```45:50:src/auth/login.js
+// ... existing code ...
+function handleAuthError(error) {
+  console.error("认证错误:", error);
+  return { success: false, error: error.message };
+}
+// ... existing code ...
+```
+</example>
+
+<example type="invalid">
+我将修改登录功能，这里是所有修改：
+
+```10:50:src/auth/login.js
+// ... existing code ...
+function validateCredentials(username, password) {
+  if (!username || !password) {
+    return { valid: false, message: "用户名和密码不能为空" };
+  }
+  // ... existing code ...
+}
+
+// ... existing code ...
+
+function processLogin(credentials) {
+  // 新的处理逻辑
+  const result = validateCredentials(credentials.username, credentials.password);
+  if (!result.valid) {
+    return { success: false, error: result.message };
+  }
+  // ... existing code ...
+}
+
+// ... existing code ...
+
+function handleAuthError(error) {
+  console.error("认证错误:", error);
+  return { success: false, error: error.message };
+}
+// ... existing code ...
+```
+</example> 

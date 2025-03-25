@@ -1,0 +1,93 @@
+---
+description: 
+globs: "*.ts,*.tsx"
+alwaysApply: false
+---
+
+# TypeScript 高效开发规范
+
+## 上下文
+
+- 适用于所有TypeScript/React项目的开发
+- 确保代码质量、可维护性和性能
+- 遵循行业最佳实践和设计模式
+
+## 核心规则
+
+- 以最小的改动完成用户需求，避免过度工程化
+- 编写简洁高效的代码，不添加不必要的复杂性
+- 严格遵循TypeScript类型系统，避免使用any
+- 合理拆分组件和函数，单一职责原则
+- 模块解耦，提高代码可维护性和可测试性
+- 识别并提取可复用代码，避免重复
+- 使用有意义的命名，遵循项目现有命名约定
+- 优先使用函数式编程模式，减少副作用
+- 编写自文档化代码，添加必要的类型和接口定义
+
+## 示例
+
+<example>
+// 良好实践：功能分解和代码复用
+// 提取共用逻辑到hooks或utils
+export const useDataFetching = <T>(url: string) => {
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const response = await fetch(url);
+        const result = await response.json();
+        setData(result);
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error('Unknown error'));
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [url]);
+
+  return { data, loading, error };
+};
+</example>
+
+<example type="invalid">
+// 不良实践：所有逻辑混杂在一个组件中
+export const UserDashboard = () => {
+  const [users, setUsers] = useState([]);
+  const [posts, setPosts] = useState([]);
+  const [comments, setComments] = useState([]);
+  const [loading1, setLoading1] = useState(true);
+  const [loading2, setLoading2] = useState(true);
+  const [loading3, setLoading3] = useState(true);
+
+  useEffect(() => {
+    // 重复的获取数据逻辑，未提取共用函数
+    fetch('/api/users')
+      .then(res => res.json())
+      .then(data => { setUsers(data); setLoading1(false); })
+      .catch(err => console.error(err));
+      
+    fetch('/api/posts')
+      .then(res => res.json())
+      .then(data => { setPosts(data); setLoading2(false); })
+      .catch(err => console.error(err));
+      
+    fetch('/api/comments')
+      .then(res => res.json())
+      .then(data => { setComments(data); setLoading3(false); })
+      .catch(err => console.error(err));
+  }, []);
+  
+  // 过多的内联JSX逻辑，未拆分组件
+  return (
+    <div>
+      {/* 大量重复的UI代码... */}
+    </div>
+  );
+};
+</example> 

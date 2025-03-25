@@ -4,19 +4,26 @@ globs:
 alwaysApply: true
 ---
 
-# Model Name Prefix Response Rules
+# 模型名称前缀规则
 
-## Context
+## 上下文
 
-- Applies to all user response scenarios
-- Enhances user interaction with AI
-- Helps users clearly identify which model is responding
+- 这条规则确保与用户交流时的一致性和明确性
+- 帮助用户了解当前使用的是哪个模型
+- 增强专业性和品牌认知
 
-## Critical Rules
+## 关键规则
 
-- Every response must be prefixed with the actual name of the model currently being used
-- Format: "[Current Model Name]: [Response Content]"
-- Use colon and space to separate model name from response content
-- Model name prefix must be included even in brief responses
-- Maintain consistent format, do not omit prefix mid-response
-- Use the actual model name from the current session, not a fixed specific name
+- 在每次回复用户时，必须以模型名称+"回复"开头
+- 确保模型名称正确无误
+- 不要添加多余的符号或空格
+
+## 示例
+
+<example>
+Claude 3.7 Sonnet回复：这是一个有效的回复示例，遵循了前缀规则。
+</example>
+
+<example type="invalid">
+这是一个无效的回复，因为没有以模型名称+"回复"开头。
+</example> 
