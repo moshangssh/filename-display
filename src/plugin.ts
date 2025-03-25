@@ -443,34 +443,31 @@ export default class TitleExtractorPlugin extends Plugin {
 
     // 新增：预热缓存方法
     private async warmUpCache(): Promise<void> {
+        logger.log('正在预热缓存...');
+        
+        // 让系统和插件先初始化完成
+        await this.wait(1000);
+        
         try {
-            // 获取缓存服务
-            const fileDisplayCache = this.fileDisplayCache;
+            // 先处理所有可见文件
+            const files = this.app.vault.getMarkdownFiles().filter(file => 
+                this.filenameParser.isFileInEnabledFolder(file)
+            );
             
-            // 在应用完全加载后延迟一点时间再执行缓存预热
-            // 这有助于确保Obsidian的vault已完全加载所有文件
-            logger.log('计划在3秒后开始缓存预热，等待应用完全加载...');
+            // 获取当前活跃文件
+            const activeFile = this.app.workspace.getActiveFile();
+            if (activeFile && activeFile.extension === 'md') {
+                logger.info('预热缓存: 处理当前活跃文件');
+                
+                // 使用 processFileWrapper 而不是 processFile
+                await this.fileProcessorService.processFileWrapper(activeFile);
+            }
             
-            // 使用setTimeout而不是立即执行，给Obsidian时间完成文件加载
-            setTimeout(async () => {
-                try {
-                    // 验证插件仍然活跃（防止在预热开始前插件已被禁用）
-                    if (!this.app || !(this as any).enabled) {
-                        logger.debug('插件已被禁用，取消缓存预热');
-                        return;
-                    }
-                    
-                    // 执行渐进式缓存预热
-                    await fileDisplayCache.warmUpCache();
-                    logger.log('缓存预热完成');
-                } catch (error) {
-                    logger.error('延迟执行缓存预热失败:', error);
-                }
-            }, 3000); // 延迟3秒
-            
-            logger.log('缓存预热已计划');
+            // 预热缓存
+            logger.log(`预热缓存: 启动缓存预热器处理 ${files.length} 个文件`);
+            await this.fileDisplayCache.warmUpCache();
         } catch (error) {
-            logger.error('安排缓存预热失败:', error);
+            logger.error('预热缓存时出错:', error);
         }
     }
 
@@ -505,9 +502,8 @@ export default class TitleExtractorPlugin extends Plugin {
         eventBus.subscribe('cache:miss', async (file: TFile) => {
             this.loggerService.debug(`响应 cache:miss 事件：处理文件 ${file.path}`);
             try {
-                // 因为processFile可能返回Promise<FileDisplayResult>或直接返回FileDisplayResult
-                // 使用await确保无论返回类型是什么都能正确处理
-                const result = await Promise.resolve(this.fileProcessorService.processFile(file));
+                // 使用 processFileWrapper 而不是 processFile
+                const result = await this.fileProcessorService.processFileWrapper(file);
                 if (result && result.success && this.fileExplorerDisplayService) {
                     await this.fileExplorerDisplayService.updateFileExplorerDisplay(file);
                 }
@@ -801,5 +797,14 @@ export default class TitleExtractorPlugin extends Plugin {
         } catch (error) {
             logger.warn('缓存迁移检查失败:', error);
         }
+    }
+
+    /**
+     * 等待指定的毫秒数
+     * @param ms 等待的毫秒数
+     * @returns Promise，在指定毫秒数后解析
+     */
+    private wait(ms: number): Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 } 

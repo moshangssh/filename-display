@@ -14,6 +14,7 @@ import { BatchProcessorService, BatchProcessingOptions } from './BatchProcessorS
 import { FileNameIndexService } from './file/FileNameIndexService';
 import { ErrorType, ErrorSeverity } from './ErrorHandler';
 import { DependencyTracker } from '../utils/DependencyTracker';
+import { ServiceContainer } from '../core/ServiceContainer';
 
 export class FileProcessorService extends BaseFileProcessor implements IFileProcessorService {
     private timerService: ITimerService;
@@ -258,14 +259,36 @@ export class FileProcessorService extends BaseFileProcessor implements IFileProc
     }
     
     /**
+     * 从服务容器获取文件显示缓存
+     * 用于避免循环依赖
+     */
+    private getFileDisplayCacheFromContainer(): IFileDisplayCache | null {
+        try {
+            const container = ServiceContainer.getInstance();
+            if (container.has('fileDisplayCache')) {
+                return container.get<IFileDisplayCache>('fileDisplayCache');
+            }
+        } catch (error) {
+            this.logger.error('从服务容器获取fileDisplayCache失败:', error);
+        }
+        return null;
+    }
+    
+    /**
      * 异步处理文件（内部使用）
      */
     private async processFileAsync(file: TFile): Promise<FileDisplayResult> {
         // 使用基类的方法处理文件
         const baseResult = super.processFile(file);
         
-        // 更新文件名索引
+        // 如果处理成功，使用服务容器获取的缓存服务更新缓存
         if (baseResult.success) {
+            const cache = this.getFileDisplayCache();
+            if (cache && baseResult.displayName) {
+                cache.setDisplayName(file.path, baseResult.displayName);
+            }
+            
+            // 更新文件名索引
             this.fileNameIndexService.addFilesToQueue([file], true);
         }
         
@@ -343,5 +366,82 @@ export class FileProcessorService extends BaseFileProcessor implements IFileProc
         this.updateFileDisplayFn = null;
         
         this.logger.debug('FileProcessorService资源已释放');
+    }
+
+    /**
+     * 获取文件显示缓存服务
+     * 先尝试使用通过构造函数或setter设置的缓存
+     * 如果不存在，则尝试从服务容器获取
+     */
+    protected getFileDisplayCache(): IFileDisplayCache | null {
+        // 如果已经有缓存实例，直接使用
+        if (this.fileDisplayCache) {
+            return this.fileDisplayCache;
+        }
+        
+        // 否则尝试从服务容器获取
+        try {
+            const container = ServiceContainer.getInstance();
+            if (container.has('fileDisplayCache')) {
+                return container.get<IFileDisplayCache>('fileDisplayCache');
+            }
+        } catch (error) {
+            this.logger.error('从服务容器获取fileDisplayCache失败:', error);
+        }
+        
+        return null;
+    }
+    
+    /**
+     * 重写父类的缓存显示结果方法
+     * 使用服务定位器获取缓存服务
+     */
+    protected cacheDisplayResult(path: string, result: FileDisplayResult): void {
+        if (result.success && result.displayName) {
+            // 获取缓存服务
+            const cache = this.getFileDisplayCache();
+            if (cache) {
+                cache.setDisplayName(path, result.displayName);
+            }
+        }
+    }
+    
+    /**
+     * 重写父类的获取缓存显示名称方法
+     * 使用服务定位器获取缓存服务
+     */
+    protected getCachedDisplayName(path: string): FileDisplayResult | null {
+        // 获取缓存服务
+        const cache = this.getFileDisplayCache();
+        if (cache && cache.hasDisplayName(path)) {
+            const cachedName = cache.getDisplayName(path);
+            if (cachedName) {
+                return { 
+                    success: true, 
+                    displayName: cachedName, 
+                    fromCache: true 
+                };
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * 处理文件的包装方法，供外部调用
+     * 调用基类的同步方法，然后返回结果
+     * 这样可以保持和基类类型兼容，同时提供给调用者相同的接口
+     */
+    public processFileWrapper(file: TFile): Promise<FileDisplayResult> {
+        return Promise.resolve().then(() => {
+            // 直接调用基类的同步processFile方法
+            const result = super.processFile(file);
+            
+            // 如果处理成功，更新文件名索引
+            if (result.success) {
+                this.fileNameIndexService.addFilesToQueue([file], true);
+            }
+            
+            return result;
+        });
     }
 } 
