@@ -164,6 +164,15 @@ export interface IFileExplorerDisplayService {
     dispose(): void;
 }
 
+// 文件浏览器视图管理接口
+export interface IExplorerViewManager {
+    setupView(): void;
+    updateView(): void;
+    processExplorerItems(): void;
+    updateFileItem(file: TFile): void;
+    dispose(): void;
+}
+
 // 文件处理服务接口
 export interface IFileProcessorService {
     processFile(file: TFile): Promise<FileDisplayResult | undefined> | FileDisplayResult;

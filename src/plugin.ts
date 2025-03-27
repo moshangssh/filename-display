@@ -15,7 +15,7 @@ import { LoggerService } from './services/LoggerService';
 import { errorHandler } from './utils/ErrorHandler';
 import { Extension, Compartment } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { IEditorLinkDecorator, IFileExplorerDisplayService, CacheCleanStrategy, IFileDisplayCache, IPerformanceMonitor } from './services/interfaces/IServices';
+import { IEditorLinkDecorator, IFileExplorerDisplayService, CacheCleanStrategy, IFileDisplayCache, IPerformanceMonitor, IExplorerViewManager } from './services/interfaces/IServices';
 import { ExtensionCacheService } from './services/ExtensionCacheService';
 import { getEditorView } from './utils/editor-utils';
 import { 
@@ -34,6 +34,7 @@ import { ErrorHandler } from './services/ErrorHandler';
 import { DependencyTracker } from './utils/DependencyTracker';
 import { EventBus } from './core/events/EventBus';
 import { DependencyResolver } from './core/DependencyResolver';
+import { ExplorerViewManager } from './services/ExplorerViewManager';
 
 const logger = new LoggerService('Plugin');
 
@@ -71,6 +72,7 @@ export default class TitleExtractorPlugin extends Plugin {
     fileExplorerDisplayService: FileExplorerDisplayService;
     editorLinkDecorator: EditorLinkDecorator;
     extensionCacheService: ExtensionCacheService;
+    explorerViewManager: ExplorerViewManager | null;
 
     async onload() {
         await this.loadSettings();
@@ -257,6 +259,18 @@ export default class TitleExtractorPlugin extends Plugin {
         // 使用静态工厂方法创建文件浏览器显示服务
         this.fileExplorerDisplayService = FileExplorerDisplayService.create(this);
         this.serviceContainer.register('fileExplorerDisplayService', this.fileExplorerDisplayService);
+        
+        // 初始化ExplorerViewManager
+        this.explorerViewManager = ExplorerViewManager.create(this);
+        this.serviceContainer.register('explorerViewManager', this.explorerViewManager);
+        
+        // 设置ExplorerViewManager的依赖关系
+        resolver.whenReady(
+            ['explorerViewManager', 'fileDisplayCache', 'fileProcessorService'],
+            (explorerManager, displayCache, processorService) => {
+                explorerManager.setupView();
+            }
+        );
         
         // 使用静态工厂方法创建Markdown链接服务
         this.markdownLinkService = MarkdownLinkService.create(this);
@@ -663,6 +677,12 @@ export default class TitleExtractorPlugin extends Plugin {
         // 检查文件资源管理器是否已加载
         const checkExplorer = () => {
             const fileExplorers = this.app.workspace.getLeavesOfType('file-explorer');
+            
+            // 即使找不到文件浏览器，也要确保ExplorerViewManager被初始化
+            if (this.explorerViewManager) {
+                this.explorerViewManager.setupView();
+            }
+            
             if (fileExplorers.length > 0) {
                 // 文件资源管理器已加载，设置观察器
                 fileExplorerDisplayService.setupObservers();
@@ -796,7 +816,13 @@ export default class TitleExtractorPlugin extends Plugin {
      */
     private cleanupServices(): void {
         try {
-            // 按照依赖顺序逐个清理
+            // 清理ExplorerViewManager
+            if (this.explorerViewManager) {
+                this.explorerViewManager.dispose();
+                this.explorerViewManager = null;
+            }
+
+            // 清理其他服务
             if (this.fileDisplayService && typeof this.fileDisplayService.dispose === 'function') {
                 this.fileDisplayService.dispose();
             }

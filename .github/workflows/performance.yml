@@ -1,0 +1,67 @@
+name: 性能测试
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  performance-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: 设置Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '16'
+        cache: 'npm'
+
+    - name: 安装依赖
+      run: npm ci
+
+    - name: 运行性能测试
+      run: |
+        npm run test:perf
+      env:
+        NODE_ENV: test
+        NODE_OPTIONS: --expose-gc
+
+    - name: 检查性能退化
+      run: |
+        if [ -f performance-report.txt ]; then
+          if grep -q "❌ 失败" performance-report.txt; then
+            echo "性能测试失败！"
+            cat performance-report.txt
+            exit 1
+          else
+            echo "性能测试通过！"
+            cat performance-report.txt
+          fi
+        else
+          echo "未找到性能测试报告！"
+          exit 1
+        fi
+
+    - name: 上传性能测试报告
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-report
+        path: |
+          performance-report.txt
+          tests/performance/baseline.json
+
+    - name: 更新性能基准（仅限主分支）
+      if: github.ref == 'refs/heads/main' && success()
+      run: |
+        if [ -f tests/performance/baseline.json ]; then
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add tests/performance/baseline.json
+          git commit -m "更新性能基准数据 [skip ci]" || echo "没有基准数据更改"
+          git push
+        fi 
